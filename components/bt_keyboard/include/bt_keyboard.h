@@ -1,0 +1,66 @@
+#pragma once
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/* Modifier key flags */
+#define KB_MOD_LCTRL   0x01
+#define KB_MOD_LSHIFT  0x02
+#define KB_MOD_LALT    0x04
+#define KB_MOD_LGUI    0x08
+#define KB_MOD_RCTRL   0x10
+#define KB_MOD_RSHIFT  0x20
+#define KB_MOD_RALT    0x40
+#define KB_MOD_RGUI    0x80
+
+typedef enum {
+    KB_KEY_NONE      = 0,
+    KB_KEY_ENTER     = 0x28,
+    KB_KEY_ESCAPE    = 0x29,
+    KB_KEY_BACKSPACE = 0x2A,
+    KB_KEY_TAB       = 0x2B,
+    KB_KEY_DELETE    = 0x4C,
+    KB_KEY_RIGHT     = 0x4F,
+    KB_KEY_LEFT      = 0x50,
+    KB_KEY_DOWN      = 0x51,
+    KB_KEY_UP        = 0x52,
+    KB_KEY_HOME      = 0x4A,
+    KB_KEY_END       = 0x4D,
+    KB_KEY_PAGEUP    = 0x4B,
+    KB_KEY_PAGEDOWN  = 0x4E,
+    KB_KEY_F1        = 0x3A,
+    KB_KEY_F2        = 0x3B,
+    KB_KEY_F3        = 0x3C,
+    KB_KEY_F4        = 0x3D,
+    KB_KEY_F5        = 0x3E,
+    KB_KEY_F6        = 0x3F,
+    KB_KEY_F7        = 0x40,
+    KB_KEY_F8        = 0x41,
+    KB_KEY_F9        = 0x42,
+    KB_KEY_F10       = 0x43,
+    KB_KEY_F11       = 0x44,
+    KB_KEY_F12       = 0x45,
+} kb_special_key_t;
+
+typedef struct {
+    uint8_t modifier;
+    uint8_t keycode;
+    char    character;   /* ASCII char, or 0 for special keys */
+    bool    pressed;
+} kb_event_t;
+
+typedef void (*kb_event_callback_t)(const kb_event_t *event);
+
+void bt_keyboard_init(void);
+void bt_keyboard_set_callback(kb_event_callback_t callback);
+bool bt_keyboard_is_connected(void);
+void bt_keyboard_start_scan(void);
+const char *bt_keyboard_get_device_name(void);
+
+#ifdef __cplusplus
+}
+#endif
