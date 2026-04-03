@@ -119,7 +119,10 @@ extern "C" esp_err_t wifi_manager_init(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     /* esp_event_loop_create_default may already be called */
-    esp_event_loop_create_default();
+    esp_err_t err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
