@@ -351,6 +351,15 @@ static void parse_config(const char *data)
         p = (*line_end) ? line_end + 1 : line_end;
     }
 
+    /* Ensure remote_path ends with '/' when non-empty */
+    if (s_cfg.remote_path[0]) {
+        size_t rlen = strlen(s_cfg.remote_path);
+        if (s_cfg.remote_path[rlen - 1] != '/' && rlen < sizeof(s_cfg.remote_path) - 1) {
+            s_cfg.remote_path[rlen] = '/';
+            s_cfg.remote_path[rlen + 1] = '\0';
+        }
+    }
+
     s_cfg.configured = (s_cfg.api_url[0] && s_cfg.token[0]);
 }
 
