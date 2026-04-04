@@ -13,6 +13,7 @@
 #include "editor_ui.h"
 #include "wifi_manager.h"
 #include "git_sync.h"
+#include "standby.h"
 
 static const char *TAG = "WriterDeck";
 
@@ -59,6 +60,10 @@ extern "C" void app_main(void)
     /* Initialize Git sync */
     ESP_LOGI(TAG, "Initializing Git sync...");
     git_sync_init();
+
+    /* Initialize standby manager (deep sleep on inactivity) */
+    ESP_LOGI(TAG, "Initializing standby manager...");
+    standby_init();
 
     ESP_LOGI(TAG, "WriterDeck ready. Waiting for Bluetooth keyboard...");
 }

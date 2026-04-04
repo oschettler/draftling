@@ -12,6 +12,7 @@
 #include "git_sync.h"
 #include "sd_card.h"
 #include "lvgl_port.h"
+#include "standby.h"
 
 /*
  * Font aliases with fallbacks.
@@ -73,13 +74,25 @@ static int       s_menu_sel     = 0;
 static bool      s_menu_open    = false;
 
 /* Number of menu items */
-#define MENU_ITEM_COUNT 7
+#define MENU_ITEM_COUNT 8
 
 static lv_timer_t *s_blink_timer = NULL;
 static bool s_cursor_visible = true;
 static int  s_browser_sel    = 0;
 static int  s_browser_count  = 0;
 static sd_card_file_entry_t s_browser_entries[64];
+
+/* Settings screen objects */
+static lv_obj_t *s_scr_settings  = NULL;
+static lv_obj_t *s_settings_list = NULL;
+static int       s_settings_sel  = 0;
+static bool      s_settings_open = false;
+
+/* Standby timeout options (seconds): 0=Off */
+static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
+static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
+                                            "15 min", "30 min", "60 min" };
+#define TIMEOUT_OPTION_COUNT  6
 
 /* Line label pool */
 #define MAX_LINE_LABELS 24
@@ -362,7 +375,10 @@ static void refresh_menu_items(void)
              kb_layout_name(kb_layout_get()));
     lv_list_add_btn(s_menu_list, NULL, buf);
 
-    /* 6: Close menu */
+    /* 6: Settings */
+    lv_list_add_btn(s_menu_list, NULL, "Settings...");
+
+    /* 7: Close menu */
     lv_list_add_btn(s_menu_list, NULL, "Close menu (Esc / F1)");
 
     /* Highlight selection */
@@ -395,6 +411,118 @@ static void close_menu(void)
         editor_ui_show_editor();
     else
         editor_ui_show_file_browser();
+}
+
+/* ---- Settings screen ---- */
+
+static int find_timeout_option(uint32_t sec)
+{
+    for (int i = 0; i < TIMEOUT_OPTION_COUNT; i++) {
+        if (TIMEOUT_OPTIONS[i] == sec) return i;
+    }
+    return 2; /* default to 10 min */
+}
+
+static void refresh_settings_items(void)
+{
+    lv_obj_clean(s_settings_list);
+
+    char buf[80];
+    uint32_t cur = standby_get_timeout();
+    const char *cur_label = "custom";
+    int idx = find_timeout_option(cur);
+    if (idx >= 0 && idx < TIMEOUT_OPTION_COUNT)
+        cur_label = TIMEOUT_LABELS[idx];
+
+    /* 0: Standby timeout */
+    snprintf(buf, sizeof(buf), "Standby timeout: %s", cur_label);
+    lv_list_add_btn(s_settings_list, NULL, buf);
+
+    /* 1: Sleep now */
+    lv_list_add_btn(s_settings_list, NULL, "Sleep now");
+
+    /* 2: Back */
+    lv_list_add_btn(s_settings_list, NULL, "Back (Esc)");
+
+    /* Highlight selection */
+    uint32_t count = lv_obj_get_child_count(s_settings_list);
+    for (uint32_t i = 0; i < count; i++) {
+        lv_obj_t *child = lv_obj_get_child(s_settings_list, i);
+        if ((int)i == s_settings_sel) {
+            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(child, lv_color_white(), 0);
+        } else {
+            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_text_color(child, lv_color_black(), 0);
+        }
+    }
+}
+
+static void show_settings(void)
+{
+    s_settings_open = true;
+    s_menu_open = false;
+    s_settings_sel = 0;
+    refresh_settings_items();
+    lv_scr_load(s_scr_settings);
+}
+
+static void close_settings(void)
+{
+    s_settings_open = false;
+    show_menu();
+}
+
+static void settings_activate_item(int idx)
+{
+    switch (idx) {
+    case 0: {
+        /* Cycle to next timeout option */
+        uint32_t cur = standby_get_timeout();
+        int opt = find_timeout_option(cur);
+        opt = (opt + 1) % TIMEOUT_OPTION_COUNT;
+        standby_set_timeout(TIMEOUT_OPTIONS[opt]);
+        refresh_settings_items();
+        break;
+    }
+    case 1:
+        /* Sleep now -- auto-save first */
+        if (editor_get_mode() == EDITOR_MODE_EDITING && editor_is_modified()) {
+            editor_save_file();
+        }
+        standby_enter_sleep();
+        break;
+    case 2:
+        close_settings();
+        break;
+    default:
+        break;
+    }
+}
+
+#define SETTINGS_ITEM_COUNT 3
+
+static void handle_settings_key(const kb_event_t *ev)
+{
+    switch (ev->keycode) {
+    case KB_KEY_UP:
+        if (s_settings_sel > 0) s_settings_sel--;
+        refresh_settings_items();
+        break;
+    case KB_KEY_DOWN:
+        if (s_settings_sel < SETTINGS_ITEM_COUNT - 1) s_settings_sel++;
+        refresh_settings_items();
+        break;
+    case KB_KEY_ENTER:
+        settings_activate_item(s_settings_sel);
+        break;
+    case KB_KEY_ESCAPE:
+        close_settings();
+        break;
+    default:
+        break;
+    }
 }
 
 static void menu_activate_item(int idx)
@@ -434,7 +562,10 @@ static void menu_activate_item(int idx)
         kb_layout_next();
         refresh_menu_items();
         break;
-    case 6: /* Close menu */
+    case 6: /* Settings */
+        show_settings();
+        break;
+    case 7: /* Close menu */
         close_menu();
         break;
     default:
@@ -614,9 +745,14 @@ extern "C" void editor_ui_handle_key(const void *event)
     const kb_event_t *ev = (const kb_event_t *)event;
     if (!ev->pressed) return; /* only handle key-down */
 
+    /* Reset standby inactivity timer on any key press */
+    standby_reset_timer();
+
     if (!lvgl_port_lock(100)) return;
 
-    if (s_menu_open) {
+    if (s_settings_open) {
+        handle_settings_key(ev);
+    } else if (s_menu_open) {
         handle_menu_key(ev);
     } else if (editor_get_mode() == EDITOR_MODE_EDITING) {
         handle_editor_key(ev);
@@ -735,6 +871,24 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_border_width(s_menu_list, 0, 0);
     lv_obj_set_style_radius(s_menu_list, 0, 0);
     lv_obj_set_style_pad_all(s_menu_list, 0, 0);
+
+    /* ---- Settings screen ---- */
+    s_scr_settings = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_settings, lv_color_white(), 0);
+
+    lv_obj_t *set_hdr = lv_label_create(s_scr_settings);
+    lv_obj_set_pos(set_hdr, 2, 0);
+    lv_obj_set_style_text_font(set_hdr, FONT_12, 0);
+    lv_obj_set_style_text_color(set_hdr, lv_color_black(), 0);
+    lv_label_set_text(set_hdr,
+                      "Settings - Up/Down, Enter to change, Esc to go back");
+
+    s_settings_list = lv_list_create(s_scr_settings);
+    lv_obj_set_pos(s_settings_list, 0, 18);
+    lv_obj_set_size(s_settings_list, 400, 282);
+    lv_obj_set_style_border_width(s_settings_list, 0, 0);
+    lv_obj_set_style_radius(s_settings_list, 0, 0);
+    lv_obj_set_style_pad_all(s_settings_list, 0, 0);
 
     /* Start on file browser */
     editor_ui_show_file_browser();
