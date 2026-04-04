@@ -57,6 +57,15 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash monitor
 ```
 
+If you update `sdkconfig.defaults` or pull new changes, delete the generated
+`sdkconfig` so the defaults are re-applied:
+
+```bash
+rm -f sdkconfig
+idf.py set-target esp32s3
+idf.py build
+```
+
 ## Configuration Files
 
 Place these on the SD card root:
