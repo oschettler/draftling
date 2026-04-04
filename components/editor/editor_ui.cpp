@@ -7,6 +7,9 @@
 #include "editor.h"
 #include "md_parser.h"
 #include "ble_keyboard.h"
+#include "kb_layout.h"
+#include "wifi_manager.h"
+#include "git_sync.h"
 #include "sd_card.h"
 #include "lvgl_port.h"
 
@@ -61,6 +64,16 @@ static lv_obj_t *s_lbl_status= NULL;
 static lv_obj_t *s_cursor    = NULL;
 static lv_obj_t *s_scr_browser = NULL;
 static lv_obj_t *s_list_files  = NULL;
+
+/* Menu overlay objects */
+static lv_obj_t *s_scr_menu     = NULL;
+static lv_obj_t *s_menu_list    = NULL;
+static lv_obj_t *s_lbl_menu_hdr = NULL;
+static int       s_menu_sel     = 0;
+static bool      s_menu_open    = false;
+
+/* Number of menu items */
+#define MENU_ITEM_COUNT 7
 
 static lv_timer_t *s_blink_timer = NULL;
 static bool s_cursor_visible = true;
@@ -136,8 +149,9 @@ static void update_title_bar(void)
     int line, col;
     editor_get_cursor_pos(&line, &col);
     char buf[80];
-    snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d",
-             name, editor_is_modified() ? " *" : "", line + 1, col + 1);
+    snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d  [%s]",
+             name, editor_is_modified() ? " *" : "", line + 1, col + 1,
+             kb_layout_name(kb_layout_get()));
     lv_label_set_text(s_lbl_title, buf);
 }
 
@@ -308,11 +322,160 @@ extern "C" void editor_ui_set_status(const char *msg)
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
 }
 
-/* ---- Keyboard handler (registered as BT callback) ---- */
+/* ---- Menu system ---- */
+
+static void refresh_menu_items(void)
+{
+    lv_obj_clean(s_menu_list);
+
+    char buf[80];
+
+    /* 0: BLE status */
+    snprintf(buf, sizeof(buf), "BLE: %s",
+             ble_keyboard_is_connected()
+                 ? ble_keyboard_get_device_name()
+                 : "not connected");
+    lv_list_add_btn(s_menu_list, NULL, buf);
+
+    /* 1: BLE scan */
+    lv_list_add_btn(s_menu_list, NULL, "BLE: Start scan");
+
+    /* 2: WiFi status / connect */
+    if (wifi_manager_is_connected()) {
+        snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
+                 wifi_manager_get_ssid(), wifi_manager_get_ip());
+    } else {
+        snprintf(buf, sizeof(buf), "WiFi: Connect");
+    }
+    lv_list_add_btn(s_menu_list, NULL, buf);
+
+    /* 3: WiFi disconnect */
+    lv_list_add_btn(s_menu_list, NULL, "WiFi: Disconnect");
+
+    /* 4: Git sync */
+    snprintf(buf, sizeof(buf), "Git Sync%s",
+             git_sync_is_configured() ? "" : " (not configured)");
+    lv_list_add_btn(s_menu_list, NULL, buf);
+
+    /* 5: Keyboard layout */
+    snprintf(buf, sizeof(buf), "Keyboard: %s  (Enter to cycle)",
+             kb_layout_name(kb_layout_get()));
+    lv_list_add_btn(s_menu_list, NULL, buf);
+
+    /* 6: Close menu */
+    lv_list_add_btn(s_menu_list, NULL, "Close menu (Esc / F1)");
+
+    /* Highlight selection */
+    uint32_t count = lv_obj_get_child_count(s_menu_list);
+    for (uint32_t i = 0; i < count; i++) {
+        lv_obj_t *child = lv_obj_get_child(s_menu_list, i);
+        if ((int)i == s_menu_sel) {
+            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(child, lv_color_white(), 0);
+        } else {
+            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_text_color(child, lv_color_black(), 0);
+        }
+    }
+}
+
+static void show_menu(void)
+{
+    s_menu_open = true;
+    s_menu_sel = 0;
+    refresh_menu_items();
+    lv_scr_load(s_scr_menu);
+}
+
+static void close_menu(void)
+{
+    s_menu_open = false;
+    if (editor_get_mode() == EDITOR_MODE_EDITING)
+        editor_ui_show_editor();
+    else
+        editor_ui_show_file_browser();
+}
+
+static void menu_activate_item(int idx)
+{
+    switch (idx) {
+    case 0: /* BLE status -- no action */
+        break;
+    case 1: /* BLE scan */
+        ble_keyboard_start_scan();
+        editor_ui_set_status("BLE: scanning...");
+        close_menu();
+        break;
+    case 2: /* WiFi connect */
+        if (!wifi_manager_is_connected()) {
+            editor_ui_set_status("WiFi: connecting...");
+            close_menu();
+            wifi_manager_connect();
+        }
+        break;
+    case 3: /* WiFi disconnect */
+        wifi_manager_disconnect();
+        editor_ui_set_status("WiFi: disconnected");
+        close_menu();
+        break;
+    case 4: /* Git sync */
+        if (git_sync_is_configured() && wifi_manager_is_connected()) {
+            editor_ui_set_status("Git: syncing...");
+            close_menu();
+            git_sync_start(GIT_SYNC_BOTH);
+        } else if (!wifi_manager_is_connected()) {
+            editor_ui_set_status("Git: connect WiFi first");
+        } else {
+            editor_ui_set_status("Git: not configured");
+        }
+        break;
+    case 5: /* Keyboard layout cycle */
+        kb_layout_next();
+        refresh_menu_items();
+        break;
+    case 6: /* Close menu */
+        close_menu();
+        break;
+    default:
+        break;
+    }
+}
+
+static void handle_menu_key(const kb_event_t *ev)
+{
+    switch (ev->keycode) {
+    case KB_KEY_UP:
+        if (s_menu_sel > 0) s_menu_sel--;
+        refresh_menu_items();
+        break;
+    case KB_KEY_DOWN:
+        if (s_menu_sel < MENU_ITEM_COUNT - 1) s_menu_sel++;
+        refresh_menu_items();
+        break;
+    case KB_KEY_ENTER:
+        menu_activate_item(s_menu_sel);
+        break;
+    case KB_KEY_ESCAPE:
+    case KB_KEY_F1:
+        close_menu();
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- Keyboard handler (registered as BLE callback) ---- */
 
 static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+
+    /* F1 opens the menu */
+    if (ev->keycode == KB_KEY_F1) {
+        show_menu();
+        return;
+    }
 
     /* Ctrl shortcuts */
     if (ctrl) {
@@ -320,8 +483,26 @@ static void handle_editor_key(const kb_event_t *ev)
         case 's': editor_save_file(); editor_ui_set_status("Saved"); break;
         case 'n': editor_new_file(); break;
         case 'o': editor_ui_show_file_browser(); return;
-        case 'g': editor_ui_set_status("Git sync: use Ctrl+G when WiFi connected"); break;
-        case 'w': editor_ui_set_status("WiFi: connecting..."); break;
+        case 'g':
+            if (git_sync_is_configured() && wifi_manager_is_connected()) {
+                editor_ui_set_status("Git: syncing...");
+                git_sync_start(GIT_SYNC_BOTH);
+            } else {
+                editor_ui_set_status("Git: connect WiFi first (F1)");
+            }
+            break;
+        case 'w':
+            if (!wifi_manager_is_connected()) {
+                editor_ui_set_status("WiFi: connecting...");
+                wifi_manager_connect();
+            } else {
+                editor_ui_set_status("WiFi: already connected");
+            }
+            break;
+        case 'l':
+            /* Ctrl+L: cycle keyboard layout */
+            kb_layout_next();
+            break;
         default: break;
         }
         /* Ctrl+arrow for word movement */
@@ -349,11 +530,14 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_ENTER:     editor_insert_newline(); break;
     case KB_KEY_TAB:       editor_insert_text("    ", 4); break;
     case KB_KEY_ESCAPE:    editor_ui_show_file_browser(); return;
-    default:
-        if (ev->character >= 0x20 && ev->character < 0x7F) {
-            editor_insert_char(ev->character);
+    default: {
+        /* Use keyboard layout to translate keycode to UTF-8 */
+        const char *text = kb_layout_translate(ev->keycode, ev->modifier);
+        if (text) {
+            editor_insert_text(text, strlen(text));
         }
         break;
+    }
     }
 
     ensure_cursor_visible();
@@ -362,6 +546,12 @@ static void handle_editor_key(const kb_event_t *ev)
 
 static void handle_browser_key(const kb_event_t *ev)
 {
+    /* F1 opens the menu from browser too */
+    if (ev->keycode == KB_KEY_F1) {
+        show_menu();
+        return;
+    }
+
     uint32_t child_count = lv_obj_get_child_count(s_list_files);
     if (child_count == 0) {
         if (ev->character == 'n') {
@@ -426,10 +616,13 @@ extern "C" void editor_ui_handle_key(const void *event)
 
     if (!lvgl_port_lock(100)) return;
 
-    if (editor_get_mode() == EDITOR_MODE_EDITING)
+    if (s_menu_open) {
+        handle_menu_key(ev);
+    } else if (editor_get_mode() == EDITOR_MODE_EDITING) {
         handle_editor_key(ev);
-    else
+    } else {
         handle_browser_key(ev);
+    }
 
     lvgl_port_unlock();
 }
@@ -499,7 +692,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_status, 396);
     lv_obj_set_style_text_font(s_lbl_status, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
-    lv_label_set_text(s_lbl_status, "Ctrl+O:Open  Ctrl+S:Save  Ctrl+N:New  Esc:Browser");
+    lv_label_set_text(s_lbl_status, "F1:Menu  Ctrl+S:Save  Ctrl+L:Layout  Esc:Browser");
 
     /* Cursor blink timer */
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);
@@ -523,6 +716,24 @@ extern "C" void editor_ui_init(void)
 
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
+
+    /* ---- Menu screen ---- */
+    s_scr_menu = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_menu, lv_color_white(), 0);
+
+    s_lbl_menu_hdr = lv_label_create(s_scr_menu);
+    lv_obj_set_pos(s_lbl_menu_hdr, 2, 0);
+    lv_obj_set_style_text_font(s_lbl_menu_hdr, FONT_12, 0);
+    lv_obj_set_style_text_color(s_lbl_menu_hdr, lv_color_black(), 0);
+    lv_label_set_text(s_lbl_menu_hdr,
+                      "Menu - Up/Down, Enter to select, Esc to close");
+
+    s_menu_list = lv_list_create(s_scr_menu);
+    lv_obj_set_pos(s_menu_list, 0, 18);
+    lv_obj_set_size(s_menu_list, 400, 282);
+    lv_obj_set_style_border_width(s_menu_list, 0, 0);
+    lv_obj_set_style_radius(s_menu_list, 0, 0);
+    lv_obj_set_style_pad_all(s_menu_list, 0, 0);
 
     /* Start on file browser */
     editor_ui_show_file_browser();

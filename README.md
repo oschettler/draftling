@@ -34,17 +34,33 @@ Git repository via the GitHub REST API.
 
 | Shortcut | Action |
 |----------|--------|
+| F1 | Open settings menu (BLE, WiFi, Git, Layout) |
 | Arrow keys | Move cursor |
 | Home / End | Start / end of line |
 | PgUp / PgDn | Scroll by page |
 | Ctrl+S | Save file |
 | Ctrl+O | Open file browser |
 | Ctrl+N | New file |
+| Ctrl+L | Cycle keyboard layout (US/UK/DE/FR) |
 | Ctrl+G | Git sync (pull + push) |
 | Ctrl+W | Connect WiFi |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
+
+## Keyboard Layouts
+
+The editor supports four keyboard layouts that can be switched with
+**Ctrl+L** or through the **F1 menu**:
+
+| Code | Layout |
+|------|--------|
+| US | US-English (QWERTY) |
+| UK | Ukrainian (Cyrillic) |
+| DE | German (QWERTZ with umlauts) |
+| FR | French (AZERTY with accents) |
+
+The current layout is shown in the title bar.
 
 ## Building
 
@@ -96,8 +112,9 @@ main/               Application entry point and pin definitions
 components/
   display/           RLCD SPI driver and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
-  ble_keyboard/       BLE HID keyboard host
-  editor/            Gap-buffer editor, Markdown parser, LVGL UI
+  ble_keyboard/      BLE HID keyboard host (Bluedroid)
+  kb_layout/         Keyboard layout translation (US/UK/DE/FR)
+  editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization
 ```
