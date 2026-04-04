@@ -277,11 +277,11 @@ static void refresh_file_list(void)
             show = (nlen > 3 && strcmp(name + nlen - 3, ".md") == 0);
         }
         if (show) {
-            char label[280];
+            char label[sizeof(s_browser_entries[0].name) + 8];
             if (s_browser_entries[i].is_dir)
-                snprintf(label, sizeof(label), "[DIR] %s", name);
+                snprintf(label, sizeof(label), "[DIR] %.255s", name);
             else
-                snprintf(label, sizeof(label), "  %s", name);
+                snprintf(label, sizeof(label), "  %.255s", name);
             lv_obj_t *btn = lv_list_add_btn(s_list_files, NULL, label);
             lv_obj_set_user_data(btn, (void *)(intptr_t)i);
         }
