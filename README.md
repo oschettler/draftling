@@ -41,7 +41,7 @@ Git repository via the GitHub REST API.
 | Ctrl+S | Save file |
 | Ctrl+O | Open file browser |
 | Ctrl+N | New file |
-| Ctrl+L | Cycle keyboard layout (US/UK/DE/FR) |
+| Ctrl+L | Cycle keyboard layout (US/UA/DE/FR) |
 | Ctrl+G | Git sync (pull + push) |
 | Ctrl+W | Connect WiFi |
 | Ctrl+Home/End | Start / end of document |
@@ -56,7 +56,7 @@ The editor supports four keyboard layouts that can be switched with
 | Code | Layout |
 |------|--------|
 | US | US-English (QWERTY) |
-| UK | Ukrainian (Cyrillic) |
+| UA | Ukrainian (Cyrillic) |
 | DE | German (QWERTZ with umlauts) |
 | FR | French (AZERTY with accents) |
 

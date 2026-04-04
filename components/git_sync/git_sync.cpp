@@ -88,7 +88,7 @@ static esp_err_t api_request(const char *url, esp_http_client_method_t method,
     if (!client) return ESP_FAIL;
 
     char auth[180];
-    snprintf(auth, sizeof(auth), "token %.127s", s_cfg.token);
+    snprintf(auth, sizeof(auth), "Bearer %.127s", s_cfg.token);
     esp_http_client_set_header(client, "Authorization", auth);
     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
     esp_http_client_set_header(client, "User-Agent", "WriterDeck/1.0");

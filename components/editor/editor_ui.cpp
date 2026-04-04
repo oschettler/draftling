@@ -692,7 +692,8 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_status, 396);
     lv_obj_set_style_text_font(s_lbl_status, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
-    lv_label_set_text(s_lbl_status, "F1:Menu  Ctrl+S:Save  Ctrl+L:Layout  Esc:Browser");
+    lv_label_set_text(s_lbl_status,
+        "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
 
     /* Cursor blink timer */
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);

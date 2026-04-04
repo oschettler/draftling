@@ -355,7 +355,7 @@ static const layout_table_t s_layouts[KB_LAYOUT_COUNT] = {
 };
 
 static const char *s_layout_names[KB_LAYOUT_COUNT] = {
-    "US", "UK", "DE", "FR",
+    "US", "UA", "DE", "FR",
 };
 
 /* ------------------------------------------------------------------ */
