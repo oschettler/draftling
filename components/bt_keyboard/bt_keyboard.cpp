@@ -220,9 +220,7 @@ extern "C" void bt_keyboard_init(void)
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 
     /* Init HID Host */
-    esp_hidh_config_t hidh_cfg = {};
-    hidh_cfg.callback = hidh_callback;
-    ESP_ERROR_CHECK(esp_bt_hid_host_init(&hidh_cfg));
+    ESP_ERROR_CHECK(esp_bt_hid_host_init());
     ESP_ERROR_CHECK(esp_bt_hid_host_register_callback(hidh_callback));
 
     /* Start scanning */
