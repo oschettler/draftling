@@ -88,7 +88,7 @@ static esp_err_t api_request(const char *url, esp_http_client_method_t method,
     if (!client) return ESP_FAIL;
 
     char auth[180];
-    snprintf(auth, sizeof(auth), "token %s", s_cfg.token);
+    snprintf(auth, sizeof(auth), "token %.127s", s_cfg.token);
     esp_http_client_set_header(client, "Authorization", auth);
     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
     esp_http_client_set_header(client, "User-Agent", "WriterDeck/1.0");
@@ -119,7 +119,7 @@ static esp_err_t do_pull(void)
 
     /* List remote files */
     char url[512];
-    snprintf(url, sizeof(url), "%s/contents/%s?ref=%s",
+    snprintf(url, sizeof(url), "%.255s/contents/%.127s?ref=%.63s",
              s_cfg.api_url, s_cfg.remote_path, s_cfg.branch);
 
     int status = 0;
@@ -156,7 +156,7 @@ static esp_err_t do_pull(void)
 
         /* Save locally */
         char local[512];
-        snprintf(local, sizeof(local), "%s/%s", s_cfg.local_path, name);
+        snprintf(local, sizeof(local), "%.255s/%.255s", s_cfg.local_path, name);
         sd_card_write_file(local, s_resp_buf, s_resp_len);
         count++;
         ESP_LOGI(TAG, "Pulled: %s", name);
@@ -173,7 +173,7 @@ static esp_err_t push_file(const char *name)
 {
     /* Read local file */
     char local[512];
-    snprintf(local, sizeof(local), "%s/%s", s_cfg.local_path, name);
+    snprintf(local, sizeof(local), "%.255s/%.255s", s_cfg.local_path, name);
 
     char *content = NULL;
     size_t content_len = 0;
@@ -199,7 +199,7 @@ static esp_err_t push_file(const char *name)
 
     /* Check if file exists remotely to get its SHA */
     char url[512];
-    snprintf(url, sizeof(url), "%s/contents/%s%s?ref=%s",
+    snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s?ref=%.63s",
              s_cfg.api_url, s_cfg.remote_path, name, s_cfg.branch);
 
     char sha[64] = "";
@@ -218,7 +218,7 @@ static esp_err_t push_file(const char *name)
     /* Build PUT body */
     cJSON *body = cJSON_CreateObject();
     char msg[128];
-    snprintf(msg, sizeof(msg), "Update %s from WriterDeck", name);
+    snprintf(msg, sizeof(msg), "Update %.100s from WriterDeck", name);
     cJSON_AddStringToObject(body, "message", msg);
     cJSON_AddStringToObject(body, "content", b64);
     cJSON_AddStringToObject(body, "branch", s_cfg.branch);
@@ -231,7 +231,7 @@ static esp_err_t push_file(const char *name)
     if (!body_str) return ESP_ERR_NO_MEM;
 
     /* PUT the file */
-    snprintf(url, sizeof(url), "%s/contents/%s%s",
+    snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s",
              s_cfg.api_url, s_cfg.remote_path, name);
     ret = api_request(url, HTTP_METHOD_PUT, body_str, &status);
     cJSON_free(body_str);
