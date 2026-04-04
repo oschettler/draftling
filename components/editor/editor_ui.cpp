@@ -88,7 +88,7 @@ static lv_obj_t *s_settings_list = NULL;
 static int       s_settings_sel  = 0;
 static bool      s_settings_open = false;
 
-/* Standby timeout options (seconds): 0=Off */
+/* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
 static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
                                             "15 min", "30 min", "60 min" };
@@ -745,7 +745,7 @@ extern "C" void editor_ui_handle_key(const void *event)
     const kb_event_t *ev = (const kb_event_t *)event;
     if (!ev->pressed) return; /* only handle key-down */
 
-    /* Reset standby inactivity timer on any key press */
+    /* Reset standby inactivity timer on key-down */
     standby_reset_timer();
 
     if (!lvgl_port_lock(100)) return;

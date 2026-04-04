@@ -12,6 +12,7 @@
  */
 
 #include <cstring>
+#include <cinttypes>
 #include <esp_log.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
@@ -83,7 +84,7 @@ extern "C" void standby_init(void)
         start_timer();
     }
 
-    ESP_LOGI(TAG, "Standby initialized, timeout=%lu s", (unsigned long)s_timeout_sec);
+    ESP_LOGI(TAG, "Standby initialized, timeout=%" PRIu32 " s", s_timeout_sec);
 }
 
 extern "C" void standby_reset_timer(void)
@@ -116,7 +117,7 @@ extern "C" void standby_set_timeout(uint32_t seconds)
         start_timer();
     }
 
-    ESP_LOGI(TAG, "Timeout set to %lu s", (unsigned long)seconds);
+    ESP_LOGI(TAG, "Timeout set to %" PRIu32 " s", seconds);
 }
 
 extern "C" void standby_enter_sleep(void)
