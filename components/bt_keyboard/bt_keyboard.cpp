@@ -1,13 +1,23 @@
+/*
+ * BLE HID Host keyboard driver for ESP32-S3.
+ *
+ * Uses the ESP-IDF unified HID host component (esp_hidh.h) with BLE
+ * transport via the NimBLE stack.  ESP32-S3 does not support Bluetooth
+ * Classic, so only BLE is used.
+ *
+ * The driver scans for BLE HID devices whose HID appearance field
+ * indicates a keyboard (0x03C1), connects automatically, and forwards
+ * key events through a callback.
+ */
+
 #include <cstdio>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <esp_log.h>
-#include <esp_bt.h>
-#include <esp_bt_main.h>
-#include <esp_bt_device.h>
-#include <esp_gap_bt_api.h>
-#include <esp_hidh_api.h>
+#include <esp_hidh.h>
+#include <esp_hid_gap.h>
 
 #include "bt_keyboard.h"
 
@@ -15,6 +25,7 @@ static const char *TAG = "BTKeyboard";
 
 static kb_event_callback_t s_callback = NULL;
 static bool s_connected = false;
+static bool s_scanning  = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 
@@ -95,32 +106,55 @@ static void process_keyboard_report(const uint8_t *data, int len)
     memcpy(s_prev_keys, keys, 6);
 }
 
-/* ---- HID Host callback ---- */
+/* ---- Unified HID Host callback ---- */
 
-static void hidh_callback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t *param)
+static void hidh_callback(void *handler_args, esp_event_base_t base,
+                           int32_t id, void *event_data)
 {
+    esp_hidh_event_t event = (esp_hidh_event_t)id;
+    esp_hidh_event_data_t *param = (esp_hidh_event_data_t *)event_data;
+
     switch (event) {
-    case ESP_HIDH_OPEN_EVT:
-        if (param->open.status == ESP_HIDH_OK) {
+    case ESP_HIDH_OPEN_EVENT:
+        if (param->open.status == ESP_OK) {
             s_connected = true;
-            /* param->open.bd_addr available but name comes from GAP */
-            ESP_LOGI(TAG, "HID device connected");
+            const uint8_t *addr = esp_hidh_dev_bda_get(param->open.dev);
+            const char *name = esp_hidh_dev_name_get(param->open.dev);
+            if (name && name[0]) {
+                strncpy(s_dev_name, name, sizeof(s_dev_name) - 1);
+                s_dev_name[sizeof(s_dev_name) - 1] = '\0';
+            }
+            ESP_LOGI(TAG, "HID device connected: %s ("
+                     "%02x:%02x:%02x:%02x:%02x:%02x)",
+                     s_dev_name,
+                     addr ? addr[0] : 0, addr ? addr[1] : 0,
+                     addr ? addr[2] : 0, addr ? addr[3] : 0,
+                     addr ? addr[4] : 0, addr ? addr[5] : 0);
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
         }
         break;
 
-    case ESP_HIDH_CLOSE_EVT:
+    case ESP_HIDH_CLOSE_EVENT:
         s_connected = false;
+        s_dev_name[0] = '\0';
+        memset(s_prev_keys, 0, sizeof(s_prev_keys));
         ESP_LOGI(TAG, "HID device disconnected, restarting scan...");
         bt_keyboard_start_scan();
         break;
 
-    case ESP_HIDH_DATA_IND_EVT:
-        if (param->data_ind.proto_mode == ESP_HIDH_BOOT_MODE &&
-            param->data_ind.len >= 8) {
-            process_keyboard_report(param->data_ind.data, param->data_ind.len);
+    case ESP_HIDH_INPUT_EVENT: {
+        /* Boot keyboard report: 8 bytes (modifier, reserved, keys[6]) */
+        if (param->input.usage == ESP_HID_USAGE_KEYBOARD &&
+            param->input.length >= 8) {
+            process_keyboard_report(param->input.data,
+                                    (int)param->input.length);
         }
+        break;
+    }
+
+    case ESP_HIDH_BATTERY_EVENT:
+        ESP_LOGI(TAG, "Battery level: %d%%", param->battery.level);
         break;
 
     default:
@@ -128,105 +162,78 @@ static void hidh_callback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t *param)
     }
 }
 
-/* ---- GAP callback ---- */
+/* ---- BLE scan task ---- */
 
-static void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
+static void scan_task(void *arg)
 {
-    switch (event) {
-    case ESP_BT_GAP_DISC_RES_EVT: {
-        /* Check if this is a keyboard (Major=Peripheral, minor bit 4=keyboard) */
-        uint32_t cod = 0;
-        char name[64] = "";
-        for (int i = 0; i < param->disc_res.num_prop; i++) {
-            esp_bt_gap_dev_prop_t *prop = &param->disc_res.prop[i];
-            if (prop->type == ESP_BT_GAP_DEV_PROP_COD) {
-                cod = *(uint32_t *)prop->val;
-            } else if (prop->type == ESP_BT_GAP_DEV_PROP_BDNAME && prop->len > 0) {
-                int clen = prop->len < (int)sizeof(name) - 1 ? prop->len : (int)sizeof(name) - 1;
-                memcpy(name, prop->val, clen);
-                name[clen] = '\0';
-            }
-        }
-        uint8_t major = (cod >> 8) & 0x1F;
-        uint8_t minor = (cod >> 2) & 0x3F;
-        if (major == 5 && (minor & 0x10)) {
-            ESP_LOGI(TAG, "Keyboard found: %s", name);
-            strncpy(s_dev_name, name, sizeof(s_dev_name) - 1);
-            esp_bt_gap_cancel_discovery();
-            /* Connect via HID host */
-            esp_bt_hid_host_connect(param->disc_res.bda);
-        }
-        break;
+    (void)arg;
+
+    /* Scan for BLE HID devices */
+    ESP_LOGI(TAG, "Scanning for BLE HID keyboards...");
+    size_t result_count = 0;
+    esp_hid_scan_result_t *results = NULL;
+
+    /* Scan BLE only, 5-second window */
+    esp_hid_scan(5, &result_count, &results);
+
+    if (result_count == 0) {
+        ESP_LOGI(TAG, "No HID devices found");
+        s_scanning = false;
+        /* Retry after a delay */
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        bt_keyboard_start_scan();
+        vTaskDelete(NULL);
+        return;
     }
 
-    case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
-        if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED && !s_connected) {
-            ESP_LOGI(TAG, "Discovery stopped, restarting in 2s...");
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            bt_keyboard_start_scan();
-        }
-        break;
+    ESP_LOGI(TAG, "Found %u HID device(s)", (unsigned)result_count);
 
-    case ESP_BT_GAP_PIN_REQ_EVT: {
-        esp_bt_pin_code_t pin = {'0','0','0','0'};
-        esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin);
-        break;
+    /* Find the first keyboard among results */
+    esp_hid_scan_result_t *kbd = NULL;
+    esp_hid_scan_result_t *r = results;
+    while (r) {
+        /* HID appearance 0x03C1 = keyboard */
+        if (r->transport == ESP_HID_TRANSPORT_BLE &&
+            r->ble.appearance == ESP_HID_APPEARANCE_KEYBOARD) {
+            kbd = r;
+            break;
+        }
+        r = r->next;
     }
 
-    case ESP_BT_GAP_CFM_REQ_EVT:
-        esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
-        break;
+    if (kbd) {
+        ESP_LOGI(TAG, "Keyboard found: \"%s\" (addr %02x:%02x:%02x:%02x:%02x:%02x)",
+                 kbd->name ? kbd->name : "",
+                 kbd->bda[0], kbd->bda[1], kbd->bda[2],
+                 kbd->bda[3], kbd->bda[4], kbd->bda[5]);
 
-    case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(TAG, "SSP passkey: %06lu", (unsigned long)param->key_notif.passkey);
-        break;
-
-    case ESP_BT_GAP_AUTH_CMPL_EVT:
-        if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "Auth success: %s", param->auth_cmpl.device_name);
-        } else {
-            ESP_LOGE(TAG, "Auth failed: %d", param->auth_cmpl.stat);
-        }
-        break;
-
-    default:
-        break;
+        esp_hidh_dev_open(kbd->bda, kbd->transport, kbd->ble.addr_type);
+    } else {
+        ESP_LOGI(TAG, "No keyboard among discovered devices");
     }
+
+    esp_hid_scan_results_free(results);
+    s_scanning = false;
+    vTaskDelete(NULL);
 }
 
 /* ---- Public API ---- */
 
 extern "C" void bt_keyboard_init(void)
 {
-    /* Init BT controller */
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT));
+    /* Initialize BLE GAP (provided by esp_hid component) */
+    ESP_ERROR_CHECK(esp_hid_gap_ble_init(ESP_BLE_SEC_ENCRYPT_MITM));
 
-    /* Init Bluedroid */
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-    /* Set device name */
-    esp_bt_gap_set_device_name("WriterDeck");
-
-    /* SSP: no I/O capability (auto-accept) */
-    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
-    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(iocap));
-
-    /* Register GAP callback */
-    esp_bt_gap_register_callback(gap_callback);
-    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
-
-    /* Init HID Host */
-    ESP_ERROR_CHECK(esp_bt_hid_host_init());
-    ESP_ERROR_CHECK(esp_bt_hid_host_register_callback(hidh_callback));
+    /* Configure and start the unified HID host */
+    esp_hidh_config_t config = {};
+    config.callback = hidh_callback;
+    config.event_stack_size = 4096;
+    ESP_ERROR_CHECK(esp_hidh_init(&config));
 
     /* Start scanning */
     bt_keyboard_start_scan();
 
-    ESP_LOGI(TAG, "Bluetooth keyboard host initialized");
+    ESP_LOGI(TAG, "BLE HID keyboard host initialized");
 }
 
 extern "C" void bt_keyboard_set_callback(kb_event_callback_t callback)
@@ -241,9 +248,10 @@ extern "C" bool bt_keyboard_is_connected(void)
 
 extern "C" void bt_keyboard_start_scan(void)
 {
-    if (!s_connected) {
-        ESP_LOGI(TAG, "Scanning for keyboards...");
-        esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    if (!s_connected && !s_scanning) {
+        s_scanning = true;
+        /* Scan runs blocking, so launch in a separate task */
+        xTaskCreate(scan_task, "bt_scan", 4096, NULL, 2, NULL);
     }
 }
 

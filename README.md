@@ -16,7 +16,7 @@ Git repository via the GitHub REST API.
 | MCU | ESP32-S3 (dual-core, 16 MB flash, 8 MB OPI PSRAM) |
 | Display | 4.2" reflective LCD, 400x300, monochrome, SPI |
 | Storage | MicroSD card (SDMMC 1-bit) |
-| Input | Bluetooth Classic HID keyboard |
+| Input | BLE HID keyboard |
 | Connectivity | WiFi 802.11 b/g/n for Git sync |
 
 ## Features
@@ -96,7 +96,7 @@ main/               Application entry point and pin definitions
 components/
   display/           RLCD SPI driver and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
-  bt_keyboard/       Bluetooth Classic HID keyboard host
+  bt_keyboard/       BLE HID keyboard host
   editor/            Gap-buffer editor, Markdown parser, LVGL UI
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization
