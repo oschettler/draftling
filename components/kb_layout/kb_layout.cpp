@@ -227,10 +227,10 @@ static const char *FR_ALTGR[] = {
  * Each entry is a UTF-8 encoded Ukrainian letter.
  *
  * Physical key -> Ukrainian letter mapping (unshifted):
- * q->й  w->ц  e->у  r->к  t->е  y->н  u->г  i->ш  o->щ  p->з
- * a->ф  s->і  d->в  f->а  g->п  h->р  j->о  k->л  l->д
- * z->я  x->ч  c->с  v->м  b->и  n->т  [->х  ]->ї  ;->ж  '->є
- * `->ґ
+ * q->j  w->ts  e->u  r->k  t->e  y->n  u->g  i->sh  o->shch  p->z
+ * a->f  s->i   d->v  f->a  g->p  h->r  j->o  k->l   l->d
+ * z->ya x->ch  c->s  v->m  b->y  n->t  [->kh ]->yi   ;->zh    '->ye
+ * `->ghe
  */
 
 /* Lowercase Ukrainian letters as UTF-8 hex escapes.

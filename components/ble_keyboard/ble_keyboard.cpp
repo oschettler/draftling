@@ -46,37 +46,6 @@ static esp_ble_addr_type_t s_target_addr_type;
 /* Timer used to retry scanning after a delay */
 static TimerHandle_t s_scan_timer = NULL;
 
-/* HID keycode to ASCII (unshifted) */
-static const char KC_TO_ASCII[128] = {
-    0,0,0,0,                                        /* 0x00-0x03 */
-    'a','b','c','d','e','f','g','h','i','j','k','l', /* 0x04-0x0F */
-    'm','n','o','p','q','r','s','t','u','v','w','x', /* 0x10-0x1B */
-    'y','z',                                         /* 0x1C-0x1D */
-    '1','2','3','4','5','6','7','8','9','0',         /* 0x1E-0x27 */
-    0,0,0,0,' ',                                     /* 0x28-0x2C (enter,esc,bs,tab,space) */
-    '-','=','[',']','\\',                            /* 0x2D-0x31 */
-    0,';','\'','`',',','.','/',                      /* 0x32-0x38 */
-};
-
-/* Shifted equivalents */
-static const char KC_TO_ASCII_SHIFT[128] = {
-    0,0,0,0,
-    'A','B','C','D','E','F','G','H','I','J','K','L',
-    'M','N','O','P','Q','R','S','T','U','V','W','X',
-    'Y','Z',
-    '!','@','#','$','%','^','&','*','(',')',
-    0,0,0,0,' ',
-    '_','+','{','}','|',
-    0,':','"','~','<','>','?',
-};
-
-static char keycode_to_char(uint8_t keycode, uint8_t modifier)
-{
-    if (keycode >= sizeof(KC_TO_ASCII)) return 0;
-    bool shift = (modifier & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
-    return shift ? KC_TO_ASCII_SHIFT[keycode] : KC_TO_ASCII[keycode];
-}
-
 static bool key_in_report(uint8_t key, const uint8_t *keys, int count)
 {
     for (int i = 0; i < count; i++) {
@@ -100,7 +69,7 @@ static void process_keyboard_report(const uint8_t *data, int len)
             kb_event_t ev = {};
             ev.modifier  = modifier;
             ev.keycode   = kc;
-            ev.character = keycode_to_char(kc, modifier);
+            ev.character = 0;
             ev.pressed   = true;
             s_callback(&ev);
         }
@@ -114,7 +83,7 @@ static void process_keyboard_report(const uint8_t *data, int len)
             kb_event_t ev = {};
             ev.modifier  = modifier;
             ev.keycode   = kc;
-            ev.character = keycode_to_char(kc, modifier);
+            ev.character = 0;
             ev.pressed   = false;
             s_callback(&ev);
         }
