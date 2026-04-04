@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
