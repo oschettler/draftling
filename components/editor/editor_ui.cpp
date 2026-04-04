@@ -6,7 +6,7 @@
 #include "editor_ui.h"
 #include "editor.h"
 #include "md_parser.h"
-#include "bt_keyboard.h"
+#include "ble_keyboard.h"
 #include "sd_card.h"
 #include "lvgl_port.h"
 
@@ -522,7 +522,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
 
     /* Register keyboard callback */
-    bt_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
+    ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
 
     /* Start on file browser */
     editor_ui_show_file_browser();

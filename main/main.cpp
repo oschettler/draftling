@@ -8,7 +8,7 @@
 #include "display.h"
 #include "lvgl_port.h"
 #include "sd_card.h"
-#include "bt_keyboard.h"
+#include "ble_keyboard.h"
 #include "editor.h"
 #include "editor_ui.h"
 #include "wifi_manager.h"
@@ -50,7 +50,7 @@ extern "C" void app_main(void)
 
     /* Initialize Bluetooth keyboard */
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
-    bt_keyboard_init();
+    ble_keyboard_init();
 
     /* Initialize WiFi manager (doesn't connect yet) */
     ESP_LOGI(TAG, "Initializing WiFi manager...");

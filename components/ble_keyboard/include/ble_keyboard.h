@@ -55,11 +55,11 @@ typedef struct {
 
 typedef void (*kb_event_callback_t)(const kb_event_t *event);
 
-void bt_keyboard_init(void);
-void bt_keyboard_set_callback(kb_event_callback_t callback);
-bool bt_keyboard_is_connected(void);
-void bt_keyboard_start_scan(void);
-const char *bt_keyboard_get_device_name(void);
+void ble_keyboard_init(void);
+void ble_keyboard_set_callback(kb_event_callback_t callback);
+bool ble_keyboard_is_connected(void);
+void ble_keyboard_start_scan(void);
+const char *ble_keyboard_get_device_name(void);
 
 #ifdef __cplusplus
 }
