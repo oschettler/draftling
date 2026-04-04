@@ -10,6 +10,38 @@
 #include "sd_card.h"
 #include "lvgl_port.h"
 
+/*
+ * Font aliases with fallbacks.
+ * montserrat_14 is always available (LVGL default).
+ * Other sizes require CONFIG_LV_FONT_MONTSERRAT_XX=y in sdkconfig.
+ * If a size was not compiled, fall back to montserrat_14.
+ */
+#if LV_FONT_MONTSERRAT_10
+#define FONT_10 (&lv_font_montserrat_10)
+#else
+#define FONT_10 (&lv_font_montserrat_14)
+#endif
+
+#if LV_FONT_MONTSERRAT_12
+#define FONT_12 (&lv_font_montserrat_12)
+#else
+#define FONT_12 (&lv_font_montserrat_14)
+#endif
+
+#define FONT_14 (&lv_font_montserrat_14)
+
+#if LV_FONT_MONTSERRAT_16
+#define FONT_16 (&lv_font_montserrat_16)
+#else
+#define FONT_16 (&lv_font_montserrat_14)
+#endif
+
+#if LV_FONT_MONTSERRAT_18
+#define FONT_18 (&lv_font_montserrat_18)
+#else
+#define FONT_18 (&lv_font_montserrat_14)
+#endif
+
 static const char *TAG = "EditorUI";
 
 /* Layout constants */
@@ -51,31 +83,31 @@ static lv_style_t s_style_quote;
 static void init_styles(void)
 {
     lv_style_init(&s_style_body);
-    lv_style_set_text_font(&s_style_body, &lv_font_montserrat_12);
+    lv_style_set_text_font(&s_style_body, FONT_12);
     lv_style_set_text_color(&s_style_body, lv_color_black());
     lv_style_set_pad_all(&s_style_body, 0);
 
     lv_style_init(&s_style_h1);
-    lv_style_set_text_font(&s_style_h1, &lv_font_montserrat_18);
+    lv_style_set_text_font(&s_style_h1, FONT_18);
     lv_style_set_text_color(&s_style_h1, lv_color_black());
 
     lv_style_init(&s_style_h2);
-    lv_style_set_text_font(&s_style_h2, &lv_font_montserrat_16);
+    lv_style_set_text_font(&s_style_h2, FONT_16);
     lv_style_set_text_color(&s_style_h2, lv_color_black());
 
     lv_style_init(&s_style_h3);
-    lv_style_set_text_font(&s_style_h3, &lv_font_montserrat_14);
+    lv_style_set_text_font(&s_style_h3, FONT_14);
     lv_style_set_text_color(&s_style_h3, lv_color_black());
 
     lv_style_init(&s_style_code);
-    lv_style_set_text_font(&s_style_code, &lv_font_montserrat_12);
+    lv_style_set_text_font(&s_style_code, FONT_12);
     lv_style_set_text_color(&s_style_code, lv_color_black());
     lv_style_set_border_width(&s_style_code, 1);
     lv_style_set_border_color(&s_style_code, lv_color_black());
     lv_style_set_pad_left(&s_style_code, 4);
 
     lv_style_init(&s_style_quote);
-    lv_style_set_text_font(&s_style_quote, &lv_font_montserrat_12);
+    lv_style_set_text_font(&s_style_quote, FONT_12);
     lv_style_set_text_color(&s_style_quote, lv_color_black());
     lv_style_set_border_side(&s_style_quote, LV_BORDER_SIDE_LEFT);
     lv_style_set_border_width(&s_style_quote, 2);
@@ -419,7 +451,7 @@ extern "C" void editor_ui_init(void)
     s_lbl_title = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_title, 2, 0);
     lv_obj_set_width(s_lbl_title, 396);
-    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_lbl_title, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_black(), 0);
     lv_label_set_text(s_lbl_title, "WriterDeck");
 
@@ -465,7 +497,7 @@ extern "C" void editor_ui_init(void)
     s_lbl_status = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_status, 2, 300 - STATUS_H + 2);
     lv_obj_set_width(s_lbl_status, 396);
-    lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(s_lbl_status, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
     lv_label_set_text(s_lbl_status, "Ctrl+O:Open  Ctrl+S:Save  Ctrl+N:New  Esc:Browser");
 
@@ -478,7 +510,7 @@ extern "C" void editor_ui_init(void)
 
     lv_obj_t *br_title = lv_label_create(s_scr_browser);
     lv_obj_set_pos(br_title, 2, 0);
-    lv_obj_set_style_text_font(br_title, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(br_title, FONT_12, 0);
     lv_obj_set_style_text_color(br_title, lv_color_black(), 0);
     lv_label_set_text(br_title, "File Browser - Up/Down, Enter to open, N for new");
 
