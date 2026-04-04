@@ -154,7 +154,7 @@ static void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *par
             strncpy(s_dev_name, name, sizeof(s_dev_name) - 1);
             esp_bt_gap_cancel_discovery();
             /* Connect via HID host */
-            esp_hidh_connect(param->disc_res.bda);
+            esp_bt_hid_host_connect(param->disc_res.bda);
         }
         break;
     }
@@ -208,7 +208,7 @@ extern "C" void bt_keyboard_init(void)
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
     /* Set device name */
-    esp_bt_dev_set_device_name("WriterDeck");
+    esp_bt_gap_set_device_name("WriterDeck");
 
     /* SSP: no I/O capability (auto-accept) */
     esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
