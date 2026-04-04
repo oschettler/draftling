@@ -1,9 +1,9 @@
 /*
  * BLE HID Host keyboard driver for ESP32-S3.
  *
- * Uses ESP-IDF Bluedroid BLE stack for scanning and the unified HID
- * host component (esp_hidh) for HID-over-GATT.  ESP32-S3 does not
- * support Bluetooth Classic, so only BLE is used.
+ * Uses NimBLE stack for BLE scanning and the ESP-IDF esp_hidh component
+ * for HID-over-GATT host.  ESP32-S3 does not support Bluetooth Classic,
+ * so only BLE is used.
  *
  * The driver scans for BLE HID devices that advertise the HID service
  * UUID (0x1812) or a keyboard appearance (0x03C1), connects
@@ -14,12 +14,14 @@
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/timers.h>
 #include <esp_log.h>
 #include <esp_bt.h>
-#include <esp_bt_main.h>
-#include <esp_gap_ble_api.h>
 #include <esp_hidh.h>
+#include <nimble/nimble_port.h>
+#include <nimble/nimble_port_freertos.h>
+#include <host/ble_hs.h>
+#include <host/ble_gap.h>
+#include <host/util/util.h>
 
 #include "ble_keyboard.h"
 
@@ -30,21 +32,16 @@ static const char *TAG = "BLEKeyboard";
 /* BLE appearance: keyboard */
 #define BLE_APPEARANCE_KEYBOARD    0x03C1
 
-/* Scan duration in seconds */
-#define SCAN_DURATION_SEC          30
-
 static kb_event_callback_t s_callback = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 
-/* Target device address saved during scan for deferred connection */
-static esp_bd_addr_t s_target_bda;
-static esp_ble_addr_type_t s_target_addr_type;
-
-/* Timer used to retry scanning after a delay */
-static TimerHandle_t s_scan_timer = NULL;
+/* Scan state shared between NimBLE host task and scan task */
+static ble_addr_t s_kbd_addr;
+static volatile bool s_kbd_found = false;
+static TaskHandle_t s_scan_task_handle = NULL;
 
 /* HID keycode to ASCII (unshifted) */
 static const char KC_TO_ASCII[128] = {
@@ -183,162 +180,147 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
     }
 }
 
-/* ---- Advertisement data parser ---- */
+/* ---- NimBLE BLE scan callback (runs in NimBLE host task) ---- */
 
-static bool adv_is_hid_keyboard(uint8_t *adv_data, uint8_t adv_len)
+static int ble_scan_cb(struct ble_gap_event *event, void *arg)
 {
-    uint8_t *field;
-    uint8_t field_len;
+    switch (event->type) {
+    case BLE_GAP_EVENT_DISC: {
+        struct ble_hs_adv_fields fields = {};
+        int rc = ble_hs_adv_parse_fields(&fields, event->disc.data,
+                                          event->disc.length_data);
+        if (rc != 0) break;
 
-    /* Check appearance for keyboard (0x03C1) */
-    field = esp_ble_resolve_adv_data(adv_data,
-                                     ESP_BLE_AD_TYPE_APPEARANCE, &field_len);
-    if (field && field_len >= 2) {
-        uint16_t appearance = (uint16_t)field[0] |
-                              ((uint16_t)field[1] << 8);
-        if (appearance == BLE_APPEARANCE_KEYBOARD) return true;
-    }
+        bool is_kbd = false;
 
-    /* Check complete 16-bit service UUID list for HID (0x1812) */
-    field = esp_ble_resolve_adv_data(adv_data,
-                                     ESP_BLE_AD_TYPE_16SRV_CMPL, &field_len);
-    for (int i = 0; field && i + 1 < (int)field_len; i += 2) {
-        uint16_t uuid = (uint16_t)field[i] | ((uint16_t)field[i + 1] << 8);
-        if (uuid == BLE_SVC_HID_UUID16) return true;
-    }
-
-    /* Check incomplete 16-bit service UUID list */
-    field = esp_ble_resolve_adv_data(adv_data,
-                                     ESP_BLE_AD_TYPE_16SRV_PART, &field_len);
-    for (int i = 0; field && i + 1 < (int)field_len; i += 2) {
-        uint16_t uuid = (uint16_t)field[i] | ((uint16_t)field[i + 1] << 8);
-        if (uuid == BLE_SVC_HID_UUID16) return true;
-    }
-
-    return false;
-}
-
-/* ---- Connect task (runs esp_hidh_dev_open which blocks) ---- */
-
-static void connect_task(void *arg)
-{
-    (void)arg;
-    ESP_LOGI(TAG, "Connecting to keyboard \"%s\" "
-             "(%02x:%02x:%02x:%02x:%02x:%02x)...",
-             s_dev_name,
-             s_target_bda[0], s_target_bda[1], s_target_bda[2],
-             s_target_bda[3], s_target_bda[4], s_target_bda[5]);
-
-    esp_hidh_dev_open(s_target_bda, ESP_HID_TRANSPORT_BLE,
-                      s_target_addr_type);
-    vTaskDelete(NULL);
-}
-
-/* ---- Scan retry timer callback ---- */
-
-static void scan_timer_cb(TimerHandle_t timer)
-{
-    (void)timer;
-    if (!s_connected && !s_connecting) {
-        esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
-    }
-}
-
-/* ---- BLE GAP callback ---- */
-
-static void gap_event_handler(esp_gap_ble_cb_event_t event,
-                               esp_ble_gap_cb_param_t *param)
-{
-    switch (event) {
-    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
-        if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "Scan parameters set");
+        /* Check appearance for keyboard (0x03C1) */
+        if (fields.appearance_is_present &&
+            fields.appearance == BLE_APPEARANCE_KEYBOARD) {
+            is_kbd = true;
         }
-        break;
 
-    case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
-        if (param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "Scanning for BLE HID keyboards...");
-        } else {
-            ESP_LOGE(TAG, "Scan start failed: 0x%x",
-                     param->scan_start_cmpl.status);
-        }
-        break;
-
-    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
-        esp_ble_gap_cb_param_t::ble_scan_result_evt_param *scan =
-            &param->scan_rst;
-
-        if (scan->search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
-            if (s_connected || s_connecting) break;
-
-            uint8_t total_len = scan->adv_data_len + scan->scan_rsp_len;
-            if (adv_is_hid_keyboard(scan->ble_adv, total_len)) {
-                /* Extract device name from advertisement */
-                uint8_t name_len = 0;
-                uint8_t *name = esp_ble_resolve_adv_data(
-                    scan->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
-                if (!name) {
-                    name = esp_ble_resolve_adv_data(
-                        scan->ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT,
-                        &name_len);
+        /* Check for HID service UUID (0x1812) */
+        if (!is_kbd) {
+            for (int i = 0; i < fields.num_uuids16; i++) {
+                if (ble_uuid_u16(&fields.uuids16[i].u) ==
+                    BLE_SVC_HID_UUID16) {
+                    is_kbd = true;
+                    break;
                 }
-                if (name && name_len > 0) {
-                    int len = (int)name_len;
-                    if (len > (int)sizeof(s_dev_name) - 1)
-                        len = (int)sizeof(s_dev_name) - 1;
-                    memcpy(s_dev_name, name, len);
-                    s_dev_name[len] = '\0';
-                }
-
-                ESP_LOGI(TAG, "Keyboard found: \"%s\" "
-                         "(%02x:%02x:%02x:%02x:%02x:%02x)",
-                         s_dev_name,
-                         scan->bda[0], scan->bda[1], scan->bda[2],
-                         scan->bda[3], scan->bda[4], scan->bda[5]);
-
-                /* Save target address and stop scanning */
-                s_connecting = true;
-                memcpy(s_target_bda, scan->bda, sizeof(esp_bd_addr_t));
-                s_target_addr_type = scan->ble_addr_type;
-                esp_ble_gap_stop_scanning();
             }
-        } else if (scan->search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
-            /* Scan complete -- retry after a delay if not connected */
-            if (!s_connected && !s_connecting) {
-                ESP_LOGI(TAG, "Scan complete, no keyboard found. "
-                         "Retrying...");
-                if (s_scan_timer) {
-                    xTimerStart(s_scan_timer, 0);
-                }
+        }
+
+        if (is_kbd && !s_kbd_found && !s_connected && !s_connecting) {
+            s_kbd_found = true;
+            s_kbd_addr = event->disc.addr;
+
+            /* Grab advertised name if available */
+            if (fields.name_len > 0 && fields.name != NULL) {
+                int len = (int)fields.name_len;
+                if (len > (int)sizeof(s_dev_name) - 1)
+                    len = (int)sizeof(s_dev_name) - 1;
+                memcpy(s_dev_name, fields.name, (size_t)len);
+                s_dev_name[len] = '\0';
+            }
+
+            ble_gap_disc_cancel();
+
+            /* Wake scan task so it can connect */
+            if (s_scan_task_handle) {
+                xTaskNotifyGive(s_scan_task_handle);
             }
         }
         break;
     }
 
-    case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
-        /* Scanning stopped -- initiate HID connection if target found */
-        if (s_connecting) {
-            xTaskCreate(connect_task, "ble_connect", 4096, NULL, 2, NULL);
-        }
-        break;
-
-    case ESP_GAP_BLE_SEC_REQ_EVT:
-        esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
-        break;
-
-    case ESP_GAP_BLE_AUTH_CMPL_EVT:
-        if (param->ble_security.auth_cmpl.success) {
-            ESP_LOGI(TAG, "BLE authentication success");
-        } else {
-            ESP_LOGE(TAG, "BLE authentication failed, reason: 0x%x",
-                     param->ble_security.auth_cmpl.fail_reason);
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        /* Scan finished (timeout or cancelled) -- wake scan task */
+        if (s_scan_task_handle) {
+            xTaskNotifyGive(s_scan_task_handle);
         }
         break;
 
     default:
         break;
     }
+    return 0;
+}
+
+/* ---- Scan-and-connect task ---- */
+
+static void scan_connect_task(void *arg)
+{
+    (void)arg;
+
+    while (!s_connected) {
+        s_kbd_found = false;
+
+        struct ble_gap_disc_params params = {};
+        params.passive = 0;           /* active scan */
+        params.itvl = 0x0060;         /* 60 ms */
+        params.window = 0x0030;       /* 30 ms */
+        params.filter_duplicates = 1;
+        params.limited = 0;
+
+        ESP_LOGI(TAG, "Scanning for BLE HID keyboards...");
+        int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 10000, &params,
+                              ble_scan_cb, NULL);
+        if (rc != 0 && rc != BLE_HS_EALREADY) {
+            ESP_LOGE(TAG, "BLE scan start failed: %d", rc);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+
+        /* Wait for scan callback to find a keyboard or for timeout */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(15000));
+
+        if (s_kbd_found && !s_connected) {
+            s_connecting = true;
+            ESP_LOGI(TAG, "Connecting to keyboard \"%s\" "
+                     "(%02x:%02x:%02x:%02x:%02x:%02x)...",
+                     s_dev_name,
+                     s_kbd_addr.val[5], s_kbd_addr.val[4],
+                     s_kbd_addr.val[3], s_kbd_addr.val[2],
+                     s_kbd_addr.val[1], s_kbd_addr.val[0]);
+
+            /* esp_hidh_dev_open blocks until connection + GATT discovery */
+            esp_hidh_dev_open(s_kbd_addr.val, ESP_HID_TRANSPORT_BLE,
+                              s_kbd_addr.type);
+        }
+
+        if (!s_connected) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+        }
+    }
+
+    s_scan_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+/* ---- NimBLE host helpers ---- */
+
+static void ble_host_task(void *param)
+{
+    (void)param;
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+static void on_ble_sync(void)
+{
+    /* Make sure we have an address */
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "Failed to configure BLE address: %d", rc);
+        return;
+    }
+    ESP_LOGI(TAG, "BLE host synced, starting keyboard scan");
+    ble_keyboard_start_scan();
+}
+
+static void on_ble_reset(int reason)
+{
+    ESP_LOGE(TAG, "BLE host reset, reason: %d", reason);
 }
 
 /* ---- Public API ---- */
@@ -348,58 +330,27 @@ extern "C" void ble_keyboard_init(void)
     /* Release Classic BT memory (ESP32-S3 is BLE-only) */
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
-    /* Initialize BT controller in BLE mode */
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
+    /* Initialize NimBLE */
+    ESP_ERROR_CHECK(nimble_port_init());
 
-    /* Initialize Bluedroid */
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-    /* Set BLE security parameters (NoIO, bonding, secure connections) */
-    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_BOND;
-    esp_ble_io_cap_t io_cap = ESP_IO_CAP_NONE;
-    uint8_t key_size = 16;
-    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    uint8_t rsp_key  = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-
-    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE,
-                                   &auth_req, sizeof(auth_req));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,
-                                   &io_cap, sizeof(io_cap));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE,
-                                   &key_size, sizeof(key_size));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY,
-                                   &init_key, sizeof(init_key));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
-                                   &rsp_key, sizeof(rsp_key));
-
-    /* Register BLE GAP callback */
-    esp_ble_gap_register_callback(gap_event_handler);
-
-    /* Set scan parameters */
-    esp_ble_scan_params_t scan_params = {};
-    scan_params.scan_type          = BLE_SCAN_TYPE_ACTIVE;
-    scan_params.own_addr_type      = BLE_ADDR_TYPE_PUBLIC;
-    scan_params.scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL;
-    scan_params.scan_interval      = 0x0060;  /* 60 ms */
-    scan_params.scan_window        = 0x0030;  /* 30 ms */
-    scan_params.scan_duplicate     = BLE_SCAN_DUPLICATE_ENABLE;
-    esp_ble_gap_set_scan_params(&scan_params);
+    /* Security manager: no IO, bonding, secure connections */
+    ble_hs_cfg.sync_cb  = on_ble_sync;
+    ble_hs_cfg.reset_cb = on_ble_reset;
+    ble_hs_cfg.sm_io_cap         = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding        = 1;
+    ble_hs_cfg.sm_mitm           = 0;
+    ble_hs_cfg.sm_sc             = 1;
+    ble_hs_cfg.sm_our_key_dist   = BLE_SM_PAIR_KEY_DIST_ENC;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC;
 
     /* Initialize HID Host (esp_hid component) */
-    esp_hidh_config_t hidh_cfg = {};
-    hidh_cfg.callback = hidh_callback;
-    hidh_cfg.event_stack_size = 4096;
-    ESP_ERROR_CHECK(esp_hidh_init(&hidh_cfg));
+    esp_hidh_config_t config = {};
+    config.callback = hidh_callback;
+    config.event_stack_size = 4096;
+    ESP_ERROR_CHECK(esp_hidh_init(&config));
 
-    /* Create scan retry timer (one-shot, 2-second delay) */
-    s_scan_timer = xTimerCreate("scan_retry", pdMS_TO_TICKS(2000),
-                                pdFALSE, NULL, scan_timer_cb);
-
-    /* Start initial scan */
-    ble_keyboard_start_scan();
+    /* Start NimBLE host task -- on_ble_sync will trigger scanning */
+    nimble_port_freertos_init(ble_host_task);
 
     ESP_LOGI(TAG, "BLE HID keyboard host initialized");
 }
@@ -416,8 +367,9 @@ extern "C" bool ble_keyboard_is_connected(void)
 
 extern "C" void ble_keyboard_start_scan(void)
 {
-    if (!s_connected && !s_connecting) {
-        esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
+    if (!s_connected && !s_connecting && s_scan_task_handle == NULL) {
+        xTaskCreate(scan_connect_task, "ble_scan", 4096, NULL, 2,
+                    &s_scan_task_handle);
     }
 }
 

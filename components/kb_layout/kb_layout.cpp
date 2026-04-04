@@ -17,7 +17,6 @@
 #define MOD_RALT   0x40  /* AltGr on international keyboards */
 
 static kb_layout_id_t s_layout = KB_LAYOUT_US;
-static char s_result[8]; /* UTF-8 result buffer (max 4 bytes + NUL) */
 
 /* HID keycodes for letter/number/symbol keys: 0x04..0x38 (53 keys) */
 #define KC_A     0x04
