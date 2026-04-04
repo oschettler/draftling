@@ -198,7 +198,7 @@ static esp_err_t push_file(const char *name)
     free(content);
 
     /* Check if file exists remotely to get its SHA */
-    char url[512];
+    char url[768];
     snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s?ref=%.63s",
              s_cfg.api_url, s_cfg.remote_path, name, s_cfg.branch);
 
