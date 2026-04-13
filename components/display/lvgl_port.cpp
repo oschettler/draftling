@@ -53,13 +53,23 @@ static void lvgl_task(void *arg)
     }
 }
 
-extern "C" void lvgl_port_init(int width, int height)
+extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
 {
     s_lvgl_mux = xSemaphoreCreateMutex();
     lv_init();
 
     lv_display_t *disp = lv_display_create(width, height);
     lv_display_set_flush_cb(disp, flush_cb);
+
+    /* Apply display rotation */
+    lv_display_rotation_t rot = LV_DISPLAY_ROTATION_0;
+    switch (rotate_deg) {
+    case 90:  rot = LV_DISPLAY_ROTATION_90;  break;
+    case 180: rot = LV_DISPLAY_ROTATION_180; break;
+    case 270: rot = LV_DISPLAY_ROTATION_270; break;
+    default:  rot = LV_DISPLAY_ROTATION_0;   break;
+    }
+    lv_display_set_rotation(disp, rot);
 
     size_t buf_size = width * height * BYTES_PER_PIXEL;
     uint8_t *buf1 = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
@@ -76,7 +86,7 @@ extern "C" void lvgl_port_init(int width, int height)
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, LVGL_TICK_PERIOD_MS * 1000));
 
     xTaskCreatePinnedToCore(lvgl_task, "LVGL", 8 * 1024, NULL, 5, NULL, 0);
-    ESP_LOGI(TAG, "LVGL port initialized (%dx%d)", width, height);
+    ESP_LOGI(TAG, "LVGL port initialized (%dx%d, rotation=%d)", width, height, rotate_deg);
 }
 
 extern "C" bool lvgl_port_lock(int timeout_ms)

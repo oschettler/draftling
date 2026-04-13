@@ -50,7 +50,7 @@ extern "C" void app_main(void)
 
     /* Initialize LVGL */
     ESP_LOGI(TAG, "Initializing LVGL...");
-    lvgl_port_init(LCD_WIDTH, LCD_HEIGHT);
+    lvgl_port_init(LCD_WIDTH, LCD_HEIGHT, LCD_ROTATE);
 
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");

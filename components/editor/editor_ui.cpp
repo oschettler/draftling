@@ -49,9 +49,15 @@
 
 static const char *TAG = "EditorUI";
 
-/* Layout constants */
+/* Layout constants -- account for display rotation.
+ * At 90 or 270 degrees, the logical width and height are swapped. */
+#if CONFIG_WRITERDECK_LCD_ROTATE_ANGLE == 90 || CONFIG_WRITERDECK_LCD_ROTATE_ANGLE == 270
+#define SCR_W        CONFIG_WRITERDECK_LCD_HEIGHT
+#define SCR_H        CONFIG_WRITERDECK_LCD_WIDTH
+#else
 #define SCR_W        CONFIG_WRITERDECK_LCD_WIDTH
 #define SCR_H        CONFIG_WRITERDECK_LCD_HEIGHT
+#endif
 #define HEADER_H     16
 #define STATUS_H     16
 #define EDITOR_Y     HEADER_H
