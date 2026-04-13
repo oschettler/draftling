@@ -8,12 +8,14 @@ choice WRITERDECK_HARDWARE_MODEL
 
 config WRITERDECK_MODEL_WAVESHARE_RLCD42
     bool "Waveshare ESP32-S3-RLCD-4.2"
+    depends on IDF_TARGET_ESP32S3
     help
         Waveshare ESP32-S3-RLCD-4.2 board with 400x300 reflective LCD
         and GPIO18 deep-sleep wakeup button.
 
 config WRITERDECK_MODEL_M5STACK_PAPERS3
     bool "M5Stack PaperS3"
+    depends on IDF_TARGET_ESP32S3
     help
         M5Stack PaperS3 with 4.7-inch e-Paper display (960x540)
         driven by an IT8951 controller.  The on-board power button
