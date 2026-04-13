@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include "sdkconfig.h"
 
 #include "app_config.h"
 #include "display.h"
@@ -19,7 +20,11 @@ static const char *TAG = "WriterDeck";
 
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "WriterDeck - Markdown Editor for ESP32-S3-RLCD-4.2");
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
+    ESP_LOGI(TAG, "WriterDeck - Waveshare ESP32-S3-RLCD-4.2");
+#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK)
+    ESP_LOGI(TAG, "WriterDeck - M5Stack PaperS3");
+#endif
 
     /* Initialize NVS - required for WiFi and BT */
     esp_err_t ret = nvs_flash_init();
@@ -35,8 +40,13 @@ extern "C" void app_main(void)
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, LCD_WIDTH, LCD_HEIGHT);
+#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK)
+    display_init(EPD_MOSI_PIN, EPD_SCK_PIN, EPD_CS_PIN,
+                 EPD_RST_PIN, EPD_BUSY_PIN, LCD_WIDTH, LCD_HEIGHT);
+#endif
 
     /* Initialize LVGL */
     ESP_LOGI(TAG, "Initializing LVGL...");

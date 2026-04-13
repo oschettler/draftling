@@ -6,7 +6,17 @@ extern "C" {
 
 #include <stdint.h>
 
-void display_init(int mosi, int sck, int dc, int cs, int rst, int width, int height);
+/*
+ * Initialize the display hardware.
+ *
+ * Parameter mapping depends on the selected hardware model:
+ *
+ *  Waveshare RLCD:   mosi, sck, dc, cs, rst, width, height
+ *  M5Stack PaperS3:  mosi, sck, cs, rst(-1), busy, width, height
+ */
+void display_init(int pin_a, int pin_b, int pin_c, int pin_d,
+                  int pin_e, int width, int height);
+
 void display_clear(uint8_t color);
 void display_set_pixel(uint16_t x, uint16_t y, uint8_t color);
 void display_flush(void);

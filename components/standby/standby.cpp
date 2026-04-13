@@ -2,13 +2,17 @@
  * Standby / deep-sleep manager.
  *
  * Tracks user inactivity via an esp_timer.  When the configured
- * timeout expires the board enters deep sleep, waking on GPIO18
- * (EXT0 wakeup, active-low).  The timeout value is persisted in NVS.
+ * timeout expires the board enters deep sleep.
  *
- * Because deep sleep preserves RTC memory and the RLCD is a
- * reflective display the screen content is retained visually.
+ *  - Waveshare ESP32-S3-RLCD-4.2: wakes via EXT0 on GPIO18 (active-low).
+ *    The RLCD is reflective, so screen content is retained visually.
+ *  - M5Stack PaperS3: the power button resets the MCU through the PMIC,
+ *    so no EXT0 wakeup source is configured.  The e-Paper display also
+ *    retains its image while powered off.
+ *
  * The editor state lives in PSRAM/heap so it is lost on wake;
- * callers should auto-save before sleep.
+ * callers should auto-save before sleep.  The timeout value is persisted
+ * in NVS.
  */
 
 #include <cstring>
@@ -20,6 +24,7 @@
 #include <nvs.h>
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
+#include "sdkconfig.h"
 
 #include "standby.h"
 
@@ -29,8 +34,10 @@ static const char *TAG = "Standby";
 #define NVS_NAMESPACE  "standby"
 #define NVS_KEY_TOUT   "timeout"
 
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
 /* GPIO used as EXT0 wake-up source (active-low) */
 #define WAKEUP_GPIO    GPIO_NUM_18
+#endif
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
 static esp_timer_handle_t s_timer = NULL;
@@ -124,11 +131,15 @@ extern "C" void standby_enter_sleep(void)
 {
     stop_timer();
 
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
     /* Configure GPIO18 as EXT0 wake-up source (wake on low level) */
     ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
-
-    /* Isolate other RTC GPIOs to reduce current (optional) */
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);
+#else
+    /* M5Stack PaperS3: power button resets via PMIC -- no EXT0 source needed.
+     * The MCU will be fully reset when the user presses the power button. */
+    ESP_LOGI(TAG, "Entering deep sleep (power-button reset to wake)...");
+#endif
 
     esp_deep_sleep_start();
     /* Does not return */

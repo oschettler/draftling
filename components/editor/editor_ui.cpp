@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstring>
 #include <esp_log.h>
+#include "sdkconfig.h"
 #include "lvgl.h"
 
 #include "editor_ui.h"
@@ -49,13 +50,16 @@
 static const char *TAG = "EditorUI";
 
 /* Layout constants */
+#define SCR_W        CONFIG_WRITERDECK_LCD_WIDTH
+#define SCR_H        CONFIG_WRITERDECK_LCD_HEIGHT
 #define HEADER_H     16
 #define STATUS_H     16
 #define EDITOR_Y     HEADER_H
-#define EDITOR_H     (300 - HEADER_H - STATUS_H)
+#define EDITOR_H     (SCR_H - HEADER_H - STATUS_H)
 #define LINE_H       14
 #define VISIBLE_LINES (EDITOR_H / LINE_H)
 #define CHAR_W       7   /* approx width of montserrat_12 char */
+#define LIST_H       (SCR_H - 18)  /* height for list panels below header */
 
 /* LVGL objects */
 static lv_obj_t *s_scr       = NULL;
@@ -240,7 +244,7 @@ extern "C" void editor_ui_refresh(void)
         /* Create or reuse label */
         if (!s_line_labels[i]) {
             s_line_labels[i] = lv_label_create(s_cont_edit);
-            lv_obj_set_width(s_line_labels[i], 396);
+            lv_obj_set_width(s_line_labels[i], SCR_W - 4);
             lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_CLIP);
         }
         lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
@@ -779,14 +783,14 @@ extern "C" void editor_ui_init(void)
     /* Title bar */
     s_lbl_title = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_title, 2, 0);
-    lv_obj_set_width(s_lbl_title, 396);
+    lv_obj_set_width(s_lbl_title, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_title, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_black(), 0);
     lv_label_set_text(s_lbl_title, "WriterDeck");
 
     /* Header separator line */
     lv_obj_t *hline = lv_obj_create(s_scr);
-    lv_obj_set_size(hline, 400, 1);
+    lv_obj_set_size(hline, SCR_W, 1);
     lv_obj_set_pos(hline, 0, HEADER_H - 1);
     lv_obj_set_style_bg_color(hline, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(hline, LV_OPA_COVER, 0);
@@ -797,7 +801,7 @@ extern "C" void editor_ui_init(void)
     /* Editor content area */
     s_cont_edit = lv_obj_create(s_scr);
     lv_obj_set_pos(s_cont_edit, 0, EDITOR_Y);
-    lv_obj_set_size(s_cont_edit, 400, EDITOR_H);
+    lv_obj_set_size(s_cont_edit, SCR_W, EDITOR_H);
     lv_obj_set_style_bg_opa(s_cont_edit, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_cont_edit, 0, 0);
     lv_obj_set_style_pad_all(s_cont_edit, 0, 0);
@@ -815,8 +819,8 @@ extern "C" void editor_ui_init(void)
 
     /* Status bar */
     lv_obj_t *sline = lv_obj_create(s_scr);
-    lv_obj_set_size(sline, 400, 1);
-    lv_obj_set_pos(sline, 0, 300 - STATUS_H);
+    lv_obj_set_size(sline, SCR_W, 1);
+    lv_obj_set_pos(sline, 0, SCR_H - STATUS_H);
     lv_obj_set_style_bg_color(sline, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(sline, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(sline, 0, 0);
@@ -824,8 +828,8 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_pad_all(sline, 0, 0);
 
     s_lbl_status = lv_label_create(s_scr);
-    lv_obj_set_pos(s_lbl_status, 2, 300 - STATUS_H + 2);
-    lv_obj_set_width(s_lbl_status, 396);
+    lv_obj_set_pos(s_lbl_status, 2, SCR_H - STATUS_H + 2);
+    lv_obj_set_width(s_lbl_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_status, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
     lv_label_set_text(s_lbl_status,
@@ -846,7 +850,7 @@ extern "C" void editor_ui_init(void)
 
     s_list_files = lv_list_create(s_scr_browser);
     lv_obj_set_pos(s_list_files, 0, 18);
-    lv_obj_set_size(s_list_files, 400, 282);
+    lv_obj_set_size(s_list_files, SCR_W, LIST_H);
     lv_obj_set_style_border_width(s_list_files, 0, 0);
     lv_obj_set_style_radius(s_list_files, 0, 0);
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
@@ -867,7 +871,7 @@ extern "C" void editor_ui_init(void)
 
     s_menu_list = lv_list_create(s_scr_menu);
     lv_obj_set_pos(s_menu_list, 0, 18);
-    lv_obj_set_size(s_menu_list, 400, 282);
+    lv_obj_set_size(s_menu_list, SCR_W, LIST_H);
     lv_obj_set_style_border_width(s_menu_list, 0, 0);
     lv_obj_set_style_radius(s_menu_list, 0, 0);
     lv_obj_set_style_pad_all(s_menu_list, 0, 0);
@@ -885,7 +889,7 @@ extern "C" void editor_ui_init(void)
 
     s_settings_list = lv_list_create(s_scr_settings);
     lv_obj_set_pos(s_settings_list, 0, 18);
-    lv_obj_set_size(s_settings_list, 400, 282);
+    lv_obj_set_size(s_settings_list, SCR_W, LIST_H);
     lv_obj_set_style_border_width(s_settings_list, 0, 0);
     lv_obj_set_style_radius(s_settings_list, 0, 0);
     lv_obj_set_style_pad_all(s_settings_list, 0, 0);
