@@ -1,4 +1,4 @@
-menu "Draftling Configuration"
+menu "DRAFTLING Configuration"
 
 choice DRAFTLING_HARDWARE_MODEL
     prompt "Hardware Model"

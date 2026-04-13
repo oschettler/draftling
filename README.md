@@ -10,8 +10,18 @@ with reflective or e-paper displays.
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-Paper (IT8951), 960x540 |
 
-Select the target board with `idf.py menuconfig` under
-*Draftling Configuration > Hardware Model*.
+### Hardware selection
+
+Before building, select the target board with `idf.py menuconfig`.
+Navigate to **DRAFTLING Configuration > Hardware Model** and choose
+the board you are building for:
+
+- **Waveshare ESP32-S3-RLCD-4.2** -- 4.2" reflective LCD (400x300)
+- **M5Stack PaperS3** -- 4.7" e-Paper with IT8951 controller (960x540)
+
+The display resolution and driver are configured automatically based
+on the selected model. You can also adjust the **Display rotation
+angle** in the same menu.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.
@@ -132,4 +142,5 @@ components/
 
 ## License
 
-See LICENSE file for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for
+details.
