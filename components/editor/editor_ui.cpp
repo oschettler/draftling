@@ -14,6 +14,7 @@
 #include "sd_card.h"
 #include "lvgl_port.h"
 #include "standby.h"
+#include "draftling_logo.h"
 
 /*
  * Font aliases with fallbacks.
@@ -75,6 +76,7 @@ static lv_obj_t *s_lbl_status= NULL;
 static lv_obj_t *s_cursor    = NULL;
 static lv_obj_t *s_scr_browser = NULL;
 static lv_obj_t *s_list_files  = NULL;
+static lv_obj_t *s_img_logo    = NULL;
 
 /* Menu overlay objects */
 static lv_obj_t *s_scr_menu     = NULL;
@@ -201,6 +203,18 @@ static lv_style_t *style_for_type(md_line_type_t type)
 extern "C" void editor_ui_refresh(void)
 {
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
+
+    /* Show logo when no file is loaded and buffer is empty */
+    size_t text_len = 0;
+    editor_get_text(&text_len);
+    bool show_logo = (editor_get_file_path() == NULL && text_len == 0);
+    if (s_img_logo) {
+        if (show_logo) {
+            lv_obj_remove_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     int scroll = editor_get_scroll_line();
     int total  = editor_get_line_count();
@@ -819,6 +833,14 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_pad_all(s_cont_edit, 0, 0);
     lv_obj_set_style_radius(s_cont_edit, 0, 0);
     lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Logo image shown when no file is open */
+    s_img_logo = lv_image_create(s_cont_edit);
+    lv_image_set_src(s_img_logo, &draftling_logo);
+    lv_obj_set_pos(s_img_logo,
+                   (SCR_W - draftling_logo.header.w) / 2,
+                   (EDITOR_H - draftling_logo.header.h) / 2);
+    lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
     /* Cursor (thin vertical bar) */
     s_cursor = lv_obj_create(s_cont_edit);
