@@ -171,10 +171,16 @@ static void update_title_bar(void)
     }
     int line, col;
     editor_get_cursor_pos(&line, &col);
-    char buf[80];
-    snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d  [%s]",
-             name, editor_is_modified() ? " *" : "", line + 1, col + 1,
-             kb_layout_name(kb_layout_get()));
+    char batt_str[16] = "";
+    int batt = ble_keyboard_get_battery_level();
+    if (batt >= 0) {
+        snprintf(batt_str, sizeof(batt_str), " Bat:%d%%", batt);
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d  [%s]%s",
+             name, editor_is_modified() ? " *" : "",
+             line + 1, col + 1,
+             kb_layout_name(kb_layout_get()), batt_str);
     lv_label_set_text(s_lbl_title, buf);
 }
 

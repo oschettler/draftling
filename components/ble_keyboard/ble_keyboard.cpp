@@ -38,6 +38,7 @@ static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
+static volatile int s_battery_level = -1;  /* -1 = unknown */
 
 /* Target device address saved during scan for deferred connection */
 static esp_bd_addr_t s_target_bda;
@@ -128,6 +129,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_connected  = false;
         s_connecting = false;
         s_dev_name[0] = '\0';
+        s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
         ESP_LOGI(TAG, "HID device disconnected, restarting scan...");
         ble_keyboard_start_scan();
@@ -144,6 +146,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
     }
 
     case ESP_HIDH_BATTERY_EVENT:
+        s_battery_level = param->battery.level;
         ESP_LOGI(TAG, "Battery: %d%%", param->battery.level);
         break;
 
@@ -393,4 +396,9 @@ extern "C" void ble_keyboard_start_scan(void)
 extern "C" const char *ble_keyboard_get_device_name(void)
 {
     return s_dev_name;
+}
+
+extern "C" int ble_keyboard_get_battery_level(void)
+{
+    return s_battery_level;
 }

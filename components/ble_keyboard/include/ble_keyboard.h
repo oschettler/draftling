@@ -60,6 +60,7 @@ void ble_keyboard_set_callback(kb_event_callback_t callback);
 bool ble_keyboard_is_connected(void);
 void ble_keyboard_start_scan(void);
 const char *ble_keyboard_get_device_name(void);
+int ble_keyboard_get_battery_level(void);
 
 #ifdef __cplusplus
 }
