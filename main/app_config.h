@@ -41,7 +41,7 @@
 #define EPD_MOSI_PIN    35
 #define EPD_SCK_PIN     36
 #define EPD_CS_PIN      33
-#define EPD_RST_PIN     -1  /* IT8951 reset active-low; -1 = unused / RC circuit */
+#define EPD_RST_PIN     -1  /* hardware reset not controlled by MCU (RC circuit) */
 #define EPD_BUSY_PIN    34  /* HRDY (host-ready) signal from IT8951 */
 
 /* SD Card - SDMMC 1-bit interface */

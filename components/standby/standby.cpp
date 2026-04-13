@@ -35,8 +35,8 @@ static const char *TAG = "Standby";
 #define NVS_KEY_TOUT   "timeout"
 
 #if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
-/* GPIO used as EXT0 wake-up source (active-low) */
-#define WAKEUP_GPIO    GPIO_NUM_18
+/* GPIO used as EXT0 wake-up source (active-low) -- matches app_config.h */
+#define WAKEUP_GPIO    ((gpio_num_t)18)
 #endif
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;

@@ -23,7 +23,8 @@
 
 static const char *TAG = "EPD";
 
-/* IT8951 SPI preamble words */
+/* IT8951 SPI clock speed in Hz */
+#define IT8951_SPI_CLOCK_HZ  (12 * 1000 * 1000)
 #define IT8951_PREAMBLE_CMD   0x6000
 #define IT8951_PREAMBLE_WRITE 0x0000
 #define IT8951_PREAMBLE_READ  0x1000
@@ -137,7 +138,7 @@ static void it8951_get_dev_info(it8951_dev_info_t *info)
     spi_read16();  /* dummy */
 
     uint16_t *raw = (uint16_t *)info;
-    /* The struct is 20 uint16_t words (40 bytes) */
+    /* IT8951 SPI preamble words */
     for (int i = 0; i < (int)(sizeof(it8951_dev_info_t) / 2); i++) {
         raw[i] = spi_read16();
     }
@@ -243,7 +244,7 @@ extern "C" void display_init(int mosi, int sck, int dc_or_cs, int cs_or_rst,
     ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
     spi_device_interface_config_t dev = {};
-    dev.clock_speed_hz = 12 * 1000 * 1000;  /* 12 MHz */
+    dev.clock_speed_hz = IT8951_SPI_CLOCK_HZ;
     dev.mode           = 0;
     dev.spics_io_num   = cs;
     dev.queue_size     = 1;

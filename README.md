@@ -1,8 +1,17 @@
 # WriterDeck
 
-A distraction-free Markdown text editor for the
-[Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2)
-development board.
+A distraction-free Markdown text editor for ESP32-S3-based development boards
+with reflective or e-paper displays.
+
+### Supported hardware
+
+| Board | Display |
+|-------|---------|
+| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
+| [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-Paper (IT8951), 960x540 |
+
+Select the target board with `idf.py menuconfig` under
+*WriterDeck Configuration > Hardware Model*.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.
@@ -11,17 +20,18 @@ Git repository via the GitHub REST API.
 
 ## Hardware
 
-| Feature | Detail |
-|---------|--------|
-| MCU | ESP32-S3 (dual-core, 16 MB flash, 8 MB OPI PSRAM) |
-| Display | 4.2" reflective LCD, 400x300, monochrome, SPI |
-| Storage | MicroSD card (SDMMC 1-bit) |
-| Input | BLE HID keyboard |
-| Connectivity | WiFi 802.11 b/g/n for Git sync |
+| Feature | Waveshare RLCD-4.2 | M5Stack PaperS3 |
+|---------|--------------------|--------------------|
+| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (16 MB flash, 8 MB PSRAM) |
+| Display | 4.2" reflective LCD, 400x300, SPI | 4.7" e-Paper, 960x540, IT8951 SPI |
+| Storage | MicroSD (SDMMC 1-bit) | MicroSD (SDMMC 1-bit) |
+| Input | BLE HID keyboard | BLE HID keyboard |
+| Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
+| Wake from sleep | GPIO18 button | Power button (PMIC reset) |
 
 ## Features
 
-- **WYSIWYG Markdown editing** on a 400x300 reflective LCD
+- **WYSIWYG Markdown editing** on reflective/e-paper display
 - **Bluetooth keyboard** input with auto-discovery and pairing
 - **File browser** to open and manage `.md` files on the SD card
 - **Markdown rendering**: headings (H1-H4), bullet and numbered lists,
@@ -108,15 +118,16 @@ The `token` is a GitHub Personal Access Token with `repo` scope.
 ## Project Structure
 
 ```
-main/               Application entry point and pin definitions
+main/               Application entry point, pin definitions, Kconfig
 components/
-  display/           RLCD SPI driver and LVGL v9 port
+  display/           Display drivers (RLCD SPI + IT8951 e-Paper) and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
   kb_layout/         Keyboard layout translation (US/UK/DE/FR)
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization
+  standby/           Deep-sleep / standby timer manager
 ```
 
 ## License
