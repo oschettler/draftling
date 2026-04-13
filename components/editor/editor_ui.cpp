@@ -171,7 +171,7 @@ static void update_title_bar(void)
     }
     int line, col;
     editor_get_cursor_pos(&line, &col);
-    char batt_str[16] = "";
+    char batt_str[24] = "";
     int batt = ble_keyboard_get_battery_level();
     if (batt >= 0) {
         snprintf(batt_str, sizeof(batt_str), " Bat:%d%%", batt);
