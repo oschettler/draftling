@@ -5,7 +5,7 @@
 /* Display dimensions (derived from Kconfig hardware model selection) */
 #define LCD_WIDTH   CONFIG_WRITERDECK_LCD_WIDTH
 #define LCD_HEIGHT  CONFIG_WRITERDECK_LCD_HEIGHT
-#define LCD_ROTATE  CONFIG_WRITERDECK_LCD_ROTATE
+#define LCD_ROTATE  CONFIG_WRITERDECK_LCD_ROTATE_ANGLE
 
 /* SD Card mount point (shared across all hardware models) */
 #define SD_MOUNT_POINT  "/sdcard"
