@@ -1,4 +1,4 @@
-if(CONFIG_WRITERDECK_MODEL_M5STACK)
+if(CONFIG_WRITERDECK_MODEL_M5STACK_PAPERS3)
     set(DISPLAY_SRC "display_epaper.cpp")
 else()
     set(DISPLAY_SRC "display.cpp")

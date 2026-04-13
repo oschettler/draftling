@@ -20,9 +20,9 @@ static const char *TAG = "WriterDeck";
 
 extern "C" void app_main(void)
 {
-#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE_RLCD42)
     ESP_LOGI(TAG, "WriterDeck - Waveshare ESP32-S3-RLCD-4.2");
-#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK)
+#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK_PAPERS3)
     ESP_LOGI(TAG, "WriterDeck - M5Stack PaperS3");
 #endif
 
@@ -40,10 +40,10 @@ extern "C" void app_main(void)
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
-#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE_RLCD42)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, LCD_WIDTH, LCD_HEIGHT);
-#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK)
+#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK_PAPERS3)
     display_init(EPD_MOSI_PIN, EPD_SCK_PIN, EPD_CS_PIN,
                  EPD_RST_PIN, EPD_BUSY_PIN, LCD_WIDTH, LCD_HEIGHT);
 #endif

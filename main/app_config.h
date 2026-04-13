@@ -9,7 +9,7 @@
 /* SD Card mount point (shared across all hardware models) */
 #define SD_MOUNT_POINT  "/sdcard"
 
-#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE)
+#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE_RLCD42)
 /* ----- Waveshare ESP32-S3-RLCD-4.2 ----- */
 
 /* RLCD Display - SPI interface */
@@ -32,7 +32,7 @@
 /* Deep-sleep wakeup on GPIO18 (EXT0, active-low) */
 #define WAKEUP_GPIO_NUM 18
 
-#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK)
+#elif defined(CONFIG_WRITERDECK_MODEL_M5STACK_PAPERS3)
 /* ----- M5Stack PaperS3 ----- */
 
 /* E-Paper Display - SPI interface (IT8951 controller)
