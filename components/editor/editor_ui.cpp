@@ -51,12 +51,12 @@ static const char *TAG = "EditorUI";
 
 /* Layout constants -- account for display rotation.
  * At 90 or 270 degrees, the logical width and height are swapped. */
-#if CONFIG_WRITERDECK_LCD_ROTATE_ANGLE == 90 || CONFIG_WRITERDECK_LCD_ROTATE_ANGLE == 270
-#define SCR_W        CONFIG_WRITERDECK_LCD_HEIGHT
-#define SCR_H        CONFIG_WRITERDECK_LCD_WIDTH
+#if CONFIG_DRAFTLING_DISPLAY_ROTATE_ANGLE == 90 || CONFIG_DRAFTLING_DISPLAY_ROTATE_ANGLE == 270
+#define SCR_W        CONFIG_DRAFTLING_DISPLAY_HEIGHT
+#define SCR_H        CONFIG_DRAFTLING_DISPLAY_WIDTH
 #else
-#define SCR_W        CONFIG_WRITERDECK_LCD_WIDTH
-#define SCR_H        CONFIG_WRITERDECK_LCD_HEIGHT
+#define SCR_W        CONFIG_DRAFTLING_DISPLAY_WIDTH
+#define SCR_H        CONFIG_DRAFTLING_DISPLAY_HEIGHT
 #endif
 #define HEADER_H     16
 #define STATUS_H     16
@@ -798,7 +798,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_title, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_title, FONT_10, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_black(), 0);
-    lv_label_set_text(s_lbl_title, "WriterDeck");
+    lv_label_set_text(s_lbl_title, "Draftling");
 
     /* Header separator line */
     lv_obj_t *hline = lv_obj_create(s_scr);

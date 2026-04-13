@@ -34,7 +34,7 @@ static const char *TAG = "Standby";
 #define NVS_NAMESPACE  "standby"
 #define NVS_KEY_TOUT   "timeout"
 
-#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
 /* GPIO used as EXT0 wake-up source (active-low) -- matches app_config.h */
 #define WAKEUP_GPIO    ((gpio_num_t)18)
 #endif
@@ -131,7 +131,7 @@ extern "C" void standby_enter_sleep(void)
 {
     stop_timer();
 
-#if defined(CONFIG_WRITERDECK_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
     /* Configure GPIO18 as EXT0 wake-up source (wake on low level) */
     ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);

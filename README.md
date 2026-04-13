@@ -1,4 +1,4 @@
-# WriterDeck
+# Draftling
 
 A distraction-free Markdown text editor for ESP32-S3-based development boards
 with reflective or e-paper displays.
@@ -11,7 +11,7 @@ with reflective or e-paper displays.
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-Paper (IT8951), 960x540 |
 
 Select the target board with `idf.py menuconfig` under
-*WriterDeck Configuration > Hardware Model*.
+*Draftling Configuration > Hardware Model*.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.

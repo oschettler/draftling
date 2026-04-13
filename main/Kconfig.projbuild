@@ -1,19 +1,19 @@
-menu "WriterDeck Configuration"
+menu "Draftling Configuration"
 
-choice WRITERDECK_HARDWARE_MODEL
+choice DRAFTLING_HARDWARE_MODEL
     prompt "Hardware Model"
-    default WRITERDECK_MODEL_WAVESHARE_RLCD42
+    default DRAFTLING_MODEL_WAVESHARE_RLCD42
     help
-        Select the target hardware platform for WriterDeck.
+        Select the target hardware platform for Draftling.
 
-config WRITERDECK_MODEL_WAVESHARE_RLCD42
+config DRAFTLING_MODEL_WAVESHARE_RLCD42
     bool "Waveshare ESP32-S3-RLCD-4.2"
     depends on IDF_TARGET_ESP32S3
     help
         Waveshare ESP32-S3-RLCD-4.2 board with 400x300 reflective LCD
         and GPIO18 deep-sleep wakeup button.
 
-config WRITERDECK_MODEL_M5STACK_PAPERS3
+config DRAFTLING_MODEL_M5STACK_PAPERS3
     bool "M5Stack PaperS3"
     depends on IDF_TARGET_ESP32S3
     help
@@ -23,41 +23,41 @@ config WRITERDECK_MODEL_M5STACK_PAPERS3
 
 endchoice
 
-config WRITERDECK_LCD_WIDTH
+config DRAFTLING_DISPLAY_WIDTH
     int
-    default 400 if WRITERDECK_MODEL_WAVESHARE_RLCD42
-    default 960 if WRITERDECK_MODEL_M5STACK_PAPERS3
+    default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
 
-config WRITERDECK_LCD_HEIGHT
+config DRAFTLING_DISPLAY_HEIGHT
     int
-    default 300 if WRITERDECK_MODEL_WAVESHARE_RLCD42
-    default 540 if WRITERDECK_MODEL_M5STACK_PAPERS3
+    default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
 
-choice WRITERDECK_LCD_ROTATE
+choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
-    default WRITERDECK_LCD_ROTATE_0
+    default DRAFTLING_DISPLAY_ROTATE_0
     help
         Rotation angle for the display in degrees.
 
-config WRITERDECK_LCD_ROTATE_0
+config DRAFTLING_DISPLAY_ROTATE_0
     bool "0 degrees (no rotation)"
 
-config WRITERDECK_LCD_ROTATE_90
+config DRAFTLING_DISPLAY_ROTATE_90
     bool "90 degrees"
 
-config WRITERDECK_LCD_ROTATE_180
+config DRAFTLING_DISPLAY_ROTATE_180
     bool "180 degrees"
 
-config WRITERDECK_LCD_ROTATE_270
+config DRAFTLING_DISPLAY_ROTATE_270
     bool "270 degrees"
 
 endchoice
 
-config WRITERDECK_LCD_ROTATE_ANGLE
+config DRAFTLING_DISPLAY_ROTATE_ANGLE
     int
-    default 0 if WRITERDECK_LCD_ROTATE_0
-    default 90 if WRITERDECK_LCD_ROTATE_90
-    default 180 if WRITERDECK_LCD_ROTATE_180
-    default 270 if WRITERDECK_LCD_ROTATE_270
+    default 0 if DRAFTLING_DISPLAY_ROTATE_0
+    default 90 if DRAFTLING_DISPLAY_ROTATE_90
+    default 180 if DRAFTLING_DISPLAY_ROTATE_180
+    default 270 if DRAFTLING_DISPLAY_ROTATE_270
 
 endmenu

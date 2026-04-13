@@ -91,7 +91,7 @@ static esp_err_t api_request(const char *url, esp_http_client_method_t method,
     snprintf(auth, sizeof(auth), "Bearer %.127s", s_cfg.token);
     esp_http_client_set_header(client, "Authorization", auth);
     esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
-    esp_http_client_set_header(client, "User-Agent", "WriterDeck/1.0");
+    esp_http_client_set_header(client, "User-Agent", "Draftling/1.0");
 
     if (body) {
         esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -218,7 +218,7 @@ static esp_err_t push_file(const char *name)
     /* Build PUT body */
     cJSON *body = cJSON_CreateObject();
     char msg[128];
-    snprintf(msg, sizeof(msg), "Update %.100s from WriterDeck", name);
+    snprintf(msg, sizeof(msg), "Update %.100s from Draftling", name);
     cJSON_AddStringToObject(body, "message", msg);
     cJSON_AddStringToObject(body, "content", b64);
     cJSON_AddStringToObject(body, "branch", s_cfg.branch);
