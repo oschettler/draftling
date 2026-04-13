@@ -110,6 +110,7 @@ static void it8951_write_data(uint16_t data)
     spi_write16(data);
 }
 
+__attribute__((unused))
 static uint16_t it8951_read_data(void)
 {
     wait_busy();
