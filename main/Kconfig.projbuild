@@ -31,4 +31,11 @@ config WRITERDECK_LCD_HEIGHT
     default 300 if WRITERDECK_MODEL_WAVESHARE_RLCD42
     default 540 if WRITERDECK_MODEL_M5STACK_PAPERS3
 
+config WRITERDECK_LCD_ROTATE
+    int "Display rotation angle"
+    default 0
+    help
+        Rotation angle for the display in degrees.
+        Valid values are 0, 90, 180, and 270.
+
 endmenu
