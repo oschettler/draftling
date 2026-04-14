@@ -1,4 +1,4 @@
-menu "Keyboard Layouts"
+menu "DRAFTLING Keyboard Layouts"
 
 config KB_LAYOUT_ENABLE_US
     bool "US-English (QWERTY)"

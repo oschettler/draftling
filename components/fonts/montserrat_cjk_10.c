@@ -4,11 +4,7 @@
  * Opts: --font /tmp/Montserrat-Regular.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF --font /tmp/NotoSansJP-Regular.ttf -r 0x3001-0x3003,0x3041-0x3096,0x30A1-0x30FC,0x3105-0x312F,0x3131-0x3163 --size 10 --bpp 4 --format lvgl --no-compress --lv-font-name montserrat_cjk_10 -o /tmp/cjk_fonts_v2/montserrat_cjk_10.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef MONTSERRAT_CJK_10
 #define MONTSERRAT_CJK_10 1
