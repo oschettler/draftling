@@ -10,6 +10,16 @@ if(CONFIG_KB_LAYOUT_ENABLE_UA OR CONFIG_KB_LAYOUT_ENABLE_DE OR CONFIG_KB_LAYOUT_
     )
 endif()
 
+if(CONFIG_KB_LAYOUT_ENABLE_KO OR CONFIG_KB_LAYOUT_ENABLE_JA OR CONFIG_KB_LAYOUT_ENABLE_ZH)
+    list(APPEND FONT_SRCS
+        "montserrat_cjk_10.c"
+        "montserrat_cjk_12.c"
+        "montserrat_cjk_14.c"
+        "montserrat_cjk_16.c"
+        "montserrat_cjk_18.c"
+    )
+endif()
+
 if(FONT_SRCS)
     idf_component_register(
         SRCS ${FONT_SRCS}

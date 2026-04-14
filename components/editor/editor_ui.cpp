@@ -16,6 +16,7 @@
 #include "standby.h"
 #include "draftling_logo.h"
 #include "montserrat_cyrillic.h"
+#include "montserrat_cjk.h"
 
 /*
  * Font aliases with fallbacks.
@@ -24,10 +25,20 @@
  * Montserrat fonts with extended Unicode coverage (Latin + Cyrillic)
  * are used so that all characters can be rendered correctly.
  *
+ * When a CJK keyboard layout (KO, JA, ZH) is enabled, the custom
+ * Montserrat fonts with CJK glyph coverage (Jamo, Hiragana, Katakana,
+ * Bopomofo) are used.
+ *
  * Otherwise the built-in LVGL Montserrat fonts are used.
  * montserrat_14 is always available (LVGL default).
  */
-#if HAVE_CYRILLIC_FONTS
+#if HAVE_CJK_FONTS
+#define FONT_10 (&montserrat_cjk_10)
+#define FONT_12 (&montserrat_cjk_12)
+#define FONT_14 (&montserrat_cjk_14)
+#define FONT_16 (&montserrat_cjk_16)
+#define FONT_18 (&montserrat_cjk_18)
+#elif HAVE_CYRILLIC_FONTS
 #define FONT_10 (&montserrat_cyrillic_10)
 #define FONT_12 (&montserrat_cyrillic_12)
 #define FONT_14 (&montserrat_cyrillic_14)
@@ -59,7 +70,7 @@
 #else
 #define FONT_18 (&lv_font_montserrat_14)
 #endif
-#endif /* HAVE_CYRILLIC_FONTS */
+#endif /* HAVE_CJK_FONTS / HAVE_CYRILLIC_FONTS */
 
 static const char *TAG = "EditorUI";
 

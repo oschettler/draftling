@@ -227,6 +227,294 @@ static const char *FR_ALTGR[] = {
 };
 #endif /* CONFIG_KB_LAYOUT_ENABLE_FR */
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_KO
+/* ------------------------------------------------------------------ */
+/* Korean Dubeolsik layout                                            */
+/* ------------------------------------------------------------------ */
+/* Standard 2-set (dubeolsik) Hangul layout.
+ * Maps physical keys to Hangul Compatibility Jamo (U+3131..U+3163).
+ * Hangul Jamo UTF-8 encoding: 0xE3 0x84 0xB1 .. 0xE3 0x85 0xA3
+ */
+
+static const char *KO_NORMAL[] = {
+    /* 04 a */ "\xE3\x85\x81",   /* U+3141 Jamo mieum */
+    /* 05 b */ "\xE3\x85\xA0",   /* U+3160 Jamo yu */
+    /* 06 c */ "\xE3\x85\x8A",   /* U+314A Jamo chieuch */
+    /* 07 d */ "\xE3\x85\x87",   /* U+3147 Jamo ieung */
+    /* 08 e */ "\xE3\x84\xB7",   /* U+3137 Jamo digeud */
+    /* 09 f */ "\xE3\x84\xB9",   /* U+3139 Jamo rieul */
+    /* 0A g */ "\xE3\x85\x8E",   /* U+314E Jamo hieuh */
+    /* 0B h */ "\xE3\x85\x97",   /* U+3157 Jamo o */
+    /* 0C i */ "\xE3\x85\x91",   /* U+3151 Jamo ya */
+    /* 0D j */ "\xE3\x85\x93",   /* U+3153 Jamo eo */
+    /* 0E k */ "\xE3\x85\x8F",   /* U+314F Jamo a */
+    /* 0F l */ "\xE3\x85\xA3",   /* U+3163 Jamo i */
+    /* 10 m */ "\xE3\x85\xA1",   /* U+3161 Jamo eu */
+    /* 11 n */ "\xE3\x85\x9C",   /* U+315C Jamo u */
+    /* 12 o */ "\xE3\x85\x90",   /* U+3150 Jamo ae */
+    /* 13 p */ "\xE3\x85\x94",   /* U+3154 Jamo e */
+    /* 14 q */ "\xE3\x85\x82",   /* U+3142 Jamo bieub */
+    /* 15 r */ "\xE3\x84\xB1",   /* U+3131 Jamo giyeog */
+    /* 16 s */ "\xE3\x84\xB4",   /* U+3134 Jamo nieun */
+    /* 17 t */ "\xE3\x85\x85",   /* U+3145 Jamo sios */
+    /* 18 u */ "\xE3\x85\x95",   /* U+3155 Jamo yeo */
+    /* 19 v */ "\xE3\x85\x8D",   /* U+314D Jamo pieup */
+    /* 1A w */ "\xE3\x85\x88",   /* U+3148 Jamo jieuj */
+    /* 1B x */ "\xE3\x85\x8C",   /* U+314C Jamo tieut */
+    /* 1C y */ "\xE3\x85\x9B",   /* U+315B Jamo yo */
+    /* 1D z */ "\xE3\x85\x8B",   /* U+314B Jamo kieuk */
+    /* 1E-27: numbers */
+    "1","2","3","4","5","6","7","8","9","0",
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D-38: symbols same as US */
+    "-","=","[","]","\\",
+    NULL,";","'","`",",",".","/",
+};
+
+static const char *KO_SHIFT[] = {
+    /* 04 A */ "\xE3\x85\x81",   /* U+3141 mieum (no shift variant) */
+    /* 05 B */ "\xE3\x85\xA0",   /* U+3160 yu */
+    /* 06 C */ "\xE3\x85\x8A",   /* U+314A chieuch */
+    /* 07 D */ "\xE3\x85\x87",   /* U+3147 ieung */
+    /* 08 E */ "\xE3\x84\xB8",   /* U+3138 ssangdigeud */
+    /* 09 F */ "\xE3\x84\xB9",   /* U+3139 rieul */
+    /* 0A G */ "\xE3\x85\x8E",   /* U+314E hieuh */
+    /* 0B H */ "\xE3\x85\x97",   /* U+3157 o */
+    /* 0C I */ "\xE3\x85\x91",   /* U+3151 ya */
+    /* 0D J */ "\xE3\x85\x93",   /* U+3153 eo */
+    /* 0E K */ "\xE3\x85\x8F",   /* U+314F a */
+    /* 0F L */ "\xE3\x85\xA3",   /* U+3163 i */
+    /* 10 M */ "\xE3\x85\xA1",   /* U+3161 eu */
+    /* 11 N */ "\xE3\x85\x9C",   /* U+315C u */
+    /* 12 O */ "\xE3\x85\x92",   /* U+3152 yae */
+    /* 13 P */ "\xE3\x85\x96",   /* U+3156 ye */
+    /* 14 Q */ "\xE3\x85\x83",   /* U+3143 ssangbieub */
+    /* 15 R */ "\xE3\x84\xB2",   /* U+3132 ssanggiyeog */
+    /* 16 S */ "\xE3\x84\xB4",   /* U+3134 nieun */
+    /* 17 T */ "\xE3\x85\x86",   /* U+3146 ssangsios */
+    /* 18 U */ "\xE3\x85\x95",   /* U+3155 yeo */
+    /* 19 V */ "\xE3\x85\x8D",   /* U+314D pieup */
+    /* 1A W */ "\xE3\x85\x89",   /* U+3149 ssangjieuj */
+    /* 1B X */ "\xE3\x85\x8C",   /* U+314C tieut */
+    /* 1C Y */ "\xE3\x85\x9B",   /* U+315B yo */
+    /* 1D Z */ "\xE3\x85\x8B",   /* U+314B kieuk */
+    /* 1E-27: shifted numbers (symbols) */
+    "!","@","#","$","%","^","&","*","(",")",
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    "_","+","{","}","|",
+    NULL,":","\x22","~","<",">","?",
+};
+#endif /* CONFIG_KB_LAYOUT_ENABLE_KO */
+
+#ifdef CONFIG_KB_LAYOUT_ENABLE_JA
+/* ------------------------------------------------------------------ */
+/* Japanese Kana layout (JIS X 6002)                                  */
+/* ------------------------------------------------------------------ */
+/* Direct kana input: each key produces a Hiragana character.
+ * Hiragana range: U+3041..U+3093, UTF-8: 0xE3 0x81 0x81 .. 0xE3 0x82 0x93
+ * Katakana (shifted): U+30A1..U+30F3
+ * Long vowel mark: U+30FC (katakana)
+ */
+
+static const char *JA_NORMAL[] = {
+    /* 04 a */ "\xE3\x81\xA1",   /* U+3061 chi */
+    /* 05 b */ "\xE3\x81\x93",   /* U+3053 ko */
+    /* 06 c */ "\xE3\x81\x9D",   /* U+305D so */
+    /* 07 d */ "\xE3\x81\x97",   /* U+3057 shi */
+    /* 08 e */ "\xE3\x81\x84",   /* U+3044 i */
+    /* 09 f */ "\xE3\x81\xAF",   /* U+306F ha */
+    /* 0A g */ "\xE3\x81\x8D",   /* U+304D ki */
+    /* 0B h */ "\xE3\x81\x8F",   /* U+304F ku */
+    /* 0C i */ "\xE3\x81\xAB",   /* U+306B ni */
+    /* 0D j */ "\xE3\x81\xBE",   /* U+307E ma */
+    /* 0E k */ "\xE3\x81\xAE",   /* U+306E no */
+    /* 0F l */ "\xE3\x82\x8A",   /* U+308A ri */
+    /* 10 m */ "\xE3\x82\x82",   /* U+3082 mo */
+    /* 11 n */ "\xE3\x81\xBF",   /* U+307F mi */
+    /* 12 o */ "\xE3\x82\x89",   /* U+3089 ra */
+    /* 13 p */ "\xE3\x81\x9B",   /* U+305B se */
+    /* 14 q */ "\xE3\x81\x9F",   /* U+305F ta */
+    /* 15 r */ "\xE3\x81\x99",   /* U+3059 su */
+    /* 16 s */ "\xE3\x81\xA8",   /* U+3068 to */
+    /* 17 t */ "\xE3\x81\x8B",   /* U+304B ka */
+    /* 18 u */ "\xE3\x81\xAA",   /* U+306A na */
+    /* 19 v */ "\xE3\x81\xB2",   /* U+3072 hi */
+    /* 1A w */ "\xE3\x81\xA6",   /* U+3066 te */
+    /* 1B x */ "\xE3\x81\x95",   /* U+3055 sa */
+    /* 1C y */ "\xE3\x82\x93",   /* U+3093 n */
+    /* 1D z */ "\xE3\x81\xA4",   /* U+3064 tsu */
+    /* 1E 1 */ "\xE3\x81\xAC",   /* U+306C nu */
+    /* 1F 2 */ "\xE3\x81\xB5",   /* U+3075 fu */
+    /* 20 3 */ "\xE3\x81\x82",   /* U+3042 a */
+    /* 21 4 */ "\xE3\x81\x86",   /* U+3046 u */
+    /* 22 5 */ "\xE3\x81\x88",   /* U+3048 e */
+    /* 23 6 */ "\xE3\x81\x8A",   /* U+304A o */
+    /* 24 7 */ "\xE3\x82\x84",   /* U+3084 ya */
+    /* 25 8 */ "\xE3\x82\x86",   /* U+3086 yu */
+    /* 26 9 */ "\xE3\x82\x88",   /* U+3088 yo */
+    /* 27 0 */ "\xE3\x82\x8F",   /* U+308F wa */
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D - */ "\xE3\x81\xBB",   /* U+307B ho */
+    /* 2E = */ "\xE3\x81\xB8",   /* U+3078 he */
+    /* 2F [ */ "\xE3\x82\x9B",   /* U+309B dakuten */
+    /* 30 ] */ "\xE3\x82\x80",   /* U+3080 mu */
+    /* 31 \ */ "\xE3\x83\xBC",   /* U+30FC long vowel mark */
+    /* 32   */ NULL,
+    /* 33 ; */ "\xE3\x82\x8C",   /* U+308C re */
+    /* 34 ' */ "\xE3\x81\x91",   /* U+3051 ke */
+    /* 35 ` */ "\xE3\x82\x9C",   /* U+309C handakuten */
+    /* 36 , */ "\xE3\x81\xAD",   /* U+306D ne */
+    /* 37 . */ "\xE3\x82\x8B",   /* U+308B ru */
+    /* 38 / */ "\xE3\x82\x81",   /* U+3081 me */
+};
+
+/* Shifted: small kana and katakana variants */
+static const char *JA_SHIFT[] = {
+    /* 04 A */ "\xE3\x81\xA1",   /* U+3061 chi */
+    /* 05 B */ "\xE3\x81\x93",   /* U+3053 ko */
+    /* 06 C */ "\xE3\x81\x9D",   /* U+305D so */
+    /* 07 D */ "\xE3\x81\x97",   /* U+3057 shi */
+    /* 08 E */ "\xE3\x81\x84",   /* U+3044 i */
+    /* 09 F */ "\xE3\x81\xAF",   /* U+306F ha */
+    /* 0A G */ "\xE3\x81\x8D",   /* U+304D ki */
+    /* 0B H */ "\xE3\x81\x8F",   /* U+304F ku */
+    /* 0C I */ "\xE3\x81\xAB",   /* U+306B ni */
+    /* 0D J */ "\xE3\x81\xBE",   /* U+307E ma */
+    /* 0E K */ "\xE3\x81\xAE",   /* U+306E no */
+    /* 0F L */ "\xE3\x82\x8A",   /* U+308A ri */
+    /* 10 M */ "\xE3\x82\x82",   /* U+3082 mo */
+    /* 11 N */ "\xE3\x81\xBF",   /* U+307F mi */
+    /* 12 O */ "\xE3\x82\x89",   /* U+3089 ra */
+    /* 13 P */ "\xE3\x81\x9B",   /* U+305B se */
+    /* 14 Q */ "\xE3\x81\x9F",   /* U+305F ta */
+    /* 15 R */ "\xE3\x81\x99",   /* U+3059 su */
+    /* 16 S */ "\xE3\x81\xA8",   /* U+3068 to */
+    /* 17 T */ "\xE3\x81\x8B",   /* U+304B ka */
+    /* 18 U */ "\xE3\x81\xAA",   /* U+306A na */
+    /* 19 V */ "\xE3\x81\xB2",   /* U+3072 hi */
+    /* 1A W */ "\xE3\x81\xA6",   /* U+3066 te */
+    /* 1B X */ "\xE3\x81\x95",   /* U+3055 sa */
+    /* 1C Y */ "\xE3\x82\x93",   /* U+3093 n */
+    /* 1D Z */ "\xE3\x81\xA3",   /* U+3063 small tsu */
+    /* 1E 1 */ "\xE3\x81\xAC",   /* U+306C nu */
+    /* 1F 2 */ "\xE3\x81\xB5",   /* U+3075 fu */
+    /* 20 3 */ "\xE3\x81\x81",   /* U+3041 small a */
+    /* 21 4 */ "\xE3\x81\x85",   /* U+3045 small u */
+    /* 22 5 */ "\xE3\x81\x87",   /* U+3047 small e */
+    /* 23 6 */ "\xE3\x81\x89",   /* U+3049 small o */
+    /* 24 7 */ "\xE3\x82\x83",   /* U+3083 small ya */
+    /* 25 8 */ "\xE3\x82\x85",   /* U+3085 small yu */
+    /* 26 9 */ "\xE3\x82\x87",   /* U+3087 small yo */
+    /* 27 0 */ "\xE3\x82\x92",   /* U+3092 wo */
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D - */ "\xE3\x81\xBB",   /* U+307B ho */
+    /* 2E = */ "\xE3\x81\xB8",   /* U+3078 he */
+    /* 2F [ */ "\xE3\x82\x9B",   /* U+309B dakuten */
+    /* 30 ] */ "\xE3\x82\x80",   /* U+3080 mu */
+    /* 31 \ */ "\xE3\x83\xBC",   /* U+30FC long vowel mark */
+    /* 32   */ NULL,
+    /* 33 ; */ "\xE3\x82\x8C",   /* U+308C re */
+    /* 34 ' */ "\xE3\x81\x91",   /* U+3051 ke */
+    /* 35 ` */ "\xE3\x82\x9C",   /* U+309C handakuten */
+    /* 36 , */ "\xE3\x80\x81",   /* U+3001 ideographic comma */
+    /* 37 . */ "\xE3\x80\x82",   /* U+3002 ideographic period */
+    /* 38 / */ "\xE3\x83\xBB",   /* U+30FB katakana middle dot */
+};
+#endif /* CONFIG_KB_LAYOUT_ENABLE_JA */
+
+#ifdef CONFIG_KB_LAYOUT_ENABLE_ZH
+/* ------------------------------------------------------------------ */
+/* Chinese Zhuyin (Bopomofo) layout                                   */
+/* ------------------------------------------------------------------ */
+/* Standard Zhuyin layout on a US physical keyboard.
+ * Maps keys to Bopomofo symbols (U+3105..U+3129).
+ * UTF-8: 0xE3 0x84 0x85 .. 0xE3 0x84 0xA9
+ *
+ * Also includes tone marks on number keys:
+ * 2 -> U+02CA (acute), 3 -> U+02C7 (caron), 4 -> U+02CB (grave)
+ * (Tone 1 is unmarked, Tone 5/neutral uses dot U+02D9)
+ */
+
+static const char *ZH_NORMAL[] = {
+    /* 04 a -> U+3107 */ "\xE3\x84\x87",   /* mieum (Bopomofo m) */
+    /* 05 b -> U+3116 */ "\xE3\x84\x96",   /* Bopomofo r */
+    /* 06 c -> U+310F */ "\xE3\x84\x8F",   /* Bopomofo h */
+    /* 07 d -> U+3114 */ "\xE3\x84\x94",   /* Bopomofo ch */
+    /* 08 e -> U+3110 */ "\xE3\x84\x90",   /* Bopomofo j */
+    /* 09 f -> U+3117 */ "\xE3\x84\x97",   /* Bopomofo z */
+    /* 0A g -> U+3118 */ "\xE3\x84\x98",   /* Bopomofo c */
+    /* 0B h -> U+3119 */ "\xE3\x84\x99",   /* Bopomofo s */
+    /* 0C i -> U+311A */ "\xE3\x84\x9A",   /* Bopomofo a */
+    /* 0D j -> U+311B */ "\xE3\x84\x9B",   /* Bopomofo o */
+    /* 0E k -> U+311C */ "\xE3\x84\x9C",   /* Bopomofo e */
+    /* 0F l -> U+311D */ "\xE3\x84\x9D",   /* Bopomofo eh */
+    /* 10 m -> U+3128 */ "\xE3\x84\xA8",   /* Bopomofo u */
+    /* 11 n -> U+3123 */ "\xE3\x84\xA3",   /* Bopomofo en */
+    /* 12 o -> U+311E */ "\xE3\x84\x9E",   /* Bopomofo ai */
+    /* 13 p -> U+311F */ "\xE3\x84\x9F",   /* Bopomofo ei */
+    /* 14 q -> U+3105 */ "\xE3\x84\x85",   /* Bopomofo b */
+    /* 15 r -> U+3111 */ "\xE3\x84\x91",   /* Bopomofo q */
+    /* 16 s -> U+310B */ "\xE3\x84\x8B",   /* Bopomofo n */
+    /* 17 t -> U+3112 */ "\xE3\x84\x92",   /* Bopomofo x */
+    /* 18 u -> U+3120 */ "\xE3\x84\xA0",   /* Bopomofo ao */
+    /* 19 v -> U+3129 */ "\xE3\x84\xA9",   /* Bopomofo yu */
+    /* 1A w -> U+3106 */ "\xE3\x84\x86",   /* Bopomofo p */
+    /* 1B x -> U+310C */ "\xE3\x84\x8C",   /* Bopomofo l */
+    /* 1C y -> U+3121 */ "\xE3\x84\xA1",   /* Bopomofo ou */
+    /* 1D z -> U+310A */ "\xE3\x84\x8A",   /* Bopomofo t */
+    /* 1E 1 -> U+3105 ㄅ (tone 1, or just pass through) */ "1",
+    /* 1F 2 -> tone 2 (acute accent) */ "\xCB\x8A",  /* U+02CA */
+    /* 20 3 -> tone 3 (caron) */ "\xCB\x87",          /* U+02C7 */
+    /* 21 4 -> tone 4 (grave accent) */ "\xCB\x8B",   /* U+02CB */
+    /* 22 5 -> U+02D9 (dot above, neutral tone) */ "\xCB\x99", /* U+02D9 */
+    /* 23 6 -> U+3113 ㄓ */ "\xE3\x84\x93",
+    /* 24 7 -> U+3122 ㄢ */ "\xE3\x84\xA2",
+    /* 25 8 -> U+3124 ㄤ */ "\xE3\x84\xA4",
+    /* 26 9 -> U+3125 ㄥ */ "\xE3\x84\xA5",
+    /* 27 0 -> U+3126 ㄦ */ "\xE3\x84\xA6",
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D - */ "\xE3\x84\xA7",   /* U+3127 ㄧ */
+    /* 2E-38: remaining symbols pass through */
+    "=","[","]","\\",
+    NULL,";","'","`",",",".","/",
+};
+
+static const char *ZH_SHIFT[] = {
+    /* Shifted: same Bopomofo symbols (no case distinction) */
+    /* 04 A */ "\xE3\x84\x87",   /* U+3107 */
+    /* 05 B */ "\xE3\x84\x96",   /* U+3116 */
+    /* 06 C */ "\xE3\x84\x8F",   /* U+310F */
+    /* 07 D */ "\xE3\x84\x94",   /* U+3114 */
+    /* 08 E */ "\xE3\x84\x90",   /* U+3110 */
+    /* 09 F */ "\xE3\x84\x97",   /* U+3117 */
+    /* 0A G */ "\xE3\x84\x98",   /* U+3118 */
+    /* 0B H */ "\xE3\x84\x99",   /* U+3119 */
+    /* 0C I */ "\xE3\x84\x9A",   /* U+311A */
+    /* 0D J */ "\xE3\x84\x9B",   /* U+311B */
+    /* 0E K */ "\xE3\x84\x9C",   /* U+311C */
+    /* 0F L */ "\xE3\x84\x9D",   /* U+311D */
+    /* 10 M */ "\xE3\x84\xA8",   /* U+3128 */
+    /* 11 N */ "\xE3\x84\xA3",   /* U+3123 */
+    /* 12 O */ "\xE3\x84\x9E",   /* U+311E */
+    /* 13 P */ "\xE3\x84\x9F",   /* U+311F */
+    /* 14 Q */ "\xE3\x84\x85",   /* U+3105 */
+    /* 15 R */ "\xE3\x84\x91",   /* U+3111 */
+    /* 16 S */ "\xE3\x84\x8B",   /* U+310B */
+    /* 17 T */ "\xE3\x84\x92",   /* U+3112 */
+    /* 18 U */ "\xE3\x84\xA0",   /* U+3120 */
+    /* 19 V */ "\xE3\x84\xA9",   /* U+3129 */
+    /* 1A W */ "\xE3\x84\x86",   /* U+3106 */
+    /* 1B X */ "\xE3\x84\x8C",   /* U+310C */
+    /* 1C Y */ "\xE3\x84\xA1",   /* U+3121 */
+    /* 1D Z */ "\xE3\x84\x8A",   /* U+310A */
+    /* 1E-27: shifted numbers -> symbols */
+    "!","@","#","$","%","^","&","*","(",")",
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    "_","+","{","}","|",
+    NULL,":","\x22","~","<",">","?",
+};
+#endif /* CONFIG_KB_LAYOUT_ENABLE_ZH */
+
 #ifdef CONFIG_KB_LAYOUT_ENABLE_UA
 /* ------------------------------------------------------------------ */
 /* Ukrainian layout                                                   */
@@ -368,6 +656,15 @@ static const layout_table_t s_layouts[KB_LAYOUT_COUNT] = {
 #ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     [KB_LAYOUT_FR] = { FR_NORMAL, FR_SHIFT, FR_ALTGR,  ARRAY_SIZE(FR_NORMAL) },
 #endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_KO
+    [KB_LAYOUT_KO] = { KO_NORMAL, KO_SHIFT, NULL,      ARRAY_SIZE(KO_NORMAL) },
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_JA
+    [KB_LAYOUT_JA] = { JA_NORMAL, JA_SHIFT, NULL,      ARRAY_SIZE(JA_NORMAL) },
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_ZH
+    [KB_LAYOUT_ZH] = { ZH_NORMAL, ZH_SHIFT, NULL,      ARRAY_SIZE(ZH_NORMAL) },
+#endif
 };
 
 static const char *s_layout_names[KB_LAYOUT_COUNT] = {
@@ -382,6 +679,15 @@ static const char *s_layout_names[KB_LAYOUT_COUNT] = {
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     [KB_LAYOUT_FR] = "FR",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_KO
+    [KB_LAYOUT_KO] = "KO",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_JA
+    [KB_LAYOUT_JA] = "JA",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_ZH
+    [KB_LAYOUT_ZH] = "ZH",
 #endif
 };
 
