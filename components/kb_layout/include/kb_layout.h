@@ -17,7 +17,7 @@ typedef enum {
     KB_LAYOUT_US,
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_UA
-    KB_LAYOUT_UK,
+    KB_LAYOUT_UA,
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_DE
     KB_LAYOUT_DE,
@@ -39,7 +39,7 @@ void kb_layout_set(kb_layout_id_t layout);
 /* Get the active keyboard layout */
 kb_layout_id_t kb_layout_get(void);
 
-/* Get the display name for a layout (e.g. "US", "UK", "DE", "FR") */
+/* Get the display name for a layout (e.g. "US", "UA", "DE", "FR") */
 const char *kb_layout_name(kb_layout_id_t layout);
 
 /* Cycle to the next layout and return its id */

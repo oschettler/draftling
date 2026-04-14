@@ -245,7 +245,7 @@ static const char *FR_ALTGR[] = {
  * Cyrillic block: U+0400..U+04FF -> UTF-8: 0xD0 0x80..0xBF, 0xD1 0x80..0xBF
  */
 
-static const char *UK_NORMAL[] = {
+static const char *UA_NORMAL[] = {
     /* 04 a */ "\xD1\x84",   /* f (Cyrillic) */
     /* 05 b */ "\xD0\xB8",   /* i (short) */
     /* 06 c */ "\xD1\x81",   /* s */
@@ -298,7 +298,7 @@ static const char *UK_NORMAL[] = {
 };
 
 /* Uppercase Ukrainian */
-static const char *UK_SHIFT[] = {
+static const char *UA_SHIFT[] = {
     /* 04 A */ "\xD0\xA4",   /* F */
     /* 05 B */ "\xD0\x98",   /* I (short) */
     /* 06 C */ "\xD0\xA1",   /* S */
@@ -360,7 +360,7 @@ static const layout_table_t s_layouts[KB_LAYOUT_COUNT] = {
     [KB_LAYOUT_US] = { US_NORMAL, US_SHIFT, NULL,      ARRAY_SIZE(US_NORMAL) },
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_UA
-    [KB_LAYOUT_UK] = { UK_NORMAL, UK_SHIFT, NULL,      ARRAY_SIZE(UK_NORMAL) },
+    [KB_LAYOUT_UA] = { UA_NORMAL, UA_SHIFT, NULL,      ARRAY_SIZE(UA_NORMAL) },
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_DE
     [KB_LAYOUT_DE] = { DE_NORMAL, DE_SHIFT, DE_ALTGR,  ARRAY_SIZE(DE_NORMAL) },
@@ -375,7 +375,7 @@ static const char *s_layout_names[KB_LAYOUT_COUNT] = {
     [KB_LAYOUT_US] = "US",
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_UA
-    [KB_LAYOUT_UK] = "UA",
+    [KB_LAYOUT_UA] = "UA",
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_DE
     [KB_LAYOUT_DE] = "DE",

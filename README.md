@@ -140,7 +140,7 @@ components/
   display/           Display drivers (RLCD SPI + IT8951 e-Paper) and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
-  kb_layout/         Keyboard layout translation (US/UK/DE/FR)
+  kb_layout/         Keyboard layout translation (US/UA/DE/FR)
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization
