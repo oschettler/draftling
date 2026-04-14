@@ -16,7 +16,6 @@ if(FONT_SRCS)
         INCLUDE_DIRS "include"
         PRIV_REQUIRES lvgl__lvgl
     )
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
 else()
     idf_component_register(
         INCLUDE_DIRS "include"

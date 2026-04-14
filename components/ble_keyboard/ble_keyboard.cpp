@@ -5,6 +5,11 @@
  * host component (esp_hidh) for HID-over-GATT.  ESP32-S3 does not
  * support Bluetooth Classic, so only BLE is used.
  *
+ * Note: esp_bt.h is the BT *controller* API, required for both
+ * Classic BT and BLE.  On ESP32-S3 it provides BLE-only controller
+ * functions (init, enable, memory release).  Classic BT memory is
+ * explicitly released at startup so only BLE resources are kept.
+ *
  * Multi-pairing: stores up to MAX_BONDED bonded device addresses in
  * NVS.  On startup it tries the last-connected device first, then
  * other known devices, then scans for any new HID keyboard.

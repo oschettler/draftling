@@ -4,11 +4,7 @@
  * Opts: --font Montserrat-Regular.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF --size 10 --bpp 4 --format lvgl --no-compress --lv-font-name montserrat_cyrillic_10 -o font_output/montserrat_cyrillic_10.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef MONTSERRAT_CYRILLIC_10
 #define MONTSERRAT_CYRILLIC_10 1
