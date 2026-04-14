@@ -462,18 +462,18 @@ static const char *ZH_NORMAL[] = {
     /* 1B x -> U+310C */ "\xE3\x84\x8C",   /* Bopomofo l */
     /* 1C y -> U+3121 */ "\xE3\x84\xA1",   /* Bopomofo ou */
     /* 1D z -> U+310A */ "\xE3\x84\x8A",   /* Bopomofo t */
-    /* 1E 1 -> U+3105 ㄅ (tone 1, or just pass through) */ "1",
+    /* 1E 1 -> tone 1 (unmarked, pass through) */ "1",
     /* 1F 2 -> tone 2 (acute accent) */ "\xCB\x8A",  /* U+02CA */
     /* 20 3 -> tone 3 (caron) */ "\xCB\x87",          /* U+02C7 */
     /* 21 4 -> tone 4 (grave accent) */ "\xCB\x8B",   /* U+02CB */
     /* 22 5 -> U+02D9 (dot above, neutral tone) */ "\xCB\x99", /* U+02D9 */
-    /* 23 6 -> U+3113 ㄓ */ "\xE3\x84\x93",
-    /* 24 7 -> U+3122 ㄢ */ "\xE3\x84\xA2",
-    /* 25 8 -> U+3124 ㄤ */ "\xE3\x84\xA4",
-    /* 26 9 -> U+3125 ㄥ */ "\xE3\x84\xA5",
-    /* 27 0 -> U+3126 ㄦ */ "\xE3\x84\xA6",
+    /* 23 6 -> U+3113 */ "\xE3\x84\x93",   /* Bopomofo zh */
+    /* 24 7 -> U+3122 */ "\xE3\x84\xA2",   /* Bopomofo an */
+    /* 25 8 -> U+3124 */ "\xE3\x84\xA4",   /* Bopomofo ang */
+    /* 26 9 -> U+3125 */ "\xE3\x84\xA5",   /* Bopomofo eng */
+    /* 27 0 -> U+3126 */ "\xE3\x84\xA6",   /* Bopomofo er */
     /* 28-2C */ NULL, NULL, NULL, NULL, " ",
-    /* 2D - */ "\xE3\x84\xA7",   /* U+3127 ㄧ */
+    /* 2D - -> U+3127 */ "\xE3\x84\xA7",   /* Bopomofo i */
     /* 2E-38: remaining symbols pass through */
     "=","[","]","\\",
     NULL,";","'","`",",",".","/",
