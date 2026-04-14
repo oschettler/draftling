@@ -114,6 +114,41 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
+## Menuconfig Options
+
+Run `idf.py menuconfig` to open the interactive configuration UI.
+Draftling adds two custom menus described below. All other options
+(Bluetooth, LVGL fonts, etc.) use the ESP-IDF defaults from
+`sdkconfig.defaults` and normally do not need to be changed.
+
+### DRAFTLING Configuration
+
+Found at the top-level **DRAFTLING Configuration** menu.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| **Hardware Model** | choice | Waveshare ESP32-S3-RLCD-4.2 | Select the target board. Display resolution and driver are set automatically. |
+| -- Waveshare ESP32-S3-RLCD-4.2 | | | 4.2" reflective LCD, 400x300 |
+| -- M5Stack PaperS3 | | | 4.7" e-Paper (IT8951), 960x540 |
+| **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
+
+### DRAFTLING Keyboard Layouts
+
+Found at the top-level **DRAFTLING Keyboard Layouts** menu. Each layout
+can be independently enabled or disabled. Disabling unused layouts saves
+flash space. CJK layouts (Korean, Japanese, Chinese) require additional
+font data and are disabled by default.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| US-English (QWERTY) | **y** | Standard US keyboard layout |
+| Ukrainian (Cyrillic) | **y** | Ukrainian Cyrillic layout |
+| German (QWERTZ) | n | German layout with umlauts |
+| French (AZERTY) | n | French layout with accents |
+| Korean (Dubeolsik) | n | Korean Hangul Jamo input |
+| Japanese (Kana) | n | Japanese Hiragana (JIS kana) input |
+| Chinese (Zhuyin/Bopomofo) | n | Chinese Bopomofo phonetic input |
+
 ## Configuration Files
 
 Place these on the SD card root:
