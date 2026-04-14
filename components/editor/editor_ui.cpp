@@ -15,13 +15,25 @@
 #include "lvgl_port.h"
 #include "standby.h"
 #include "draftling_logo.h"
+#include "montserrat_cyrillic.h"
 
 /*
  * Font aliases with fallbacks.
+ *
+ * When a non-ASCII keyboard layout (UA, DE, FR) is enabled, the custom
+ * Montserrat fonts with extended Unicode coverage (Latin + Cyrillic)
+ * are used so that all characters can be rendered correctly.
+ *
+ * Otherwise the built-in LVGL Montserrat fonts are used.
  * montserrat_14 is always available (LVGL default).
- * Other sizes require CONFIG_LV_FONT_MONTSERRAT_XX=y in sdkconfig.
- * If a size was not compiled, fall back to montserrat_14.
  */
+#if HAVE_CYRILLIC_FONTS
+#define FONT_10 (&montserrat_cyrillic_10)
+#define FONT_12 (&montserrat_cyrillic_12)
+#define FONT_14 (&montserrat_cyrillic_14)
+#define FONT_16 (&montserrat_cyrillic_16)
+#define FONT_18 (&montserrat_cyrillic_18)
+#else
 #if LV_FONT_MONTSERRAT_10
 #define FONT_10 (&lv_font_montserrat_10)
 #else
@@ -47,6 +59,7 @@
 #else
 #define FONT_18 (&lv_font_montserrat_14)
 #endif
+#endif /* HAVE_CYRILLIC_FONTS */
 
 static const char *TAG = "EditorUI";
 
