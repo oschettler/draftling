@@ -5,13 +5,18 @@
  * host component (esp_hidh) for HID-over-GATT.  ESP32-S3 does not
  * support Bluetooth Classic, so only BLE is used.
  *
- * The driver scans for BLE HID devices that advertise the HID service
- * UUID (0x1812) or a keyboard appearance (0x03C1), connects
- * automatically, and forwards key events through a callback.
+ * Multi-pairing: stores up to MAX_BONDED bonded device addresses in
+ * NVS.  On startup it tries the last-connected device first, then
+ * other known devices, then scans for any new HID keyboard.
+ *
+ * Pairing: uses DisplayOnly IO capability.  When a new keyboard
+ * pairs, a random 6-digit passkey is generated and shown on the
+ * display; the user types it on the keyboard to confirm.
  */
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
@@ -20,6 +25,9 @@
 #include <esp_bt_main.h>
 #include <esp_gap_ble_api.h>
 #include <esp_hidh.h>
+#include <esp_random.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 
 #include "ble_keyboard.h"
 
@@ -33,7 +41,114 @@ static const char *TAG = "BLEKeyboard";
 /* Scan duration in seconds */
 #define SCAN_DURATION_SEC          30
 
-static kb_event_callback_t s_callback = NULL;
+/* Maximum number of bonded keyboards stored in NVS */
+#define MAX_BONDED  8
+
+/* NVS namespace and keys */
+#define NVS_NAMESPACE   "ble_kb"
+#define NVS_KEY_COUNT   "bond_cnt"
+#define NVS_KEY_LAST    "bond_last"
+/* Per-device keys: "bond_0" .. "bond_7", each stores 7 bytes
+ * (6-byte BDA + 1-byte address type) */
+
+/* ---- Bonded device storage ---- */
+
+typedef struct {
+    esp_bd_addr_t       bda;
+    esp_ble_addr_type_t addr_type;
+} bonded_dev_t;
+
+static bonded_dev_t s_bonded[MAX_BONDED];
+static int          s_bonded_count = 0;
+static int          s_last_bonded  = -1; /* index into s_bonded */
+
+static void bonded_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return;
+
+    uint8_t cnt = 0;
+    if (nvs_get_u8(h, NVS_KEY_COUNT, &cnt) != ESP_OK) cnt = 0;
+    if (cnt > MAX_BONDED) cnt = MAX_BONDED;
+
+    int8_t last = -1;
+    if (nvs_get_i8(h, NVS_KEY_LAST, &last) != ESP_OK) last = -1;
+
+    s_bonded_count = 0;
+    for (int i = 0; i < cnt; i++) {
+        char key[12];
+        snprintf(key, sizeof(key), "bond_%d", i);
+        uint8_t buf[7];
+        size_t len = sizeof(buf);
+        if (nvs_get_blob(h, key, buf, &len) == ESP_OK && len == 7) {
+            memcpy(s_bonded[s_bonded_count].bda, buf, 6);
+            s_bonded[s_bonded_count].addr_type =
+                (esp_ble_addr_type_t)buf[6];
+            s_bonded_count++;
+        }
+    }
+    s_last_bonded = (last >= 0 && last < s_bonded_count) ? last : -1;
+    nvs_close(h);
+    ESP_LOGI(TAG, "Loaded %d bonded device(s), last=%d",
+             s_bonded_count, s_last_bonded);
+}
+
+static void bonded_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
+
+    nvs_set_u8(h, NVS_KEY_COUNT, (uint8_t)s_bonded_count);
+    nvs_set_i8(h, NVS_KEY_LAST, (int8_t)s_last_bonded);
+
+    for (int i = 0; i < s_bonded_count; i++) {
+        char key[12];
+        snprintf(key, sizeof(key), "bond_%d", i);
+        uint8_t buf[7];
+        memcpy(buf, s_bonded[i].bda, 6);
+        buf[6] = (uint8_t)s_bonded[i].addr_type;
+        nvs_set_blob(h, key, buf, sizeof(buf));
+    }
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* Find a bonded device by BDA; returns index or -1 */
+static int bonded_find(const esp_bd_addr_t bda)
+{
+    for (int i = 0; i < s_bonded_count; i++) {
+        if (memcmp(s_bonded[i].bda, bda, 6) == 0) return i;
+    }
+    return -1;
+}
+
+/* Add or promote a bonded device to "last used" */
+static void bonded_add(const esp_bd_addr_t bda,
+                        esp_ble_addr_type_t addr_type)
+{
+    int idx = bonded_find(bda);
+    if (idx < 0) {
+        /* New device -- evict oldest if full */
+        if (s_bonded_count >= MAX_BONDED) {
+            /* Shift array down, dropping slot 0 */
+            memmove(&s_bonded[0], &s_bonded[1],
+                    (size_t)(MAX_BONDED - 1) * sizeof(bonded_dev_t));
+            s_bonded_count = MAX_BONDED - 1;
+        }
+        idx = s_bonded_count;
+        memcpy(s_bonded[idx].bda, bda, 6);
+        s_bonded[idx].addr_type = addr_type;
+        s_bonded_count++;
+    }
+    s_last_bonded = idx;
+    bonded_save();
+    ESP_LOGI(TAG, "Bonded device saved at index %d", idx);
+}
+
+/* ---- State ---- */
+
+static kb_event_callback_t  s_callback = NULL;
+static ble_passkey_cb_t     s_passkey_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static char s_dev_name[64] = "";
@@ -46,6 +161,21 @@ static esp_ble_addr_type_t s_target_addr_type;
 
 /* Timer used to retry scanning after a delay */
 static TimerHandle_t s_scan_timer = NULL;
+
+/* Reconnection state machine */
+typedef enum {
+    RECONN_LAST,     /* trying last-connected device */
+    RECONN_KNOWN,    /* trying other known devices */
+    RECONN_SCAN,     /* scanning for any HID keyboard */
+} reconn_phase_t;
+
+static reconn_phase_t s_reconn_phase = RECONN_LAST;
+static int            s_reconn_idx   = 0; /* index for RECONN_KNOWN */
+static TimerHandle_t  s_reconn_timer = NULL;
+
+/* Forward declarations */
+static void start_reconnection(void);
+static void reconn_timer_cb(TimerHandle_t timer);
 
 static bool key_in_report(uint8_t key, const uint8_t *keys, int count)
 {
@@ -112,6 +242,10 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                 strncpy(s_dev_name, name, sizeof(s_dev_name) - 1);
                 s_dev_name[sizeof(s_dev_name) - 1] = '\0';
             }
+            /* Remember this device as bonded / last-used */
+            if (addr) {
+                bonded_add(addr, s_target_addr_type);
+            }
             ESP_LOGI(TAG, "HID device connected: %s ("
                      "%02x:%02x:%02x:%02x:%02x:%02x)",
                      s_dev_name,
@@ -121,7 +255,10 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
             s_connecting = false;
-            ble_keyboard_start_scan();
+            /* Continue reconnection sequence after a short delay */
+            if (s_reconn_timer) {
+                xTimerStart(s_reconn_timer, 0);
+            }
         }
         break;
 
@@ -131,8 +268,11 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_dev_name[0] = '\0';
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
-        ESP_LOGI(TAG, "HID device disconnected, restarting scan...");
-        ble_keyboard_start_scan();
+        ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
+        /* Reset reconnection to start with last-known device */
+        s_reconn_phase = RECONN_LAST;
+        s_reconn_idx   = 0;
+        start_reconnection();
         break;
 
     case ESP_HIDH_INPUT_EVENT: {
@@ -206,14 +346,76 @@ static void connect_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* ---- Reconnection to known devices ---- */
+
+/* Try to directly connect to a known bonded device (no scan needed) */
+static void try_connect_bonded(int idx)
+{
+    if (idx < 0 || idx >= s_bonded_count) return;
+    s_connecting = true;
+    memcpy(s_target_bda, s_bonded[idx].bda, 6);
+    s_target_addr_type = s_bonded[idx].addr_type;
+    snprintf(s_dev_name, sizeof(s_dev_name), "(bonded #%d)", idx);
+    ESP_LOGI(TAG, "Trying bonded device %d "
+             "(%02x:%02x:%02x:%02x:%02x:%02x)...",
+             idx,
+             s_target_bda[0], s_target_bda[1], s_target_bda[2],
+             s_target_bda[3], s_target_bda[4], s_target_bda[5]);
+    xTaskCreate(connect_task, "ble_connect", 4096, NULL, 2, NULL);
+}
+
+static void start_reconnection(void)
+{
+    if (s_connected || s_connecting) return;
+
+    switch (s_reconn_phase) {
+    case RECONN_LAST:
+        if (s_last_bonded >= 0 && s_last_bonded < s_bonded_count) {
+            ESP_LOGI(TAG, "Reconnect phase: trying last-connected");
+            s_reconn_phase = RECONN_KNOWN;
+            s_reconn_idx   = 0;
+            try_connect_bonded(s_last_bonded);
+            return;
+        }
+        s_reconn_phase = RECONN_KNOWN;
+        s_reconn_idx   = 0;
+        /* fall through */
+
+    case RECONN_KNOWN:
+        while (s_reconn_idx < s_bonded_count) {
+            int idx = s_reconn_idx++;
+            if (idx == s_last_bonded) continue; /* already tried */
+            ESP_LOGI(TAG, "Reconnect phase: trying known device %d", idx);
+            try_connect_bonded(idx);
+            return;
+        }
+        s_reconn_phase = RECONN_SCAN;
+        /* fall through */
+
+    case RECONN_SCAN:
+        ESP_LOGI(TAG, "Reconnect phase: scanning for new keyboards");
+        ble_keyboard_start_scan();
+        break;
+    }
+}
+
 /* ---- Scan retry timer callback ---- */
 
 static void scan_timer_cb(TimerHandle_t timer)
 {
     (void)timer;
     if (!s_connected && !s_connecting) {
-        esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
+        /* Reset reconnection to try all phases again */
+        s_reconn_phase = RECONN_LAST;
+        s_reconn_idx   = 0;
+        start_reconnection();
     }
+}
+
+static void reconn_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    start_reconnection();
 }
 
 /* ---- BLE GAP callback ---- */
@@ -263,11 +465,21 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                     s_dev_name[len] = '\0';
                 }
 
-                ESP_LOGI(TAG, "Keyboard found: \"%s\" "
-                         "(%02x:%02x:%02x:%02x:%02x:%02x)",
-                         s_dev_name,
-                         scan->bda[0], scan->bda[1], scan->bda[2],
-                         scan->bda[3], scan->bda[4], scan->bda[5]);
+                /* Prioritize already-bonded devices during scan */
+                bool is_known = (bonded_find(scan->bda) >= 0);
+                if (!is_known) {
+                    ESP_LOGI(TAG, "New keyboard found: \"%s\" "
+                             "(%02x:%02x:%02x:%02x:%02x:%02x)",
+                             s_dev_name,
+                             scan->bda[0], scan->bda[1], scan->bda[2],
+                             scan->bda[3], scan->bda[4], scan->bda[5]);
+                } else {
+                    ESP_LOGI(TAG, "Known keyboard found: \"%s\" "
+                             "(%02x:%02x:%02x:%02x:%02x:%02x)",
+                             s_dev_name,
+                             scan->bda[0], scan->bda[1], scan->bda[2],
+                             scan->bda[3], scan->bda[4], scan->bda[5]);
+                }
 
                 /* Save target address and stop scanning */
                 s_connecting = true;
@@ -299,12 +511,31 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
         break;
 
+    case ESP_GAP_BLE_PASSKEY_NOTIF_EVT: {
+        /* We are DisplayOnly -- the stack generated a passkey for us
+         * to show.  The user types this number on the keyboard. */
+        uint32_t passkey = param->ble_security.key_notif.passkey;
+        ESP_LOGI(TAG, "Passkey notification: %06lu",
+                 (unsigned long)passkey);
+        if (s_passkey_cb) {
+            s_passkey_cb(passkey);
+        }
+        break;
+    }
+
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
         if (param->ble_security.auth_cmpl.success) {
             ESP_LOGI(TAG, "BLE authentication success");
+            /* Dismiss passkey overlay */
+            if (s_passkey_cb) {
+                s_passkey_cb(BLE_PASSKEY_DISMISS);
+            }
         } else {
             ESP_LOGE(TAG, "BLE authentication failed, reason: 0x%x",
                      param->ble_security.auth_cmpl.fail_reason);
+            if (s_passkey_cb) {
+                s_passkey_cb(BLE_PASSKEY_DISMISS);
+            }
         }
         break;
 
@@ -317,6 +548,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
 
 extern "C" void ble_keyboard_init(void)
 {
+    /* Load bonded device list from NVS */
+    bonded_load();
+
     /* Release Classic BT memory (ESP32-S3 is BLE-only) */
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
@@ -329,12 +563,17 @@ extern "C" void ble_keyboard_init(void)
     ESP_ERROR_CHECK(esp_bluedroid_init());
     ESP_ERROR_CHECK(esp_bluedroid_enable());
 
-    /* Set BLE security parameters (NoIO, bonding, secure connections) */
-    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_BOND;
-    esp_ble_io_cap_t io_cap = ESP_IO_CAP_NONE;
+    /* Set BLE security parameters.
+     * IO capability = DisplayOnly so the stack generates a 6-digit
+     * passkey that we show on screen; the user types it on the
+     * keyboard to complete pairing.  MITM flag is set so the stack
+     * actually uses the passkey entry protocol. */
+    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
+    esp_ble_io_cap_t io_cap = ESP_IO_CAP_OUT;
     uint8_t key_size = 16;
     uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
     uint8_t rsp_key  = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint32_t passkey = esp_random() % 1000000;
 
     esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE,
                                    &auth_req, sizeof(auth_req));
@@ -346,6 +585,8 @@ extern "C" void ble_keyboard_init(void)
                                    &init_key, sizeof(init_key));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
                                    &rsp_key, sizeof(rsp_key));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY,
+                                   &passkey, sizeof(passkey));
 
     /* Register BLE GAP callback */
     esp_ble_gap_register_callback(gap_event_handler);
@@ -370,8 +611,14 @@ extern "C" void ble_keyboard_init(void)
     s_scan_timer = xTimerCreate("scan_retry", pdMS_TO_TICKS(2000),
                                 pdFALSE, NULL, scan_timer_cb);
 
-    /* Start initial scan */
-    ble_keyboard_start_scan();
+    /* Create reconnection timer (one-shot, 1-second delay) */
+    s_reconn_timer = xTimerCreate("reconn", pdMS_TO_TICKS(1000),
+                                  pdFALSE, NULL, reconn_timer_cb);
+
+    /* Start reconnection sequence (tries last-known first) */
+    s_reconn_phase = RECONN_LAST;
+    s_reconn_idx   = 0;
+    start_reconnection();
 
     ESP_LOGI(TAG, "BLE HID keyboard host initialized");
 }
@@ -379,6 +626,11 @@ extern "C" void ble_keyboard_init(void)
 extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
 {
     s_callback = callback;
+}
+
+extern "C" void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb)
+{
+    s_passkey_cb = cb;
 }
 
 extern "C" bool ble_keyboard_is_connected(void)

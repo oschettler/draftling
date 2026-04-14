@@ -55,8 +55,15 @@ typedef struct {
 
 typedef void (*kb_event_callback_t)(const kb_event_t *event);
 
+/* Passkey callback: called with a 6-digit passkey (0..999999)
+ * for the user to enter on the keyboard during pairing, or with
+ * BLE_PASSKEY_DISMISS when pairing completes / fails. */
+#define BLE_PASSKEY_DISMISS  0xFFFFFFFFU
+typedef void (*ble_passkey_cb_t)(uint32_t passkey);
+
 void ble_keyboard_init(void);
 void ble_keyboard_set_callback(kb_event_callback_t callback);
+void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb);
 bool ble_keyboard_is_connected(void);
 void ble_keyboard_start_scan(void);
 const char *ble_keyboard_get_device_name(void);

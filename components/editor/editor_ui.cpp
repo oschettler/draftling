@@ -100,6 +100,10 @@ static lv_obj_t *s_settings_list = NULL;
 static int       s_settings_sel  = 0;
 static bool      s_settings_open = false;
 
+/* Passkey overlay objects */
+static lv_obj_t *s_passkey_panel = NULL;
+static lv_obj_t *s_passkey_label = NULL;
+
 /* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
 static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
@@ -793,6 +797,31 @@ extern "C" void editor_ui_handle_key(const void *event)
     lvgl_port_unlock();
 }
 
+/* ---- Passkey display callback ---- */
+
+static void passkey_display_cb(uint32_t passkey)
+{
+    if (!lvgl_port_lock(100)) return;
+
+    if (passkey == BLE_PASSKEY_DISMISS) {
+        /* Hide the passkey overlay */
+        if (s_passkey_panel) {
+            lv_obj_add_flag(s_passkey_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        /* Show the passkey overlay with the 6-digit code */
+        if (s_passkey_panel) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "Enter on keyboard:\n%06lu",
+                     (unsigned long)passkey);
+            lv_label_set_text(s_passkey_label, buf);
+            lv_obj_remove_flag(s_passkey_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    lvgl_port_unlock();
+}
+
 /* ---- Initialization ---- */
 
 extern "C" void editor_ui_init(void)
@@ -927,6 +956,31 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_border_width(s_settings_list, 0, 0);
     lv_obj_set_style_radius(s_settings_list, 0, 0);
     lv_obj_set_style_pad_all(s_settings_list, 0, 0);
+
+    /* ---- Passkey overlay (shown on the editor screen) ---- */
+    s_passkey_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_passkey_panel, SCR_W - 20, 60);
+    lv_obj_set_pos(s_passkey_panel,
+                   10, (SCR_H - 60) / 2);
+    lv_obj_set_style_bg_color(s_passkey_panel, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_passkey_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_passkey_panel, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_passkey_panel, 2, 0);
+    lv_obj_set_style_radius(s_passkey_panel, 4, 0);
+    lv_obj_set_style_pad_all(s_passkey_panel, 6, 0);
+    lv_obj_remove_flag(s_passkey_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_passkey_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_passkey_label = lv_label_create(s_passkey_panel);
+    lv_obj_set_style_text_font(s_passkey_label, FONT_16, 0);
+    lv_obj_set_style_text_color(s_passkey_label, lv_color_black(), 0);
+    lv_obj_set_style_text_align(s_passkey_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(s_passkey_label, SCR_W - 20 - 12);
+    lv_obj_center(s_passkey_label);
+    lv_label_set_text(s_passkey_label, "");
+
+    /* Register passkey display callback */
+    ble_keyboard_set_passkey_callback(passkey_display_cb);
 
     /* Start on file browser */
     editor_ui_show_file_browser();
