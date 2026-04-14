@@ -9,6 +9,7 @@
  */
 
 #include <cstring>
+#include "sdkconfig.h"
 #include "kb_layout.h"
 
 /* Modifier flags (same as ble_keyboard.h) */
@@ -16,7 +17,7 @@
 #define MOD_RSHIFT 0x20
 #define MOD_RALT   0x40  /* AltGr on international keyboards */
 
-static kb_layout_id_t s_layout = KB_LAYOUT_US;
+static kb_layout_id_t s_layout = (kb_layout_id_t)0;
 
 /* HID keycodes for letter/number/symbol keys: 0x04..0x38 (53 keys) */
 #define KC_A     0x04
@@ -38,6 +39,7 @@ static kb_layout_id_t s_layout = KB_LAYOUT_US;
 #define KC_DOT   0x37
 #define KC_SLASH 0x38
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_US
 /* ------------------------------------------------------------------ */
 /* US-English layout                                                  */
 /* ------------------------------------------------------------------ */
@@ -63,7 +65,9 @@ static const char *US_SHIFT[] = {
     "_","+","{","}","|",
     NULL,":","\x22","~","<",">","?",
 };
+#endif /* CONFIG_KB_LAYOUT_ENABLE_US */
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_DE
 /* ------------------------------------------------------------------ */
 /* German layout                                                      */
 /* ------------------------------------------------------------------ */
@@ -136,7 +140,9 @@ static const char *DE_ALTGR[] = {
     "~",                                              /* 30 -> ~ */
     NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,           /* 31-38 */
 };
+#endif /* CONFIG_KB_LAYOUT_ENABLE_DE */
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_FR
 /* ------------------------------------------------------------------ */
 /* French (AZERTY) layout                                             */
 /* ------------------------------------------------------------------ */
@@ -219,7 +225,9 @@ static const char *FR_ALTGR[] = {
     "}",                                              /* 2E -> } */
     NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL, /* 2F-38 */
 };
+#endif /* CONFIG_KB_LAYOUT_ENABLE_FR */
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_UA
 /* ------------------------------------------------------------------ */
 /* Ukrainian layout                                                   */
 /* ------------------------------------------------------------------ */
@@ -332,6 +340,7 @@ static const char *UK_SHIFT[] = {
     /* 37 */ ">",
     /* 38 */ "?",
 };
+#endif /* CONFIG_KB_LAYOUT_ENABLE_UA */
 
 /* ------------------------------------------------------------------ */
 /* Layout table structure                                             */
@@ -347,14 +356,33 @@ typedef struct {
 #define ARRAY_SIZE(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 static const layout_table_t s_layouts[KB_LAYOUT_COUNT] = {
+#ifdef CONFIG_KB_LAYOUT_ENABLE_US
     [KB_LAYOUT_US] = { US_NORMAL, US_SHIFT, NULL,      ARRAY_SIZE(US_NORMAL) },
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_UA
     [KB_LAYOUT_UK] = { UK_NORMAL, UK_SHIFT, NULL,      ARRAY_SIZE(UK_NORMAL) },
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_DE
     [KB_LAYOUT_DE] = { DE_NORMAL, DE_SHIFT, DE_ALTGR,  ARRAY_SIZE(DE_NORMAL) },
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     [KB_LAYOUT_FR] = { FR_NORMAL, FR_SHIFT, FR_ALTGR,  ARRAY_SIZE(FR_NORMAL) },
+#endif
 };
 
 static const char *s_layout_names[KB_LAYOUT_COUNT] = {
-    "US", "UA", "DE", "FR",
+#ifdef CONFIG_KB_LAYOUT_ENABLE_US
+    [KB_LAYOUT_US] = "US",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_UA
+    [KB_LAYOUT_UK] = "UA",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_DE
+    [KB_LAYOUT_DE] = "DE",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_FR
+    [KB_LAYOUT_FR] = "FR",
+#endif
 };
 
 /* ------------------------------------------------------------------ */
@@ -363,7 +391,7 @@ static const char *s_layout_names[KB_LAYOUT_COUNT] = {
 
 extern "C" void kb_layout_set(kb_layout_id_t layout)
 {
-    if (layout >= KB_LAYOUT_COUNT) layout = KB_LAYOUT_US;
+    if (layout >= KB_LAYOUT_COUNT) layout = (kb_layout_id_t)0;
     s_layout = layout;
 }
 

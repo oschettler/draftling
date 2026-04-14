@@ -6,12 +6,25 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
+#include "sdkconfig.h"
 
+/*
+ * Layout enum entries are defined only for layouts enabled in Kconfig.
+ * KB_LAYOUT_COUNT always equals the number of enabled layouts.
+ */
 typedef enum {
-    KB_LAYOUT_US = 0,
+#ifdef CONFIG_KB_LAYOUT_ENABLE_US
+    KB_LAYOUT_US,
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_UA
     KB_LAYOUT_UK,
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_DE
     KB_LAYOUT_DE,
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     KB_LAYOUT_FR,
+#endif
     KB_LAYOUT_COUNT,
 } kb_layout_id_t;
 
