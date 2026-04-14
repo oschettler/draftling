@@ -70,7 +70,7 @@ Git repository via the GitHub REST API.
 
 ## Keyboard Layouts
 
-The editor supports four keyboard layouts that can be switched with
+The editor supports seven keyboard layouts that can be switched with
 **Ctrl+L** or through the **F1 menu**:
 
 | Code | Layout |
@@ -79,15 +79,20 @@ The editor supports four keyboard layouts that can be switched with
 | UA | Ukrainian (Cyrillic) |
 | DE | German (QWERTZ with umlauts) |
 | FR | French (AZERTY with accents) |
+| KO | Korean (Dubeolsik) |
+| JA | Japanese (Kana) |
+| ZH | Chinese (Zhuyin/Bopomofo) |
 
 The current layout is shown in the title bar.
 
 ### Configuring enabled layouts
 
 The set of compiled-in keyboard layouts is configurable via
-`idf.py menuconfig` under **Keyboard Layouts**. Each layout can be
-independently enabled or disabled. By default **US-English** and
+`idf.py menuconfig` under **DRAFTLING Keyboard Layouts**. Each layout
+can be independently enabled or disabled. By default **US-English** and
 **Ukrainian** are enabled. Disabling unused layouts saves flash space.
+CJK layouts (Korean, Japanese, Chinese) require additional font data
+and are disabled by default to conserve flash.
 
 ## Building
 
@@ -140,7 +145,8 @@ components/
   display/           Display drivers (RLCD SPI + IT8951 e-Paper) and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
-  kb_layout/         Keyboard layout translation (US/UA/DE/FR)
+  kb_layout/         Keyboard layout translation (US/UA/DE/FR/KO/JA/ZH)
+  fonts/             Custom LVGL fonts (Cyrillic and CJK glyph coverage)
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization
