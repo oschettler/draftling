@@ -448,8 +448,10 @@ static inline bool is_hidh_ready(void)
 
 /* Maximum number of open-connection retries.  esp_hidh_dev_open()
  * can fail transiently if the remote device is slow to respond.
- * A short retry loop handles this. */
-#define CONNECT_RETRIES     4
+ * A short retry loop handles this.  Keep this low (2) so that
+ * re-pairing scenarios (where the old address is unreachable) do
+ * not block for too long before scanning for the new address. */
+#define CONNECT_RETRIES     2
 #define CONNECT_RETRY_MS  250
 
 static void connect_task(void *arg)

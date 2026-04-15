@@ -673,7 +673,14 @@ static void handle_editor_key(const kb_event_t *ev)
 
     /* Ctrl shortcuts */
     if (ctrl) {
-        switch (ev->character) {
+        /* Translate keycode without Ctrl modifier to get the base
+         * character.  ev->character is always 0 because ble_keyboard
+         * does not fill it -- all translation goes through kb_layout. */
+        uint8_t base_mod = ev->modifier &
+            (uint8_t)~(KB_MOD_LCTRL | KB_MOD_RCTRL);
+        const char *ctrl_t = kb_layout_translate(ev->keycode, base_mod);
+        char ch = (ctrl_t && ctrl_t[0] && !ctrl_t[1]) ? ctrl_t[0] : 0;
+        switch (ch) {
         case 's': editor_save_file(); editor_ui_set_status("Saved"); break;
         case 'n': editor_new_file(); break;
         case 'o': editor_ui_show_file_browser(); return;
@@ -746,9 +753,15 @@ static void handle_browser_key(const kb_event_t *ev)
         return;
     }
 
+    /* Translate keycode to character for letter-key checks.
+     * ev->character is always 0 because ble_keyboard does not fill
+     * it -- all translation goes through kb_layout. */
+    const char *br_t = kb_layout_translate(ev->keycode, ev->modifier);
+    char ch = (br_t && br_t[0] && !br_t[1]) ? br_t[0] : 0;
+
     uint32_t child_count = lv_obj_get_child_count(s_list_files);
     if (child_count == 0) {
-        if (ev->character == 'n') {
+        if (ch == 'n' || ch == 'N') {
             editor_new_file();
             editor_ui_show_editor();
         }
@@ -781,7 +794,7 @@ static void handle_browser_key(const kb_event_t *ev)
         break;
     }
     default:
-        if (ev->character == 'n') {
+        if (ch == 'n' || ch == 'N') {
             editor_new_file();
             editor_ui_show_editor();
             return;
@@ -868,12 +881,13 @@ static void ble_connect_status_cb(bool connected)
                 "Keyboard connected!");
         }
     } else {
-        /* Keyboard disconnected -- update the prompt label text in case
-         * we navigate back to it later via the reconnection loop. */
+        /* Keyboard disconnected -- switch to BLE prompt screen so the
+         * user can see the reconnection status. */
         if (s_ble_prompt_lbl) {
             lv_label_set_text(s_ble_prompt_lbl,
                 "Keyboard disconnected.\nReconnecting...");
         }
+        lv_scr_load(s_scr_ble_prompt);
     }
 
     lvgl_port_unlock();
