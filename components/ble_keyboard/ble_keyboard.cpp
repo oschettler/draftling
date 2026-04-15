@@ -60,6 +60,11 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
  * esp_hidh_dev_open() which uses significant stack space. */
 #define CONNECT_TASK_STACK        6144
 
+/* Stack size for the BLE init task.  Runs the full BT stack
+ * bring-up including esp_hidh_init() which blocks on a BTC
+ * semaphore -- must not run in app_main. */
+#define BLE_INIT_TASK_STACK       8192
+
 /* Delay (ms) after esp_hidh_init() to let its internal event loop
  * task finish registering callbacks before we overwrite them. */
 #define HIDH_INIT_SETTLE_MS       200
@@ -720,10 +725,21 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     }
 }
 
-/* ---- Public API ---- */
+/* ---- BLE init task (runs in its own FreeRTOS task) ---- */
 
-extern "C" void ble_keyboard_init(void)
+/* The full BT stack bring-up runs in a dedicated task because
+ * esp_hidh_init() internally calls esp_ble_gattc_app_register()
+ * which blocks on a semaphore waiting for the BTC task to confirm
+ * the registration.  Running this from app_main can deadlock
+ * because app_main sits at priority 1 on core 0 and the BTC task
+ * may not get enough CPU time to process the request while
+ * app_main is blocked.  A dedicated task at priority 3 avoids
+ * this and also allows the rest of app_main to proceed. */
+
+static void ble_init_task(void *arg)
 {
+    (void)arg;
+
     /* Load bonded device list from NVS */
     bonded_load();
 
@@ -768,10 +784,9 @@ extern "C" void ble_keyboard_init(void)
 
     /* Initialize the HID Host component BEFORE registering our GAP
      * callback.  esp_hidh_init() internally calls
-     * esp_ble_gattc_app_register() (which blocks until the BTC task
-     * confirms) and registers its own GAP callback.  Doing this here
-     * while the BT stack is idle avoids the hang that occurs when
-     * HIDH init is attempted later during an active scan.
+     * esp_ble_gattc_app_register() which blocks on a BTC semaphore.
+     * Running in this dedicated task (not app_main) prevents the
+     * blocking call from stalling the rest of the system.
      *
      * We then register OUR GAP callback immediately after, which
      * overwrites HIDH's.  This is fine because:
@@ -842,6 +857,15 @@ extern "C" void ble_keyboard_init(void)
     }
 
     ESP_LOGI(TAG, "BLE keyboard host initialized");
+    vTaskDelete(NULL);
+}
+
+/* ---- Public API ---- */
+
+extern "C" void ble_keyboard_init(void)
+{
+    xTaskCreate(ble_init_task, "ble_init", BLE_INIT_TASK_STACK,
+                NULL, 3, NULL);
 }
 
 extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
