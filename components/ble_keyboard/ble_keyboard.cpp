@@ -205,6 +205,8 @@ static TimerHandle_t  s_startup_timer = NULL;
 static void start_reconnection(void);
 static void reconn_timer_cb(TimerHandle_t timer);
 static void startup_timer_cb(TimerHandle_t timer);
+static void gap_event_handler(esp_gap_ble_cb_event_t event,
+                               esp_ble_gap_cb_param_t *param);
 
 /* Helper: fill in standard BLE scan parameters */
 static void fill_scan_params(esp_ble_scan_params_t *p)
