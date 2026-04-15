@@ -89,6 +89,20 @@ static bonded_dev_t s_bonded[MAX_BONDED];
 static int          s_bonded_count = 0;
 static int          s_last_bonded  = -1; /* index into s_bonded */
 
+/* Helper: notify the UI of a human-readable status message */
+static void notify_status(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+static void notify_status(const char *fmt, ...)
+{
+    if (!s_status_text_cb) return;
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    s_status_text_cb(buf);
+}
+
 static void bonded_load(void)
 {
     nvs_handle_t h;
@@ -1103,20 +1117,6 @@ extern "C" void ble_keyboard_set_connect_callback(ble_connect_cb_t cb)
 extern "C" void ble_keyboard_set_status_text_callback(ble_status_text_cb_t cb)
 {
     s_status_text_cb = cb;
-}
-
-/* Helper: notify the UI of a human-readable status message */
-static void notify_status(const char *fmt, ...)
-    __attribute__((format(printf, 1, 2)));
-static void notify_status(const char *fmt, ...)
-{
-    if (!s_status_text_cb) return;
-    char buf[128];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    s_status_text_cb(buf);
 }
 
 extern "C" bool ble_keyboard_is_connected(void)
