@@ -3,6 +3,8 @@
 #include <esp_log.h>
 #include "sdkconfig.h"
 #include "lvgl.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 #include "editor_ui.h"
 #include "editor.h"
@@ -94,6 +96,14 @@ static lv_obj_t *s_passkey_label = NULL;
 /* Escape-save-prompt: when true the user has been warned about unsaved
  * changes and a second Esc will discard + close. */
 static bool s_esc_pending = false;
+
+/* ---- Key-event input queue ----
+ * The BLE callback runs on the HID host task and must not block on the
+ * LVGL mutex.  Key events are enqueued here from the BLE context (ISR-
+ * safe) and drained by an LVGL timer running on the GUI task. */
+#define KEY_QUEUE_LEN 32
+static QueueHandle_t s_key_queue = NULL;
+static lv_timer_t   *s_key_drain_timer = NULL;
 
 /* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
@@ -714,6 +724,7 @@ static void handle_editor_key(const kb_event_t *ev)
                 /* No filename yet -- generate a default name and save */
                 char path[256];
                 const char *mp = sd_card_get_mount_point();
+                bool found = false;
                 /* Find a unique filename draft_NNN.md */
                 for (int seq = 1; seq < 1000; seq++) {
                     snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
@@ -721,9 +732,14 @@ static void handle_editor_key(const kb_event_t *ev)
                     char *dummy = NULL;
                     if (sd_card_read_file(path, &dummy, &dummy_len) != ESP_OK) {
                         /* File does not exist -- use this name */
+                        found = true;
                         break;
                     }
                     free(dummy);
+                }
+                if (!found) {
+                    editor_ui_set_status("Save failed: too many drafts");
+                    break;
                 }
                 esp_err_t err = editor_save_file_as(path);
                 if (err == ESP_OK) {
@@ -890,16 +906,9 @@ static void handle_browser_key(const kb_event_t *ev)
     }
 }
 
-extern "C" void editor_ui_handle_key(const void *event)
+/* Process a single key event (must be called with LVGL lock held). */
+static void process_key_event(const kb_event_t *ev)
 {
-    const kb_event_t *ev = (const kb_event_t *)event;
-    if (!ev->pressed) return; /* only handle key-down */
-
-    /* Reset standby inactivity timer on key-down */
-    standby_reset_timer();
-
-    if (!lvgl_port_lock(100)) return;
-
     if (s_settings_open) {
         handle_settings_key(ev);
     } else if (s_menu_open) {
@@ -909,8 +918,36 @@ extern "C" void editor_ui_handle_key(const void *event)
     } else {
         handle_browser_key(ev);
     }
+}
 
-    lvgl_port_unlock();
+/* LVGL timer callback: drains the key-event queue in a batch.
+ * This runs inside lv_timer_handler() which already holds the LVGL
+ * mutex, so we must NOT call lvgl_port_lock() here. */
+static void key_drain_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    kb_event_t ev;
+
+    while (xQueueReceive(s_key_queue, &ev, 0) == pdTRUE) {
+        process_key_event(&ev);
+    }
+}
+
+/* BLE callback: enqueue the event and return immediately.
+ * This function runs on the HID host task and must not touch LVGL. */
+extern "C" void editor_ui_handle_key(const void *event)
+{
+    const kb_event_t *ev = (const kb_event_t *)event;
+    if (!ev->pressed) return; /* only handle key-down */
+
+    /* Reset standby inactivity timer on key-down */
+    standby_reset_timer();
+
+    if (s_key_queue) {
+        /* Use overwrite-from-ISR variant so we never block.
+         * xQueueSend with 0 timeout will drop if queue is full. */
+        xQueueSend(s_key_queue, ev, 0);
+    }
 }
 
 /* ---- Passkey display callback ---- */
@@ -994,6 +1031,10 @@ extern "C" void editor_ui_init(void)
 {
     init_styles();
 
+    /* Create key-event queue (must exist before BLE callback is set) */
+    s_key_queue = xQueueCreate(KEY_QUEUE_LEN, sizeof(kb_event_t));
+    assert(s_key_queue);
+
     /* Editor init */
     editor_init();
 
@@ -1069,6 +1110,11 @@ extern "C" void editor_ui_init(void)
 
     /* Cursor blink timer */
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);
+
+    /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
+     * queued keyboard events in a batch.  This decouples BLE input
+     * from the LVGL render cycle so fast typing never drops keys. */
+    s_key_drain_timer = lv_timer_create(key_drain_cb, 20, NULL);
 
     /* ---- File browser screen ---- */
     s_scr_browser = lv_obj_create(NULL);
