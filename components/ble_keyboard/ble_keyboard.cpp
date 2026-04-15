@@ -56,6 +56,11 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
  * starts or a connection is established. */
 #define STARTUP_SAFETY_TIMER_MS   3000
 
+/* Stack size for the BLE connect task.  Needs room for deferred
+ * esp_hidh_init() plus esp_hidh_dev_open() which both use
+ * significant stack space. */
+#define CONNECT_TASK_STACK        6144
+
 /* Maximum number of bonded keyboards stored in NVS */
 #define MAX_BONDED  8
 
@@ -492,7 +497,8 @@ static void try_connect_bonded(int idx)
              idx,
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
-    xTaskCreate(connect_task, "ble_connect", 6144, NULL, 2, NULL);
+    xTaskCreate(connect_task, "ble_connect", CONNECT_TASK_STACK,
+                NULL, 2, NULL);
 }
 
 static void start_reconnection(void)
@@ -709,7 +715,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     case ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT:
         /* Scanning stopped -- initiate HID connection if target found */
         if (s_connecting) {
-            xTaskCreate(connect_task, "ble_connect", 6144, NULL, 2, NULL);
+            xTaskCreate(connect_task, "ble_connect", CONNECT_TASK_STACK,
+                        NULL, 2, NULL);
         }
         break;
 
