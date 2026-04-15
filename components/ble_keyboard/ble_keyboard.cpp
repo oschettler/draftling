@@ -779,35 +779,17 @@ static void ble_init_task(void *arg)
     ESP_ERROR_CHECK(esp_bluedroid_enable());
     ESP_LOGI(TAG, "Bluedroid enabled");
 
-    /* Set BLE security parameters.
-     * IO capability = DisplayOnly so the stack generates a random
-     * 6-digit passkey for each pairing attempt and delivers it via
-     * ESP_GAP_BLE_PASSKEY_NOTIF_EVT.  The user types this number on
-     * the keyboard to complete pairing.  MITM flag is set so the
-     * stack actually uses the passkey entry protocol. */
-    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
-    esp_ble_io_cap_t io_cap = ESP_IO_CAP_OUT;
-    uint8_t key_size = 16;
-    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-    uint8_t rsp_key  = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
-
-    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE,
-                                   &auth_req, sizeof(auth_req));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,
-                                   &io_cap, sizeof(io_cap));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE,
-                                   &key_size, sizeof(key_size));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY,
-                                   &init_key, sizeof(init_key));
-    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
-                                   &rsp_key, sizeof(rsp_key));
-    ESP_LOGI(TAG, "Security parameters configured");
-
-    /* Initialize HIDH (HID Host) before scanning.  esp_hidh_init()
-     * internally calls esp_ble_gattc_app_register() which needs the
-     * BTC task to be idle.  Calling it here -- right after Bluedroid
-     * enable and before any scanning -- is the safest point because
-     * BTC has no pending work to process.
+    /* Initialize HIDH (HID Host) immediately after Bluedroid enable,
+     * before any other BTC-dependent calls.  esp_hidh_init()
+     * internally calls esp_ble_gattc_app_register() which sends a
+     * message to the BTC task and then waits on a semaphore for the
+     * registration callback.  If other messages (e.g. security param
+     * setup) are queued ahead of it, the BTC task may not process the
+     * GATTC registration promptly, causing a hang.  Calling HIDH init
+     * first -- while the BTC queue is empty -- avoids this.
+     *
+     * This matches the ESP-IDF HID host example sequence:
+     *   bluedroid_enable -> hidh_init -> gap_register -> scan
      *
      * Note: esp_hidh_init() may register its own GAP callback
      * internally, so we register our GAP callback AFTER this call. */
@@ -840,6 +822,34 @@ static void ble_init_task(void *arg)
     } else {
         ESP_LOGI(TAG, "GAP callback registered");
     }
+
+    /* Set BLE security parameters.
+     * IO capability = DisplayOnly so the stack generates a random
+     * 6-digit passkey for each pairing attempt and delivers it via
+     * ESP_GAP_BLE_PASSKEY_NOTIF_EVT.  The user types this number on
+     * the keyboard to complete pairing.  MITM flag is set so the
+     * stack actually uses the passkey entry protocol.
+     *
+     * These are set AFTER HIDH init and GAP callback registration
+     * to keep the BTC queue empty during HIDH's synchronous GATTC
+     * registration. */
+    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
+    esp_ble_io_cap_t io_cap = ESP_IO_CAP_OUT;
+    uint8_t key_size = 16;
+    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t rsp_key  = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE,
+                                   &auth_req, sizeof(auth_req));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,
+                                   &io_cap, sizeof(io_cap));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE,
+                                   &key_size, sizeof(key_size));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY,
+                                   &init_key, sizeof(init_key));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
+                                   &rsp_key, sizeof(rsp_key));
+    ESP_LOGI(TAG, "Security parameters configured");
 
     /* Set scan parameters -- triggers async
      * SCAN_PARAM_SET_COMPLETE_EVT which starts the reconnection /
