@@ -102,6 +102,10 @@ static lv_obj_t *s_scr_browser = NULL;
 static lv_obj_t *s_list_files  = NULL;
 static lv_obj_t *s_img_logo    = NULL;
 
+/* BLE connection prompt screen */
+static lv_obj_t *s_scr_ble_prompt  = NULL;
+static lv_obj_t *s_ble_prompt_lbl  = NULL;
+
 /* Menu overlay objects */
 static lv_obj_t *s_scr_menu     = NULL;
 static lv_obj_t *s_menu_list    = NULL;
@@ -354,13 +358,6 @@ static void refresh_file_list(void)
 
     /* Filter to show only .md files and directories */
     lv_obj_clean(s_list_files);
-
-    /* Show a prompt when no BLE keyboard is connected */
-    if (!ble_keyboard_is_connected()) {
-        lv_obj_t *hint = lv_list_add_btn(s_list_files, NULL,
-            "No keyboard connected. Waiting for BLE...");
-        lv_obj_set_style_text_color(hint, lv_color_make(128, 128, 128), 0);
-    }
 
     for (int i = 0; i < s_browser_count; i++) {
         const char *name = s_browser_entries[i].name;
@@ -854,6 +851,34 @@ static void passkey_display_cb(uint32_t passkey)
     lvgl_port_unlock();
 }
 
+/* ---- BLE connection status callback ---- */
+
+static void ble_connect_status_cb(bool connected)
+{
+    if (!lvgl_port_lock(100)) return;
+
+    if (connected) {
+        /* Keyboard just connected -- if we are on the BLE prompt screen,
+         * transition to the file browser. */
+        if (lv_scr_act() == s_scr_ble_prompt) {
+            editor_ui_show_file_browser();
+        }
+        if (s_ble_prompt_lbl) {
+            lv_label_set_text(s_ble_prompt_lbl,
+                "Keyboard connected!");
+        }
+    } else {
+        /* Keyboard disconnected -- update the prompt label text in case
+         * we navigate back to it later via the reconnection loop. */
+        if (s_ble_prompt_lbl) {
+            lv_label_set_text(s_ble_prompt_lbl,
+                "Keyboard disconnected.\nReconnecting...");
+        }
+    }
+
+    lvgl_port_unlock();
+}
+
 /* ---- Initialization ---- */
 
 extern "C" void editor_ui_init(void)
@@ -953,6 +978,30 @@ extern "C" void editor_ui_init(void)
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
 
+    /* ---- BLE connection prompt screen ---- */
+    s_scr_ble_prompt = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_ble_prompt, lv_color_white(), 0);
+
+    /* Logo centered near the top */
+    lv_obj_t *ble_logo = lv_image_create(s_scr_ble_prompt);
+    lv_image_set_src(ble_logo, &draftling_logo);
+    lv_obj_set_pos(ble_logo,
+                   (SCR_W - draftling_logo.header.w) / 2,
+                   (SCR_H / 2 - draftling_logo.header.h) / 2);
+
+    /* Prompt label below center */
+    s_ble_prompt_lbl = lv_label_create(s_scr_ble_prompt);
+    lv_obj_set_width(s_ble_prompt_lbl, SCR_W - 20);
+    lv_obj_set_style_text_font(s_ble_prompt_lbl, FONT_14, 0);
+    lv_obj_set_style_text_color(s_ble_prompt_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_align(s_ble_prompt_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_ble_prompt_lbl,
+        "Searching for BLE keyboard...\nPlease turn on your keyboard");
+    lv_obj_set_pos(s_ble_prompt_lbl, 10, SCR_H / 2 + 10);
+
+    /* Register BLE connection status callback */
+    ble_keyboard_set_connect_callback(ble_connect_status_cb);
+
     /* ---- Menu screen ---- */
     s_scr_menu = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_menu, lv_color_white(), 0);
@@ -1014,8 +1063,8 @@ extern "C" void editor_ui_init(void)
     /* Register passkey display callback */
     ble_keyboard_set_passkey_callback(passkey_display_cb);
 
-    /* Start on file browser */
-    editor_ui_show_file_browser();
+    /* Start on BLE prompt screen (transitions to file browser on connect) */
+    lv_scr_load(s_scr_ble_prompt);
 
     ESP_LOGI(TAG, "Editor UI initialized");
 }

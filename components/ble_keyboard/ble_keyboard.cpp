@@ -152,6 +152,7 @@ static void bonded_add(const esp_bd_addr_t bda,
 
 static kb_event_callback_t  s_callback = NULL;
 static ble_passkey_cb_t     s_passkey_cb = NULL;
+static ble_connect_cb_t     s_connect_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static char s_dev_name[64] = "";
@@ -255,6 +256,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                      addr ? addr[0] : 0, addr ? addr[1] : 0,
                      addr ? addr[2] : 0, addr ? addr[3] : 0,
                      addr ? addr[4] : 0, addr ? addr[5] : 0);
+            if (s_connect_cb) s_connect_cb(true);
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
             s_connecting = false;
@@ -272,6 +274,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
         ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
+        if (s_connect_cb) s_connect_cb(false);
         /* Reset reconnection to start with last-known device */
         s_reconn_phase = RECONN_LAST;
         s_reconn_idx   = 0;
@@ -632,6 +635,11 @@ extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
 extern "C" void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb)
 {
     s_passkey_cb = cb;
+}
+
+extern "C" void ble_keyboard_set_connect_callback(ble_connect_cb_t cb)
+{
+    s_connect_cb = cb;
 }
 
 extern "C" bool ble_keyboard_is_connected(void)

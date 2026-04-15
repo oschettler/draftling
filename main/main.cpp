@@ -65,14 +65,6 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
 
-    /* Prompt user to connect keyboard if not already connected */
-    if (!ble_keyboard_is_connected()) {
-        if (lvgl_port_lock(-1)) {
-            editor_ui_set_status("No keyboard connected. Scanning for BLE devices...");
-            lvgl_port_unlock();
-        }
-    }
-
     /* Initialize WiFi manager (doesn't connect yet) */
     ESP_LOGI(TAG, "Initializing WiFi manager...");
     wifi_manager_init();
