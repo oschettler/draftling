@@ -631,6 +631,8 @@ static void handle_editor_key(const kb_event_t *ev)
     /* Clear the escape-save-prompt on any key other than Esc */
     if (ev->keycode != KB_KEY_ESCAPE && s_esc_pending) {
         s_esc_pending = false;
+        editor_ui_set_status(
+            "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
     }
 
     /* F1 opens the menu */
