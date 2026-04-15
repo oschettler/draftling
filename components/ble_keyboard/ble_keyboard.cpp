@@ -515,10 +515,8 @@ static void reconn_timer_cb(TimerHandle_t timer)
 }
 
 /* Safety-net timer: fires periodically after init until scanning
- * starts or a connection is established.  Since esp_hidh_init() is
- * deferred to connect time, there is no GAP callback conflict during
- * startup.  This timer handles the (unlikely) case where the initial
- * set_scan_params or start_scanning fails silently. */
+ * starts or a connection is established.  Handles the (unlikely) case
+ * where the initial set_scan_params or start_scanning fails silently. */
 static void startup_timer_cb(TimerHandle_t timer)
 {
     (void)timer;
@@ -560,7 +558,7 @@ static void startup_timer_cb(TimerHandle_t timer)
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param)
 {
-    ESP_LOGI(TAG, "GAP event: %d", (int)event);
+    ESP_LOGD(TAG, "GAP event: %d", (int)event);
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
