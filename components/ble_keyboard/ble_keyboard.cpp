@@ -186,9 +186,14 @@ static reconn_phase_t s_reconn_phase = RECONN_LAST;
 static int            s_reconn_idx   = 0; /* index for RECONN_KNOWN */
 static TimerHandle_t  s_reconn_timer = NULL;
 
+/* One-shot startup timer: safety net that starts scanning even if
+ * SCAN_PARAM_SET_COMPLETE_EVT is lost due to a race condition. */
+static TimerHandle_t  s_startup_timer = NULL;
+
 /* Forward declarations */
 static void start_reconnection(void);
 static void reconn_timer_cb(TimerHandle_t timer);
+static void startup_timer_cb(TimerHandle_t timer);
 
 static bool key_in_report(uint8_t key, const uint8_t *keys, int count)
 {
@@ -485,6 +490,26 @@ static void reconn_timer_cb(TimerHandle_t timer)
     start_reconnection();
 }
 
+/* Safety-net timer: fires a few seconds after init.  If the GAP
+ * SCAN_PARAM_SET_COMPLETE_EVT was lost (e.g. because esp_hidh_init
+ * overwrote the GAP callback before we re-registered it), this
+ * ensures scanning still starts. */
+static void startup_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    if (s_connected || s_connecting) return;
+
+    if (!s_scan_params_ready) {
+        ESP_LOGW(TAG, "SCAN_PARAM_SET_COMPLETE_EVT not received; "
+                 "forcing scan_params_ready and starting scan");
+        s_scan_params_ready = true;
+    }
+
+    s_reconn_phase = RECONN_LAST;
+    s_reconn_idx   = 0;
+    start_reconnection();
+}
+
 /* ---- BLE GAP callback ---- */
 
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
@@ -676,28 +701,32 @@ extern "C" void ble_keyboard_init(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
                                    &rsp_key, sizeof(rsp_key));
 
-    /* Register BLE GAP callback FIRST -- must be in place before any
-     * BTA operation that could trigger a GAP event (including HIDH init
-     * and scan-param-set). */
-    esp_ble_gap_register_callback(gap_event_handler);
-
     /* Initialize HID Host (esp_hid component).
      * esp_hidh_init() internally calls esp_ble_gattc_app_register()
      * which queues a GATTC registration message in the BTA task.
      * This must happen BEFORE esp_ble_gap_set_scan_params() so that
      * the BTA task processes the GATTC registration (storing the
      * client_if) before the scan-param-set-complete event fires and
-     * starts scanning / connection attempts. */
+     * starts scanning / connection attempts.
+     *
+     * IMPORTANT: esp_hidh_init() may internally call
+     * esp_ble_gap_register_callback() for its own security handling.
+     * We register OUR GAP callback AFTER this call so that ours is
+     * the active one and receives scan/connection events. */
     esp_hidh_config_t hidh_cfg = {};
     hidh_cfg.callback = hidh_callback;
     hidh_cfg.event_stack_size = 4096;
     ESP_ERROR_CHECK(esp_hidh_init(&hidh_cfg));
 
-    /* Set scan parameters LAST -- triggers async
+    /* Register BLE GAP callback AFTER esp_hidh_init().
+     * esp_hidh_init() registers its own GAP callback internally;
+     * registering ours afterwards ensures we receive GAP events
+     * (scan results, scan-param-set-complete, security events). */
+    esp_ble_gap_register_callback(gap_event_handler);
+
+    /* Set scan parameters -- triggers async
      * SCAN_PARAM_SET_COMPLETE_EVT which starts the reconnection /
-     * scan sequence.  Because BTA processes its queue in FIFO order,
-     * the GATTC registration (queued above) is guaranteed to be
-     * processed before this scan-param-set message. */
+     * scan sequence. */
     esp_ble_scan_params_t scan_params = {};
     scan_params.scan_type          = BLE_SCAN_TYPE_ACTIVE;
     scan_params.own_addr_type      = BLE_ADDR_TYPE_PUBLIC;
@@ -705,7 +734,11 @@ extern "C" void ble_keyboard_init(void)
     scan_params.scan_interval      = 0x0060;  /* 60 ms */
     scan_params.scan_window        = 0x0030;  /* 30 ms */
     scan_params.scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE;
-    esp_ble_gap_set_scan_params(&scan_params);
+    esp_err_t sp_err = esp_ble_gap_set_scan_params(&scan_params);
+    if (sp_err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ble_gap_set_scan_params failed: %s",
+                 esp_err_to_name(sp_err));
+    }
 
     /* Create scan retry timer (one-shot, 2-second delay) */
     s_scan_timer = xTimerCreate("scan_retry", pdMS_TO_TICKS(2000),
@@ -719,6 +752,14 @@ extern "C" void ble_keyboard_init(void)
      * callback once scan parameters are ready. */
     s_reconn_phase = RECONN_LAST;
     s_reconn_idx   = 0;
+
+    /* Start a one-shot safety-net timer (3 s).  If the GAP event is
+     * somehow lost, this guarantees scanning will begin. */
+    s_startup_timer = xTimerCreate("ble_start", pdMS_TO_TICKS(3000),
+                                   pdFALSE, NULL, startup_timer_cb);
+    if (s_startup_timer) {
+        xTimerStart(s_startup_timer, 0);
+    }
 
     ESP_LOGI(TAG, "BLE HID keyboard host initialized");
 }
