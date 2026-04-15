@@ -14,62 +14,22 @@
 #include "sd_card.h"
 #include "lvgl_port.h"
 #include "standby.h"
-#include "montserrat_cyrillic.h"
-#include "montserrat_cjk.h"
+#include "departure_mono.h"
 
 /*
- * Font aliases with fallbacks.
+ * Font aliases.
  *
- * When a non-ASCII keyboard layout (UA, DE, FR) is enabled, the custom
- * Montserrat fonts with extended Unicode coverage (Latin + Cyrillic)
- * are used so that all characters can be rendered correctly.
+ * Departure Mono is a monospaced pixel font that includes Latin,
+ * Latin-1 Supplement, and Cyrillic glyphs in every size, so a
+ * single set of fonts covers all enabled keyboard layouts.
  *
- * When a CJK keyboard layout (KO, JA, ZH) is enabled, the custom
- * Montserrat fonts with CJK glyph coverage (Jamo, Hiragana, Katakana,
- * Bopomofo) are used.
- *
- * Otherwise the built-in LVGL Montserrat fonts are used.
- * montserrat_14 is always available (LVGL default).
+ * FONT_11 is the primary body / UI font.  Its metrics match
+ * the editor LINE_H and CHAR_W exactly (line_height 14, advance 7 px).
  */
-#if HAVE_CJK_FONTS
-#define FONT_10 (&montserrat_cjk_10)
-#define FONT_12 (&montserrat_cjk_12)
-#define FONT_14 (&montserrat_cjk_14)
-#define FONT_16 (&montserrat_cjk_16)
-#define FONT_18 (&montserrat_cjk_18)
-#elif HAVE_CYRILLIC_FONTS
-#define FONT_10 (&montserrat_cyrillic_10)
-#define FONT_12 (&montserrat_cyrillic_12)
-#define FONT_14 (&montserrat_cyrillic_14)
-#define FONT_16 (&montserrat_cyrillic_16)
-#define FONT_18 (&montserrat_cyrillic_18)
-#else
-#if LV_FONT_MONTSERRAT_10
-#define FONT_10 (&lv_font_montserrat_10)
-#else
-#define FONT_10 (&lv_font_montserrat_14)
-#endif
-
-#if LV_FONT_MONTSERRAT_12
-#define FONT_12 (&lv_font_montserrat_12)
-#else
-#define FONT_12 (&lv_font_montserrat_14)
-#endif
-
-#define FONT_14 (&lv_font_montserrat_14)
-
-#if LV_FONT_MONTSERRAT_16
-#define FONT_16 (&lv_font_montserrat_16)
-#else
-#define FONT_16 (&lv_font_montserrat_14)
-#endif
-
-#if LV_FONT_MONTSERRAT_18
-#define FONT_18 (&lv_font_montserrat_18)
-#else
-#define FONT_18 (&lv_font_montserrat_14)
-#endif
-#endif /* HAVE_CJK_FONTS / HAVE_CYRILLIC_FONTS */
+#define FONT_11 (&departure_mono_11)
+#define FONT_14 (&departure_mono_14)
+#define FONT_16 (&departure_mono_16)
+#define FONT_18 (&departure_mono_18)
 
 static const char *TAG = "EditorUI";
 
@@ -88,7 +48,7 @@ static const char *TAG = "EditorUI";
 #define EDITOR_H     (SCR_H - HEADER_H - STATUS_H)
 #define LINE_H       14
 #define VISIBLE_LINES (EDITOR_H / LINE_H)
-#define CHAR_W       7   /* approx width of montserrat_12 char */
+#define CHAR_W       7   /* departure_mono_11 advance: 112/16 = 7 px (monospace) */
 #define LIST_H       (SCR_H - 18)  /* height for list panels below header */
 
 /* LVGL objects */
@@ -152,7 +112,7 @@ static lv_style_t s_style_quote;
 static void init_styles(void)
 {
     lv_style_init(&s_style_body);
-    lv_style_set_text_font(&s_style_body, FONT_12);
+    lv_style_set_text_font(&s_style_body, FONT_11);
     lv_style_set_text_color(&s_style_body, lv_color_black());
     lv_style_set_pad_all(&s_style_body, 0);
 
@@ -169,14 +129,14 @@ static void init_styles(void)
     lv_style_set_text_color(&s_style_h3, lv_color_black());
 
     lv_style_init(&s_style_code);
-    lv_style_set_text_font(&s_style_code, FONT_12);
+    lv_style_set_text_font(&s_style_code, FONT_11);
     lv_style_set_text_color(&s_style_code, lv_color_black());
     lv_style_set_border_width(&s_style_code, 1);
     lv_style_set_border_color(&s_style_code, lv_color_black());
     lv_style_set_pad_left(&s_style_code, 4);
 
     lv_style_init(&s_style_quote);
-    lv_style_set_text_font(&s_style_quote, FONT_12);
+    lv_style_set_text_font(&s_style_quote, FONT_11);
     lv_style_set_text_color(&s_style_quote, lv_color_black());
     lv_style_set_border_side(&s_style_quote, LV_BORDER_SIDE_LEFT);
     lv_style_set_border_width(&s_style_quote, 2);
@@ -930,7 +890,7 @@ extern "C" void editor_ui_init(void)
     s_lbl_title = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_title, 2, 0);
     lv_obj_set_width(s_lbl_title, SCR_W - 4);
-    lv_obj_set_style_text_font(s_lbl_title, FONT_10, 0);
+    lv_obj_set_style_text_font(s_lbl_title, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_black(), 0);
     lv_label_set_text(s_lbl_title, "Draftling");
 
@@ -987,7 +947,7 @@ extern "C" void editor_ui_init(void)
     s_lbl_status = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_status, 2, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_status, SCR_W - 4);
-    lv_obj_set_style_text_font(s_lbl_status, FONT_10, 0);
+    lv_obj_set_style_text_font(s_lbl_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
     lv_label_set_text(s_lbl_status,
         "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
@@ -1001,7 +961,7 @@ extern "C" void editor_ui_init(void)
 
     lv_obj_t *br_title = lv_label_create(s_scr_browser);
     lv_obj_set_pos(br_title, 2, 0);
-    lv_obj_set_style_text_font(br_title, FONT_12, 0);
+    lv_obj_set_style_text_font(br_title, FONT_11, 0);
     lv_obj_set_style_text_color(br_title, lv_color_black(), 0);
     lv_label_set_text(br_title, "File Browser - Up/Down, Enter to open, N for new");
 
@@ -1051,7 +1011,7 @@ extern "C" void editor_ui_init(void)
 
     s_lbl_menu_hdr = lv_label_create(s_scr_menu);
     lv_obj_set_pos(s_lbl_menu_hdr, 2, 0);
-    lv_obj_set_style_text_font(s_lbl_menu_hdr, FONT_12, 0);
+    lv_obj_set_style_text_font(s_lbl_menu_hdr, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_menu_hdr, lv_color_black(), 0);
     lv_label_set_text(s_lbl_menu_hdr,
                       "Menu - Up/Down, Enter to select, Esc to close");
@@ -1069,7 +1029,7 @@ extern "C" void editor_ui_init(void)
 
     lv_obj_t *set_hdr = lv_label_create(s_scr_settings);
     lv_obj_set_pos(set_hdr, 2, 0);
-    lv_obj_set_style_text_font(set_hdr, FONT_12, 0);
+    lv_obj_set_style_text_font(set_hdr, FONT_11, 0);
     lv_obj_set_style_text_color(set_hdr, lv_color_black(), 0);
     lv_label_set_text(set_hdr,
                       "Settings - Up/Down, Enter to change, Esc to go back");
