@@ -187,11 +187,6 @@ static volatile int s_battery_level = -1;  /* -1 = unknown */
 /* Active HIDH device handle (valid while connected) */
 static esp_hidh_dev_t *s_hidh_dev = NULL;
 
-/* Flag: when true, the next CLOSE event is caused by an intentional
- * close-and-reopen cycle after encryption was established, not by
- * a real disconnect from the keyboard. */
-static volatile bool s_reopen_after_auth = false;
-
 /* Target device address saved during scan for deferred connection */
 static esp_bd_addr_t s_target_bda;
 static esp_ble_addr_type_t s_target_addr_type;
@@ -346,26 +341,13 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_hidh_dev   = NULL;
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
-
-        if (s_reopen_after_auth) {
-            /* This close was intentional (post-encryption reopen).
-             * Immediately reconnect to re-subscribe HID notifications
-             * over the now-encrypted link.  Do NOT clear the device
-             * name or notify the UI of a disconnect. */
-            s_reopen_after_auth = false;
-            ESP_LOGI(TAG, "HID device closed for re-open after auth");
-            s_reconn_phase = RECONN_LAST;
-            s_reconn_idx   = 0;
-            start_reconnection();
-        } else {
-            s_dev_name[0] = '\0';
-            ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
-            if (s_connect_cb) s_connect_cb(false);
-            /* Reset reconnection to start with last-known device */
-            s_reconn_phase = RECONN_LAST;
-            s_reconn_idx   = 0;
-            start_reconnection();
-        }
+        s_dev_name[0] = '\0';
+        ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
+        if (s_connect_cb) s_connect_cb(false);
+        /* Reset reconnection to start with last-known device */
+        s_reconn_phase = RECONN_LAST;
+        s_reconn_idx   = 0;
+        start_reconnection();
         break;
 
     case ESP_HIDH_INPUT_EVENT: {
@@ -776,6 +758,20 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         break;
     }
 
+    case ESP_GAP_BLE_NC_REQ_EVT: {
+        /* Numeric Comparison -- used by some keyboards with Secure
+         * Connections.  Show the number on the display and auto-accept.
+         * The user verifies the same number is shown on the keyboard. */
+        uint32_t nc_num = param->ble_security.key_notif.passkey;
+        ESP_LOGI(TAG, "Numeric comparison: %06lu",
+                 (unsigned long)nc_num);
+        if (s_passkey_cb) {
+            s_passkey_cb(nc_num);
+        }
+        esp_ble_confirm_reply(param->ble_security.key_notif.bd_addr, true);
+        break;
+    }
+
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
         if (param->ble_security.auth_cmpl.success) {
             ESP_LOGI(TAG, "BLE authentication success");
@@ -783,17 +779,13 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             if (s_passkey_cb) {
                 s_passkey_cb(BLE_PASSKEY_DISMISS);
             }
-            /* Encryption is now established.  The initial HIDH open
-             * may have failed to subscribe to HID notifications
-             * because CCCD writes required encryption that was not
-             * yet available.  Close and reopen the device so the
-             * HIDH library re-discovers services and writes CCCDs
-             * over the encrypted link. */
-            if (s_connected && s_hidh_dev) {
-                ESP_LOGI(TAG, "Re-opening HID device over encrypted link");
-                s_reopen_after_auth = true;
-                esp_hidh_dev_close(s_hidh_dev);
-            }
+            /* Encryption is now established.  On ESP-IDF Bluedroid the
+             * HIDH library discovers services and writes CCCDs after
+             * the BLE connection is up; with "Just Works" or fast
+             * pairing the encryption is established before CCCD writes,
+             * so they succeed on the first open.  No close-and-reopen
+             * is needed -- it would waste GATT notification slots
+             * (CONFIG_BT_GATTC_NOTIF_REG_MAX). */
         } else {
             ESP_LOGE(TAG, "BLE authentication failed, reason: 0x%x",
                      param->ble_security.auth_cmpl.fail_reason);
