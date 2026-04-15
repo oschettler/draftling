@@ -311,7 +311,10 @@ static void process_nkro_report(const uint8_t *data, int len)
         for (int bit = 0; bit < 8; bit++) {
             if (diff & (1 << bit)) {
                 uint8_t keycode = (uint8_t)(i * 8 + bit);
-                if (keycode < 4) continue; /* skip reserved keycodes */
+                /* HID keycodes 0-3 are reserved (ErrorRollOver,
+                 * POSTFail, ErrorUndefined).  Valid keys start
+                 * at 0x04 (KC_A). */
+                if (keycode < 0x04) continue;
                 bool pressed = (cur & (1 << bit)) != 0;
                 dispatch_key(modifier, keycode, pressed);
             }
