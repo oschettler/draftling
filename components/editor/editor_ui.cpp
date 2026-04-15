@@ -101,9 +101,13 @@ static bool s_esc_pending = false;
  * The BLE callback runs on the HID host task and must not block on the
  * LVGL mutex.  Key events are enqueued here from the BLE context (ISR-
  * safe) and drained by an LVGL timer running on the GUI task. */
-#define KEY_QUEUE_LEN 32
+#define KEY_QUEUE_LEN       32
+#define KEY_DRAIN_PERIOD_MS 20   /* 50 Hz poll rate for the drain timer */
 static QueueHandle_t s_key_queue = NULL;
 static lv_timer_t   *s_key_drain_timer = NULL;
+
+/* Maximum number of auto-generated draft filenames (draft_001..draft_999) */
+#define MAX_DRAFT_SEQ 999
 
 /* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
@@ -726,7 +730,7 @@ static void handle_editor_key(const kb_event_t *ev)
                 const char *mp = sd_card_get_mount_point();
                 bool found = false;
                 /* Find a unique filename draft_NNN.md */
-                for (int seq = 1; seq < 1000; seq++) {
+                for (int seq = 1; seq <= MAX_DRAFT_SEQ; seq++) {
                     snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
                     size_t dummy_len = 0;
                     char *dummy = NULL;
@@ -1114,7 +1118,7 @@ extern "C" void editor_ui_init(void)
     /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
      * queued keyboard events in a batch.  This decouples BLE input
      * from the LVGL render cycle so fast typing never drops keys. */
-    s_key_drain_timer = lv_timer_create(key_drain_cb, 20, NULL);
+    s_key_drain_timer = lv_timer_create(key_drain_cb, KEY_DRAIN_PERIOD_MS, NULL);
 
     /* ---- File browser screen ---- */
     s_scr_browser = lv_obj_create(NULL);
