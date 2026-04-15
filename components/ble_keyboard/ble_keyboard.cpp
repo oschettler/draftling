@@ -572,14 +572,18 @@ static void startup_timer_cb(TimerHandle_t timer)
         esp_ble_scan_params_t scan_params;
         fill_scan_params(&scan_params);
         esp_err_t err = esp_ble_gap_set_scan_params(&scan_params);
-        if (err != ESP_OK) {
+        if (err == ESP_OK) {
+            /* The call succeeded (queued to controller).  Force params
+             * ready -- the completion event will arrive at our GAP
+             * callback and confirm, but we proceed immediately to avoid
+             * another 3-second wait. */
+            s_scan_params_ready = true;
+        } else {
             ESP_LOGE(TAG, "Re-set scan params failed: %s",
                      esp_err_to_name(err));
+            /* Don't force ready; next timer tick will retry */
+            return;
         }
-        /* Force params ready -- the original set_scan_params call in
-         * init likely succeeded but the completion event may have been
-         * missed.  The params are already configured in the controller. */
-        s_scan_params_ready = true;
     }
 
     s_reconn_phase = RECONN_LAST;
