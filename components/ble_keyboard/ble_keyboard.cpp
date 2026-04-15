@@ -529,6 +529,10 @@ static void startup_timer_cb(TimerHandle_t timer)
     ESP_LOGW(TAG, "Safety-net timer fired (scan_params_ready=%d)",
              (int)s_scan_params_ready);
 
+    /* Re-register our GAP callback in case esp_hidh_init()'s internal
+     * task asynchronously overwrote it after startup. */
+    esp_ble_gap_register_callback(gap_event_handler);
+
     if (!s_scan_params_ready) {
         ESP_LOGW(TAG, "Scan params not ready; re-sending");
         esp_ble_scan_params_t scan_params;
@@ -558,7 +562,7 @@ static void startup_timer_cb(TimerHandle_t timer)
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param)
 {
-    ESP_LOGD(TAG, "GAP event: %d", (int)event);
+    ESP_LOGI(TAG, "GAP event: %d", (int)event);
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
@@ -782,6 +786,11 @@ extern "C" void ble_keyboard_init(void)
     } else {
         ESP_LOGI(TAG, "HIDH initialized");
     }
+
+    /* esp_hidh_init() creates an internal event loop task that may
+     * asynchronously register its own GAP callback.  Give that task
+     * time to finish its setup before we overwrite the callback. */
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     /* Register our GAP callback.  This overwrites the one that
      * esp_hidh_init() registered internally, giving us full control
