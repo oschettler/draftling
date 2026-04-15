@@ -58,9 +58,9 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
  * finishes within a few milliseconds. */
 #define GATTC_REGISTER_DELAY_MS    200
 
-/* Safety-net timer delay (ms).  If SCAN_PARAM_SET_COMPLETE_EVT is
- * not delivered within this time, the timer re-registers the GAP
- * callback and re-sends scan params. */
+/* Safety-net timer period (ms).  Fires periodically until scanning
+ * starts or a connection is established.  Re-registers the GAP
+ * callback and re-sends scan params on each tick. */
 #define STARTUP_SAFETY_TIMER_MS   3000
 
 /* Maximum number of bonded keyboards stored in NVS */
@@ -525,13 +525,24 @@ static void reconn_timer_cb(TimerHandle_t timer)
 static void startup_timer_cb(TimerHandle_t timer)
 {
     (void)timer;
-    if (s_connected || s_connecting) return;
+    if (s_connected || s_connecting) {
+        /* Goal achieved -- stop the periodic timer */
+        xTimerStop(s_startup_timer, 0);
+        return;
+    }
 
-    ESP_LOGW(TAG, "Startup safety-net timer fired");
+    ESP_LOGW(TAG, "Startup safety-net timer fired "
+             "(scan_params_ready=%d)", (int)s_scan_params_ready);
 
     /* Re-register our GAP callback -- the async GATTC app-register
      * response from esp_hidh_init may have overwritten it. */
-    esp_ble_gap_register_callback(gap_event_handler);
+    esp_err_t cb_err = esp_ble_gap_register_callback(gap_event_handler);
+    if (cb_err != ESP_OK) {
+        ESP_LOGE(TAG, "Safety-net GAP re-register failed: %s",
+                 esp_err_to_name(cb_err));
+    } else {
+        ESP_LOGI(TAG, "Safety-net GAP callback re-registered");
+    }
 
     if (!s_scan_params_ready) {
         ESP_LOGW(TAG, "Scan params not ready; re-setting and starting");
@@ -561,11 +572,17 @@ static void startup_timer_cb(TimerHandle_t timer)
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param)
 {
+    ESP_LOGI(TAG, "GAP event: %d", (int)event);
+
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
         if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(TAG, "Scan parameters set");
             s_scan_params_ready = true;
+            /* Scan params configured via normal path -- stop safety-net */
+            if (s_startup_timer) {
+                xTimerStop(s_startup_timer, 0);
+            }
             /* Now that scan params are ready, start the reconnection
              * sequence (which may trigger a scan). */
             start_reconnection();
@@ -578,6 +595,10 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
         if (param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(TAG, "Scanning for BLE HID keyboards...");
+            /* Scanning started -- stop the periodic safety-net timer */
+            if (s_startup_timer) {
+                xTimerStop(s_startup_timer, 0);
+            }
         } else {
             ESP_LOGE(TAG, "Scan start failed: 0x%x",
                      param->scan_start_cmpl.status);
@@ -807,11 +828,13 @@ extern "C" void ble_keyboard_init(void)
     s_reconn_phase = RECONN_LAST;
     s_reconn_idx   = 0;
 
-    /* Start a one-shot safety-net timer (3 s).  If the GAP event is
-     * somehow lost, this guarantees scanning will begin. */
+    /* Start a periodic safety-net timer.  Re-registers the GAP callback
+     * and retries scanning until connected or actively scanning.
+     * Periodic instead of one-shot to recover from persistent callback
+     * overwrites (e.g. if esp_hidh re-registers its callback). */
     s_startup_timer = xTimerCreate("ble_start",
                                    pdMS_TO_TICKS(STARTUP_SAFETY_TIMER_MS),
-                                   pdFALSE, NULL, startup_timer_cb);
+                                   pdTRUE, NULL, startup_timer_cb);
     if (s_startup_timer) {
         xTimerStart(s_startup_timer, 0);
     }
