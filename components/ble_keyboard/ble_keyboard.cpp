@@ -163,6 +163,7 @@ static ble_passkey_cb_t     s_passkey_cb = NULL;
 static ble_connect_cb_t     s_connect_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
+static volatile bool s_scan_params_ready = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 static volatile int s_battery_level = -1;  /* -1 = unknown */
@@ -465,6 +466,13 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
         if (param->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             ESP_LOGI(TAG, "Scan parameters set");
+            s_scan_params_ready = true;
+            /* Now that scan params are ready, start the reconnection
+             * sequence (which may trigger a scan). */
+            start_reconnection();
+        } else {
+            ESP_LOGE(TAG, "Scan param set failed: 0x%x",
+                     param->scan_param_cmpl.status);
         }
         break;
 
@@ -667,10 +675,10 @@ extern "C" void ble_keyboard_init(void)
     s_reconn_timer = xTimerCreate("reconn", pdMS_TO_TICKS(1000),
                                   pdFALSE, NULL, reconn_timer_cb);
 
-    /* Start reconnection sequence (tries last-known first) */
+    /* Reconnection will be started from the SCAN_PARAM_SET_COMPLETE_EVT
+     * callback once scan parameters are ready. */
     s_reconn_phase = RECONN_LAST;
     s_reconn_idx   = 0;
-    start_reconnection();
 
     ESP_LOGI(TAG, "BLE HID keyboard host initialized");
 }
@@ -698,7 +706,15 @@ extern "C" bool ble_keyboard_is_connected(void)
 extern "C" void ble_keyboard_start_scan(void)
 {
     if (!s_connected && !s_connecting) {
-        esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
+        if (!s_scan_params_ready) {
+            ESP_LOGW(TAG, "Scan params not ready yet, deferring scan");
+            return;
+        }
+        esp_err_t err = esp_ble_gap_start_scanning(SCAN_DURATION_SEC);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ble_gap_start_scanning failed: %s",
+                     esp_err_to_name(err));
+        }
     }
 }
 
