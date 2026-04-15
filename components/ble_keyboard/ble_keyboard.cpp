@@ -371,6 +371,14 @@ static bool adv_is_hid_keyboard(uint8_t *adv_data, uint8_t adv_len)
 
 /* ---- Connect task (runs esp_hidh_dev_open which blocks) ---- */
 
+/* Maximum number of open-connection retries.  The GATTC client
+ * registration inside esp_hidh_init() is asynchronous; if a
+ * connection attempt races with that registration, client_if is
+ * still 0 and esp_hidh_dev_open() fails.  A short retry loop
+ * with a delay handles this race without fragile init ordering. */
+#define CONNECT_RETRIES     4
+#define CONNECT_RETRY_MS  250
+
 static void connect_task(void *arg)
 {
     (void)arg;
@@ -380,12 +388,22 @@ static void connect_task(void *arg)
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
 
-    esp_hidh_dev_t *dev = esp_hidh_dev_open(s_target_bda,
-                                             ESP_HID_TRANSPORT_BLE,
-                                             s_target_addr_type);
+    esp_hidh_dev_t *dev = NULL;
+    for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
+        dev = esp_hidh_dev_open(s_target_bda,
+                                ESP_HID_TRANSPORT_BLE,
+                                s_target_addr_type);
+        if (dev) break;
+        ESP_LOGW(TAG, "esp_hidh_dev_open attempt %d/%d failed, "
+                 "retrying in %d ms...",
+                 attempt + 1, CONNECT_RETRIES, CONNECT_RETRY_MS);
+        vTaskDelay(pdMS_TO_TICKS(CONNECT_RETRY_MS));
+    }
+
     if (!dev) {
-        ESP_LOGE(TAG, "esp_hidh_dev_open returned NULL "
-                 "(GATT client may not be registered)");
+        ESP_LOGE(TAG, "esp_hidh_dev_open failed after %d attempts "
+                 "(GATT client may not be registered)",
+                 CONNECT_RETRIES);
         s_connecting = false;
         /* Retry reconnection after a delay */
         if (s_reconn_timer) {
@@ -658,24 +676,28 @@ extern "C" void ble_keyboard_init(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
                                    &rsp_key, sizeof(rsp_key));
 
+    /* Register BLE GAP callback FIRST -- must be in place before any
+     * BTA operation that could trigger a GAP event (including HIDH init
+     * and scan-param-set). */
+    esp_ble_gap_register_callback(gap_event_handler);
+
     /* Initialize HID Host (esp_hid component).
-     * Must be called BEFORE esp_ble_gap_set_scan_params() so that
-     * the GATTC client registration (queued inside esp_hidh_init)
-     * is processed by the BTA task before the scan-param-set-complete
-     * event fires and triggers scanning / connection attempts.
-     * Without this ordering the GATT client_if is still 0 when
-     * esp_hidh_dev_open() is called, causing
-     * "bta_gattc_process_api_open Failed, unknown client_if: 0". */
+     * esp_hidh_init() internally calls esp_ble_gattc_app_register()
+     * which queues a GATTC registration message in the BTA task.
+     * This must happen BEFORE esp_ble_gap_set_scan_params() so that
+     * the BTA task processes the GATTC registration (storing the
+     * client_if) before the scan-param-set-complete event fires and
+     * starts scanning / connection attempts. */
     esp_hidh_config_t hidh_cfg = {};
     hidh_cfg.callback = hidh_callback;
     hidh_cfg.event_stack_size = 4096;
     ESP_ERROR_CHECK(esp_hidh_init(&hidh_cfg));
 
-    /* Register BLE GAP callback */
-    esp_ble_gap_register_callback(gap_event_handler);
-
-    /* Set scan parameters -- triggers async SCAN_PARAM_SET_COMPLETE_EVT
-     * which starts the reconnection / scan sequence. */
+    /* Set scan parameters LAST -- triggers async
+     * SCAN_PARAM_SET_COMPLETE_EVT which starts the reconnection /
+     * scan sequence.  Because BTA processes its queue in FIFO order,
+     * the GATTC registration (queued above) is guaranteed to be
+     * processed before this scan-param-set message. */
     esp_ble_scan_params_t scan_params = {};
     scan_params.scan_type          = BLE_SCAN_TYPE_ACTIVE;
     scan_params.own_addr_type      = BLE_ADDR_TYPE_PUBLIC;
