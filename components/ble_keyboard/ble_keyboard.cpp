@@ -20,6 +20,7 @@
  */
 
 #include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -176,6 +177,7 @@ static void bonded_add(const esp_bd_addr_t bda,
 static kb_event_callback_t  s_callback = NULL;
 static ble_passkey_cb_t     s_passkey_cb = NULL;
 static ble_connect_cb_t     s_connect_cb = NULL;
+static ble_status_text_cb_t s_status_text_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
@@ -436,6 +438,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
             if (s_connect_cb) s_connect_cb(true);
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
+            notify_status("Connection failed, retrying...");
             s_connecting = false;
             /* Continue reconnection sequence after a short delay */
             if (s_reconn_timer) {
@@ -576,11 +579,13 @@ static void connect_task(void *arg)
              s_dev_name,
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
+    notify_status("Connecting to %s...", s_dev_name);
 
     /* HIDH was initialized during ble_init_task().  If it failed,
      * we cannot connect. */
     if (!is_hidh_ready()) {
         ESP_LOGE(TAG, "HIDH not available, cannot connect");
+        notify_status("BLE HID not ready, retrying...");
         s_connecting = false;
         if (s_reconn_timer) {
             xTimerStart(s_reconn_timer, 0);
@@ -598,6 +603,8 @@ static void connect_task(void *arg)
         ESP_LOGW(TAG, "esp_hidh_dev_open attempt %d/%d failed, "
                  "retrying in %d ms...",
                  attempt + 1, CONNECT_RETRIES, CONNECT_RETRY_MS);
+        notify_status("Connect attempt %d/%d failed,\nretrying...",
+                      attempt + 1, CONNECT_RETRIES);
         vTaskDelay(pdMS_TO_TICKS(CONNECT_RETRY_MS));
     }
 
@@ -605,6 +612,7 @@ static void connect_task(void *arg)
         ESP_LOGE(TAG, "esp_hidh_dev_open failed after %d attempts "
                  "(GATT client may not be registered)",
                  CONNECT_RETRIES);
+        notify_status("Connection failed, retrying...");
         s_connecting = false;
         /* Retry reconnection after a delay */
         if (s_reconn_timer) {
@@ -641,6 +649,7 @@ static void start_reconnection(void)
     case RECONN_LAST:
         if (s_last_bonded >= 0 && s_last_bonded < s_bonded_count) {
             ESP_LOGI(TAG, "Reconnect phase: trying last-connected");
+            notify_status("Trying last keyboard...");
             s_reconn_phase = RECONN_KNOWN;
             s_reconn_idx   = 0;
             try_connect_bonded(s_last_bonded);
@@ -655,6 +664,7 @@ static void start_reconnection(void)
             int idx = s_reconn_idx++;
             if (idx == s_last_bonded) continue; /* already tried */
             ESP_LOGI(TAG, "Reconnect phase: trying known device %d", idx);
+            notify_status("Trying known keyboard %d...", idx + 1);
             try_connect_bonded(idx);
             return;
         }
@@ -663,6 +673,7 @@ static void start_reconnection(void)
 
     case RECONN_SCAN:
         ESP_LOGI(TAG, "Reconnect phase: scanning for new keyboards");
+        notify_status("Scanning for keyboards...");
         ble_keyboard_start_scan();
         break;
     }
@@ -820,6 +831,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                 s_connecting = true;
                 memcpy(s_target_bda, scan->bda, sizeof(esp_bd_addr_t));
                 s_target_addr_type = scan->ble_addr_type;
+                notify_status("Found: %s\nConnecting...", s_dev_name);
                 esp_ble_gap_stop_scanning();
             } else {
                 /* Log non-HID devices at DEBUG level for diagnostics */
@@ -836,6 +848,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             if (!s_connected && !s_connecting) {
                 ESP_LOGI(TAG, "Scan complete, no keyboard found. "
                          "Retrying...");
+                notify_status("No keyboard found.\nRetrying...");
                 if (s_scan_timer) {
                     xTimerStart(s_scan_timer, 0);
                 }
@@ -1085,6 +1098,25 @@ extern "C" void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb)
 extern "C" void ble_keyboard_set_connect_callback(ble_connect_cb_t cb)
 {
     s_connect_cb = cb;
+}
+
+extern "C" void ble_keyboard_set_status_text_callback(ble_status_text_cb_t cb)
+{
+    s_status_text_cb = cb;
+}
+
+/* Helper: notify the UI of a human-readable status message */
+static void notify_status(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+static void notify_status(const char *fmt, ...)
+{
+    if (!s_status_text_cb) return;
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    s_status_text_cb(buf);
 }
 
 extern "C" bool ble_keyboard_is_connected(void)

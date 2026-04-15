@@ -65,10 +65,17 @@ typedef void (*ble_passkey_cb_t)(uint32_t passkey);
  * disconnect.  Invoked from the HID host task context. */
 typedef void (*ble_connect_cb_t)(bool connected);
 
+/* Status text callback: called with a human-readable status message
+ * whenever the BLE keyboard connection state changes (scanning,
+ * connecting, retrying, etc.).  The string is valid only for the
+ * duration of the call. */
+typedef void (*ble_status_text_cb_t)(const char *text);
+
 void ble_keyboard_init(void);
 void ble_keyboard_set_callback(kb_event_callback_t callback);
 void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb);
 void ble_keyboard_set_connect_callback(ble_connect_cb_t cb);
+void ble_keyboard_set_status_text_callback(ble_status_text_cb_t cb);
 bool ble_keyboard_is_connected(void);
 void ble_keyboard_start_scan(void);
 const char *ble_keyboard_get_device_name(void);

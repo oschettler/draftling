@@ -14,7 +14,6 @@
 #include "sd_card.h"
 #include "lvgl_port.h"
 #include "standby.h"
-#include "draftling_logo.h"
 #include "montserrat_cyrillic.h"
 #include "montserrat_cjk.h"
 
@@ -899,6 +898,21 @@ static void ble_connect_status_cb(bool connected)
     lvgl_port_unlock();
 }
 
+/* BLE status text callback -- update the BLE prompt label with
+ * connection progress messages from the BLE keyboard component. */
+static void ble_status_text_cb(const char *text)
+{
+    if (!s_ble_prompt_lbl) return;
+    if (!lvgl_port_lock(200)) return;
+
+    /* Only update when the BLE prompt screen is active */
+    if (lv_scr_act() == s_scr_ble_prompt) {
+        lv_label_set_text(s_ble_prompt_lbl, text);
+    }
+
+    lvgl_port_unlock();
+}
+
 /* ---- Initialization ---- */
 
 extern "C" void editor_ui_init(void)
@@ -940,12 +954,15 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_radius(s_cont_edit, 0, 0);
     lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Logo image shown when no file is open */
-    s_img_logo = lv_image_create(s_cont_edit);
-    lv_image_set_src(s_img_logo, &draftling_logo);
-    lv_obj_set_pos(s_img_logo,
-                   (SCR_W - draftling_logo.header.w) / 2,
-                   (EDITOR_H - draftling_logo.header.h) / 2);
+    /* "draftling" text label shown when no file is open */
+    s_img_logo = lv_label_create(s_cont_edit);
+    lv_obj_set_width(s_img_logo, SCR_W);
+    lv_obj_set_style_text_font(s_img_logo, FONT_18, 0);
+    lv_obj_set_style_text_color(s_img_logo, lv_color_make(0x80, 0x80, 0x80), 0);
+    lv_obj_set_style_text_align(s_img_logo, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_img_logo, "draftling");
+    /* Center vertically: FONT_18 is ~18px tall */
+    lv_obj_set_pos(s_img_logo, 0, (EDITOR_H - 18) / 2);
     lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
     /* Cursor (thin vertical bar) */
@@ -1002,12 +1019,16 @@ extern "C" void editor_ui_init(void)
     s_scr_ble_prompt = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_ble_prompt, lv_color_white(), 0);
 
-    /* Logo centered near the top */
-    lv_obj_t *ble_logo = lv_image_create(s_scr_ble_prompt);
-    lv_image_set_src(ble_logo, &draftling_logo);
-    lv_obj_set_pos(ble_logo,
-                   (SCR_W - draftling_logo.header.w) / 2,
-                   (SCR_H / 2 - draftling_logo.header.h) / 2);
+    /* "draftling" title centered near the top */
+    {
+        lv_obj_t *title = lv_label_create(s_scr_ble_prompt);
+        lv_obj_set_width(title, SCR_W);
+        lv_obj_set_style_text_font(title, FONT_18, 0);
+        lv_obj_set_style_text_color(title, lv_color_black(), 0);
+        lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(title, "draftling");
+        lv_obj_set_pos(title, 0, SCR_H / 4 - 12);
+    }
 
     /* Prompt label below center */
     s_ble_prompt_lbl = lv_label_create(s_scr_ble_prompt);
@@ -1019,8 +1040,9 @@ extern "C" void editor_ui_init(void)
         "Searching for BLE keyboard...\nPlease turn on your keyboard");
     lv_obj_set_pos(s_ble_prompt_lbl, 10, SCR_H / 2 + 10);
 
-    /* Register BLE connection status callback */
+    /* Register BLE status callbacks */
     ble_keyboard_set_connect_callback(ble_connect_status_cb);
+    ble_keyboard_set_status_text_callback(ble_status_text_cb);
 
     /* ---- Menu screen ---- */
     s_scr_menu = lv_obj_create(NULL);
