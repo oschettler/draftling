@@ -380,8 +380,18 @@ static void connect_task(void *arg)
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
 
-    esp_hidh_dev_open(s_target_bda, ESP_HID_TRANSPORT_BLE,
-                      s_target_addr_type);
+    esp_hidh_dev_t *dev = esp_hidh_dev_open(s_target_bda,
+                                             ESP_HID_TRANSPORT_BLE,
+                                             s_target_addr_type);
+    if (!dev) {
+        ESP_LOGE(TAG, "esp_hidh_dev_open returned NULL "
+                 "(GATT client may not be registered)");
+        s_connecting = false;
+        /* Retry reconnection after a delay */
+        if (s_reconn_timer) {
+            xTimerStart(s_reconn_timer, 0);
+        }
+    }
     vTaskDelete(NULL);
 }
 
