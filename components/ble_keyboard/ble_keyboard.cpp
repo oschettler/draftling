@@ -28,6 +28,7 @@
 #include <esp_bt.h>
 #include <esp_bt_main.h>
 #include <esp_gap_ble_api.h>
+#include <esp_gattc_api.h>
 #include <esp_hidh.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -65,9 +66,6 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
  * semaphore -- must not run in app_main. */
 #define BLE_INIT_TASK_STACK       8192
 
-/* Delay (ms) after esp_hidh_init() to let its internal event loop
- * task finish registering callbacks before we overwrite them. */
-#define HIDH_INIT_SETTLE_MS       200
 
 /* Maximum number of bonded keyboards stored in NVS */
 #define MAX_BONDED  8
@@ -779,20 +777,29 @@ static void ble_init_task(void *arg)
     ESP_ERROR_CHECK(esp_bluedroid_enable());
     ESP_LOGI(TAG, "Bluedroid enabled");
 
-    /* Initialize HIDH (HID Host) immediately after Bluedroid enable,
-     * before any other BTC-dependent calls.  esp_hidh_init()
-     * internally calls esp_ble_gattc_app_register() which sends a
-     * message to the BTC task and then waits on a semaphore for the
-     * registration callback.  If other messages (e.g. security param
-     * setup) are queued ahead of it, the BTC task may not process the
-     * GATTC registration promptly, causing a hang.  Calling HIDH init
-     * first -- while the BTC queue is empty -- avoids this.
+    /* Register the GATTC callback BEFORE esp_hidh_init().
      *
-     * This matches the ESP-IDF HID host example sequence:
-     *   bluedroid_enable -> hidh_init -> gap_register -> scan
+     * esp_ble_hidh_init() (called internally by esp_hidh_init)
+     * calls esp_ble_gattc_app_register() and then waits on a
+     * semaphore for the ESP_GATTC_REG_EVT callback.  However,
+     * esp_ble_hidh_init() does NOT register the GATTC callback
+     * itself -- it relies on the caller to attach
+     * esp_hidh_gattc_event_handler via
+     * esp_ble_gattc_register_callback() beforehand.
      *
-     * Note: esp_hidh_init() may register its own GAP callback
-     * internally, so we register our GAP callback AFTER this call. */
+     * Without this registration, the GATTC registration event is
+     * never delivered, the semaphore is never signalled, and
+     * esp_hidh_init() blocks forever.
+     *
+     * See esp_hidh_gattc.h and the official ESP-IDF HID host
+     * example (examples/bluetooth/esp_hid_host). */
+    ESP_ERROR_CHECK(
+        esp_ble_gattc_register_callback(esp_hidh_gattc_event_handler));
+    ESP_LOGI(TAG, "GATTC callback registered");
+
+    /* Initialize HIDH (HID Host).  The GATTC callback must already
+     * be registered (above) so that esp_ble_hidh_init can receive
+     * the ESP_GATTC_REG_EVT and unblock. */
     {
         esp_hidh_config_t hidh_cfg = {};
         hidh_cfg.callback = hidh_callback;
@@ -807,11 +814,6 @@ static void ble_init_task(void *arg)
             ESP_LOGI(TAG, "HIDH initialized");
         }
     }
-
-    /* Brief delay so the internal HIDH event-loop task can finish
-     * any asynchronous callback registration before we overwrite
-     * the GAP callback with our own. */
-    vTaskDelay(pdMS_TO_TICKS(HIDH_INIT_SETTLE_MS));
 
     /* Register our GAP callback AFTER HIDH init so it is not
      * overwritten by esp_hidh_init()'s internal registration. */
