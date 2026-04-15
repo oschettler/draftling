@@ -6,9 +6,6 @@
  *
  *  - Waveshare ESP32-S3-RLCD-4.2: wakes via EXT0 on GPIO18 (active-low).
  *    The RLCD is reflective, so screen content is retained visually.
- *  - M5Stack PaperS3: the power button resets the MCU through the PMIC,
- *    so no EXT0 wakeup source is configured.  The e-Paper display also
- *    retains its image while powered off.
  *
  * The editor state lives in PSRAM/heap so it is lost on wake;
  * callers should auto-save before sleep.  The timeout value is persisted
@@ -135,10 +132,6 @@ extern "C" void standby_enter_sleep(void)
     /* Configure GPIO18 as EXT0 wake-up source (wake on low level) */
     ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);
-#else
-    /* M5Stack PaperS3: power button resets via PMIC -- no EXT0 source needed.
-     * The MCU will be fully reset when the user presses the power button. */
-    ESP_LOGI(TAG, "Entering deep sleep (power-button reset to wake)...");
 #endif
 
     esp_deep_sleep_start();

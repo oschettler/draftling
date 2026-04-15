@@ -32,7 +32,6 @@ void     standby_set_timeout(uint32_t seconds);
 /*
  * Enter deep sleep immediately.
  * On Waveshare RLCD: wakes on GPIO18 low.
- * On M5Stack PaperS3: power button resets the MCU.
  * The editor should save any unsaved work before calling this.
  */
 void standby_enter_sleep(void);

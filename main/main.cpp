@@ -22,8 +22,6 @@ extern "C" void app_main(void)
 {
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
     ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-RLCD-4.2");
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-    ESP_LOGI(TAG, "Draftling - M5Stack PaperS3");
 #endif
 
     /* Initialize NVS - required for WiFi and BT */
@@ -43,9 +41,6 @@ extern "C" void app_main(void)
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-    display_init(EPD_MOSI_PIN, EPD_SCK_PIN, EPD_CS_PIN,
-                 EPD_RST_PIN, EPD_BUSY_PIN, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #endif
 
     /* Initialize LVGL */

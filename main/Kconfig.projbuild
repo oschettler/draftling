@@ -13,25 +13,15 @@ config DRAFTLING_MODEL_WAVESHARE_RLCD42
         Waveshare ESP32-S3-RLCD-4.2 board with 400x300 reflective LCD
         and GPIO18 deep-sleep wakeup button.
 
-config DRAFTLING_MODEL_M5STACK_PAPERS3
-    bool "M5Stack PaperS3"
-    depends on IDF_TARGET_ESP32S3
-    help
-        M5Stack PaperS3 with 4.7-inch e-Paper display (960x540)
-        driven by an IT8951 controller.  The on-board power button
-        resets the MCU to wake from deep sleep.
-
 endchoice
 
 config DRAFTLING_DISPLAY_WIDTH
     int
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
-    default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
 
 config DRAFTLING_DISPLAY_HEIGHT
     int
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
-    default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"

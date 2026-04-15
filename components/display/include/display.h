@@ -12,7 +12,6 @@ extern "C" {
  * Parameter mapping depends on the selected hardware model:
  *
  *  Waveshare RLCD:   mosi, sck, dc, cs, rst, width, height
- *  M5Stack PaperS3:  mosi, sck, cs, rst(-1), busy, width, height
  */
 void display_init(int pin_a, int pin_b, int pin_c, int pin_d,
                   int pin_e, int width, int height);
