@@ -89,6 +89,9 @@ static bonded_dev_t s_bonded[MAX_BONDED];
 static int          s_bonded_count = 0;
 static int          s_last_bonded  = -1; /* index into s_bonded */
 
+/* Forward-declare status text callback (full declaration with other callbacks below) */
+static ble_status_text_cb_t s_status_text_cb = NULL;
+
 /* Helper: notify the UI of a human-readable status message */
 static void notify_status(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
@@ -191,7 +194,6 @@ static void bonded_add(const esp_bd_addr_t bda,
 static kb_event_callback_t  s_callback = NULL;
 static ble_passkey_cb_t     s_passkey_cb = NULL;
 static ble_connect_cb_t     s_connect_cb = NULL;
-static ble_status_text_cb_t s_status_text_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
