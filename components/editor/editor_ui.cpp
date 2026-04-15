@@ -354,6 +354,14 @@ static void refresh_file_list(void)
 
     /* Filter to show only .md files and directories */
     lv_obj_clean(s_list_files);
+
+    /* Show a prompt when no BLE keyboard is connected */
+    if (!ble_keyboard_is_connected()) {
+        lv_obj_t *hint = lv_list_add_btn(s_list_files, NULL,
+            "No keyboard connected. Waiting for BLE...");
+        lv_obj_set_style_text_color(hint, lv_color_make(128, 128, 128), 0);
+    }
+
     for (int i = 0; i < s_browser_count; i++) {
         const char *name = s_browser_entries[i].name;
         bool show = s_browser_entries[i].is_dir;
