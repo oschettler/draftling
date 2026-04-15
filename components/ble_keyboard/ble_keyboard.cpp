@@ -197,8 +197,8 @@ static reconn_phase_t s_reconn_phase = RECONN_LAST;
 static int            s_reconn_idx   = 0; /* index for RECONN_KNOWN */
 static TimerHandle_t  s_reconn_timer = NULL;
 
-/* One-shot startup timer: safety net that starts scanning even if
- * SCAN_PARAM_SET_COMPLETE_EVT is lost due to a race condition. */
+/* Periodic startup timer: safety net that re-registers the GAP
+ * callback and retries scanning until connected. */
 static TimerHandle_t  s_startup_timer = NULL;
 
 /* Forward declarations */
