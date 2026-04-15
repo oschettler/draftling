@@ -658,10 +658,24 @@ extern "C" void ble_keyboard_init(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,
                                    &rsp_key, sizeof(rsp_key));
 
+    /* Initialize HID Host (esp_hid component).
+     * Must be called BEFORE esp_ble_gap_set_scan_params() so that
+     * the GATTC client registration (queued inside esp_hidh_init)
+     * is processed by the BTA task before the scan-param-set-complete
+     * event fires and triggers scanning / connection attempts.
+     * Without this ordering the GATT client_if is still 0 when
+     * esp_hidh_dev_open() is called, causing
+     * "bta_gattc_process_api_open Failed, unknown client_if: 0". */
+    esp_hidh_config_t hidh_cfg = {};
+    hidh_cfg.callback = hidh_callback;
+    hidh_cfg.event_stack_size = 4096;
+    ESP_ERROR_CHECK(esp_hidh_init(&hidh_cfg));
+
     /* Register BLE GAP callback */
     esp_ble_gap_register_callback(gap_event_handler);
 
-    /* Set scan parameters */
+    /* Set scan parameters -- triggers async SCAN_PARAM_SET_COMPLETE_EVT
+     * which starts the reconnection / scan sequence. */
     esp_ble_scan_params_t scan_params = {};
     scan_params.scan_type          = BLE_SCAN_TYPE_ACTIVE;
     scan_params.own_addr_type      = BLE_ADDR_TYPE_PUBLIC;
@@ -670,12 +684,6 @@ extern "C" void ble_keyboard_init(void)
     scan_params.scan_window        = 0x0030;  /* 30 ms */
     scan_params.scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE;
     esp_ble_gap_set_scan_params(&scan_params);
-
-    /* Initialize HID Host (esp_hid component) */
-    esp_hidh_config_t hidh_cfg = {};
-    hidh_cfg.callback = hidh_callback;
-    hidh_cfg.event_stack_size = 4096;
-    ESP_ERROR_CHECK(esp_hidh_init(&hidh_cfg));
 
     /* Create scan retry timer (one-shot, 2-second delay) */
     s_scan_timer = xTimerCreate("scan_retry", pdMS_TO_TICKS(2000),
