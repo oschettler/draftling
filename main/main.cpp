@@ -32,10 +32,6 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    /* Initialize SD card */
-    ESP_LOGI(TAG, "Initializing SD card...");
-    sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
-
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
@@ -52,6 +48,17 @@ extern "C" void app_main(void)
     if (lvgl_port_lock(-1)) {
         editor_ui_init();
         lvgl_port_unlock();
+    }
+
+    /* Initialize SD card */
+    ESP_LOGI(TAG, "Initializing SD card...");
+    esp_err_t sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
+    if (sd_ret != ESP_OK) {
+        ESP_LOGE(TAG, "SD card init failed: %s", esp_err_to_name(sd_ret));
+        if (lvgl_port_lock(-1)) {
+            editor_ui_set_status("ERROR: SD card not ready");
+            lvgl_port_unlock();
+        }
     }
 
     /* Initialize Bluetooth keyboard */
