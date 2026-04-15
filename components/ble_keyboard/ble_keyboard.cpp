@@ -184,6 +184,14 @@ static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 static volatile int s_battery_level = -1;  /* -1 = unknown */
 
+/* Active HIDH device handle (valid while connected) */
+static esp_hidh_dev_t *s_hidh_dev = NULL;
+
+/* Flag: when true, the next CLOSE event is caused by an intentional
+ * close-and-reopen cycle after encryption was established, not by
+ * a real disconnect from the keyboard. */
+static volatile bool s_reopen_after_auth = false;
+
 /* Target device address saved during scan for deferred connection */
 static esp_bd_addr_t s_target_bda;
 static esp_ble_addr_type_t s_target_addr_type;
@@ -286,6 +294,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         if (param->open.status == ESP_OK) {
             s_connected  = true;
             s_connecting = false;
+            s_hidh_dev   = param->open.dev;
             const uint8_t *addr = esp_hidh_dev_bda_get(param->open.dev);
             const char *name = esp_hidh_dev_name_get(param->open.dev);
             if (name && name[0]) {
@@ -302,6 +311,24 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                      addr ? addr[0] : 0, addr ? addr[1] : 0,
                      addr ? addr[2] : 0, addr ? addr[3] : 0,
                      addr ? addr[4] : 0, addr ? addr[5] : 0);
+
+            /* Proactively initiate BLE encryption.  HID keyboards
+             * require an encrypted link for notifications to flow.
+             * Without this, CCCD writes during HIDH open may fail
+             * with "insufficient authentication" and the keyboard
+             * will never send input reports.
+             *
+             * If the link is already encrypted (re-connection with
+             * stored bonding keys), this call returns immediately. */
+            if (addr) {
+                esp_bd_addr_t enc_addr;
+                memcpy(enc_addr, addr, sizeof(esp_bd_addr_t));
+                esp_err_t enc_err = esp_ble_set_encryption(
+                    enc_addr, ESP_BLE_SEC_ENCRYPT_MITM);
+                ESP_LOGI(TAG, "Encryption requested: %s",
+                         esp_err_to_name(enc_err));
+            }
+
             if (s_connect_cb) s_connect_cb(true);
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
@@ -316,18 +343,37 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
     case ESP_HIDH_CLOSE_EVENT:
         s_connected  = false;
         s_connecting = false;
-        s_dev_name[0] = '\0';
+        s_hidh_dev   = NULL;
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
-        ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
-        if (s_connect_cb) s_connect_cb(false);
-        /* Reset reconnection to start with last-known device */
-        s_reconn_phase = RECONN_LAST;
-        s_reconn_idx   = 0;
-        start_reconnection();
+
+        if (s_reopen_after_auth) {
+            /* This close was intentional (post-encryption reopen).
+             * Immediately reconnect to re-subscribe HID notifications
+             * over the now-encrypted link.  Do NOT clear the device
+             * name or notify the UI of a disconnect. */
+            s_reopen_after_auth = false;
+            ESP_LOGI(TAG, "HID device closed for re-open after auth");
+            s_reconn_phase = RECONN_LAST;
+            s_reconn_idx   = 0;
+            start_reconnection();
+        } else {
+            s_dev_name[0] = '\0';
+            ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
+            if (s_connect_cb) s_connect_cb(false);
+            /* Reset reconnection to start with last-known device */
+            s_reconn_phase = RECONN_LAST;
+            s_reconn_idx   = 0;
+            start_reconnection();
+        }
         break;
 
     case ESP_HIDH_INPUT_EVENT: {
+        ESP_LOGD(TAG, "INPUT: usage=%d, map=%d, id=%d, len=%d",
+                 (int)param->input.usage,
+                 (int)param->input.map_index,
+                 (int)param->input.report_id,
+                 (int)param->input.length);
         /* Boot keyboard report: 8 bytes (modifier, reserved, keys[6]) */
         if (param->input.usage == ESP_HID_USAGE_KEYBOARD &&
             param->input.length >= 8) {
@@ -343,6 +389,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         break;
 
     default:
+        ESP_LOGI(TAG, "HIDH event: %d", (int)event);
         break;
     }
 }
@@ -708,7 +755,13 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         break;
 
     case ESP_GAP_BLE_SEC_REQ_EVT:
+        ESP_LOGI(TAG, "Security request from peer");
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
+        break;
+
+    case ESP_GAP_BLE_KEY_EVT:
+        ESP_LOGI(TAG, "BLE key exchange, type=%d",
+                 (int)param->ble_security.ble_key.key_type);
         break;
 
     case ESP_GAP_BLE_PASSKEY_NOTIF_EVT: {
@@ -729,6 +782,17 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             /* Dismiss passkey overlay */
             if (s_passkey_cb) {
                 s_passkey_cb(BLE_PASSKEY_DISMISS);
+            }
+            /* Encryption is now established.  The initial HIDH open
+             * may have failed to subscribe to HID notifications
+             * because CCCD writes required encryption that was not
+             * yet available.  Close and reopen the device so the
+             * HIDH library re-discovers services and writes CCCDs
+             * over the encrypted link. */
+            if (s_connected && s_hidh_dev) {
+                ESP_LOGI(TAG, "Re-opening HID device over encrypted link");
+                s_reopen_after_auth = true;
+                esp_hidh_dev_close(s_hidh_dev);
             }
         } else {
             ESP_LOGE(TAG, "BLE authentication failed, reason: 0x%x",
