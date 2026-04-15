@@ -91,6 +91,10 @@ static bool      s_settings_open = false;
 static lv_obj_t *s_passkey_panel = NULL;
 static lv_obj_t *s_passkey_label = NULL;
 
+/* Escape-save-prompt: when true the user has been warned about unsaved
+ * changes and a second Esc will discard + close. */
+static bool s_esc_pending = false;
+
 /* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
 static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
@@ -624,6 +628,11 @@ static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
 
+    /* Clear the escape-save-prompt on any key other than Esc */
+    if (ev->keycode != KB_KEY_ESCAPE && s_esc_pending) {
+        s_esc_pending = false;
+    }
+
     /* F1 opens the menu */
     if (ev->keycode == KB_KEY_F1) {
         show_menu();
@@ -689,7 +698,23 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_DELETE:    editor_delete_forward(); break;
     case KB_KEY_ENTER:     editor_insert_newline(); break;
     case KB_KEY_TAB:       editor_insert_text("    ", 4); break;
-    case KB_KEY_ESCAPE:    editor_ui_show_file_browser(); return;
+    case KB_KEY_ESCAPE:
+        if (editor_is_modified()) {
+            if (s_esc_pending) {
+                /* Second Esc -- discard and close */
+                s_esc_pending = false;
+                editor_ui_show_file_browser();
+                return;
+            }
+            /* First Esc -- warn the user */
+            s_esc_pending = true;
+            editor_ui_set_status("Unsaved! Ctrl+S:Save  Esc:Discard");
+        } else {
+            s_esc_pending = false;
+            editor_ui_show_file_browser();
+            return;
+        }
+        break;
     default: {
         /* Use keyboard layout to translate keycode to UTF-8 */
         const char *text = kb_layout_translate(ev->keycode, ev->modifier);

@@ -268,7 +268,7 @@ static void dispatch_key(uint8_t modifier, uint8_t keycode, bool pressed)
     ev.keycode   = keycode;
     ev.character = 0;
     ev.pressed   = pressed;
-    ESP_LOGI(TAG, "Key %s: kc=0x%02x mod=0x%02x",
+    ESP_LOGD(TAG, "Key %s: kc=0x%02x mod=0x%02x",
              pressed ? "DOWN" : "UP", keycode, modifier);
     s_callback(&ev);
 }
@@ -361,7 +361,7 @@ static void process_keyboard_report(const uint8_t *data, int len,
             pos += snprintf(hex + pos, sizeof(hex) - (size_t)pos,
                             "%02x ", data[i]);
         }
-        ESP_LOGI(TAG, "Report (%d bytes, id=%d): %s", len, report_id, hex);
+        ESP_LOGD(TAG, "Report (%d bytes, id=%d): %s", len, report_id, hex);
     }
 
     /* Determine report format.

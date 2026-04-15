@@ -24,25 +24,4 @@ config KB_LAYOUT_ENABLE_FR
     help
         Enable the French AZERTY keyboard layout with accents.
 
-config KB_LAYOUT_ENABLE_KO
-    bool "Korean (Dubeolsik)"
-    default n
-    help
-        Enable the Korean Dubeolsik keyboard layout.
-        Maps keys to Hangul Jamo characters.
-
-config KB_LAYOUT_ENABLE_JA
-    bool "Japanese (Kana)"
-    default n
-    help
-        Enable the Japanese Kana keyboard layout.
-        Maps keys to Hiragana characters (JIS kana input).
-
-config KB_LAYOUT_ENABLE_ZH
-    bool "Chinese (Zhuyin/Bopomofo)"
-    default n
-    help
-        Enable the Chinese Zhuyin (Bopomofo) keyboard layout.
-        Maps keys to Bopomofo phonetic symbols.
-
 endmenu
