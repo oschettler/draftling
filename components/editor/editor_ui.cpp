@@ -868,7 +868,13 @@ static void passkey_display_cb(uint32_t passkey)
 
 static void ble_connect_status_cb(bool connected)
 {
-    if (!lvgl_port_lock(100)) return;
+    ESP_LOGI("EditorUI", "BLE connect status: %s",
+             connected ? "CONNECTED" : "DISCONNECTED");
+
+    if (!lvgl_port_lock(500)) {
+        ESP_LOGW("EditorUI", "LVGL lock timeout in connect_status_cb");
+        return;
+    }
 
     if (connected) {
         /* Keyboard just connected -- if we are on the BLE prompt screen,

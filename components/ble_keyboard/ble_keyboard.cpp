@@ -182,6 +182,9 @@ static volatile bool s_scan_params_ready = false;
 static volatile bool s_hidh_ready = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
+/* Previous full report buffer for NKRO bitmap comparison */
+static uint8_t s_prev_report[32] = {0};
+static int     s_prev_report_len = 0;
 static volatile int s_battery_level = -1;  /* -1 = unknown */
 
 /* Active HIDH device handle (valid while connected) */
@@ -238,10 +241,24 @@ static bool key_in_report(uint8_t key, const uint8_t *keys, int count)
     return false;
 }
 
-static void process_keyboard_report(const uint8_t *data, int len)
+/* Dispatch a single key event to the registered callback */
+static void dispatch_key(uint8_t modifier, uint8_t keycode, bool pressed)
 {
-    if (len < 8 || !s_callback) return;
+    if (!s_callback) return;
+    kb_event_t ev = {};
+    ev.modifier  = modifier;
+    ev.keycode   = keycode;
+    ev.character = 0;
+    ev.pressed   = pressed;
+    ESP_LOGI(TAG, "Key %s: kc=0x%02x mod=0x%02x",
+             pressed ? "DOWN" : "UP", keycode, modifier);
+    s_callback(&ev);
+}
 
+/* Standard boot-protocol keyboard report: 8+ bytes
+ * [0] modifier, [1] reserved, [2..7] up to 6 keycodes */
+static void process_boot_report(const uint8_t *data, int len)
+{
     uint8_t modifier = data[0];
     const uint8_t *keys = &data[2]; /* keys[0..5] */
 
@@ -250,12 +267,7 @@ static void process_keyboard_report(const uint8_t *data, int len)
         uint8_t kc = keys[i];
         if (kc == 0) continue;
         if (!key_in_report(kc, s_prev_keys, 6)) {
-            kb_event_t ev = {};
-            ev.modifier  = modifier;
-            ev.keycode   = kc;
-            ev.character = 0;
-            ev.pressed   = true;
-            s_callback(&ev);
+            dispatch_key(modifier, kc, true);
         }
     }
 
@@ -264,16 +276,110 @@ static void process_keyboard_report(const uint8_t *data, int len)
         uint8_t kc = s_prev_keys[i];
         if (kc == 0) continue;
         if (!key_in_report(kc, keys, 6)) {
-            kb_event_t ev = {};
-            ev.modifier  = modifier;
-            ev.keycode   = kc;
-            ev.character = 0;
-            ev.pressed   = false;
-            s_callback(&ev);
+            dispatch_key(modifier, kc, false);
         }
     }
 
     memcpy(s_prev_keys, keys, 6);
+}
+
+/* NKRO bitmap keyboard report: modifier + N bitmap bytes.
+ * Each bit in the bitmap represents a keycode (bit 0 of byte 1 =
+ * keycode 0, bit 7 of byte 1 = keycode 7, etc.).
+ * Compare with previous bitmap to detect press/release. */
+static void process_nkro_report(const uint8_t *data, int len)
+{
+    uint8_t modifier = data[0];
+    /* Bitmap bytes start at data[1], up to data[len-1] */
+    int bm_len = len - 1;
+    const uint8_t *bm = &data[1];
+
+    /* Previous bitmap starts at s_prev_report[1] */
+    int prev_bm_len = s_prev_report_len > 0 ? s_prev_report_len - 1 : 0;
+    const uint8_t *prev_bm = &s_prev_report[1];
+
+    /* Scan for changed bits */
+    int max_bm = bm_len > prev_bm_len ? bm_len : prev_bm_len;
+    if (max_bm > 30) max_bm = 30;  /* safety cap: 240 keycodes */
+
+    for (int i = 0; i < max_bm; i++) {
+        uint8_t cur  = (i < bm_len)     ? bm[i] : 0;
+        uint8_t prev = (i < prev_bm_len) ? prev_bm[i] : 0;
+        uint8_t diff = cur ^ prev;
+        if (diff == 0) continue;
+
+        for (int bit = 0; bit < 8; bit++) {
+            if (diff & (1 << bit)) {
+                uint8_t keycode = (uint8_t)(i * 8 + bit);
+                if (keycode < 4) continue; /* skip reserved keycodes */
+                bool pressed = (cur & (1 << bit)) != 0;
+                dispatch_key(modifier, keycode, pressed);
+            }
+        }
+    }
+
+    /* Save current report for next comparison */
+    int save_len = len;
+    if (save_len > (int)sizeof(s_prev_report))
+        save_len = (int)sizeof(s_prev_report);
+    memcpy(s_prev_report, data, (size_t)save_len);
+    s_prev_report_len = save_len;
+}
+
+static void process_keyboard_report(const uint8_t *data, int len,
+                                    uint8_t report_id)
+{
+    if (len < 3 || !s_callback) return;
+
+    /* Log raw report bytes for diagnosis */
+    {
+        char hex[96];
+        int pos = 0;
+        int dump_len = len > 30 ? 30 : len;
+        for (int i = 0; i < dump_len && pos < (int)sizeof(hex) - 4; i++) {
+            pos += snprintf(hex + pos, sizeof(hex) - (size_t)pos,
+                            "%02x ", data[i]);
+        }
+        ESP_LOGI(TAG, "Report (%d bytes, id=%d): %s", len, report_id, hex);
+    }
+
+    /* Determine report format.
+     *
+     * Standard boot-protocol keyboard: exactly 8 bytes.
+     *   [0]=modifier  [1]=reserved(0)  [2..7]=keycodes
+     *
+     * Some keyboards prepend the report ID as the first data byte.
+     *   [0]=report_id  [1]=modifier  [2]=reserved(0)  [3..8]=keycodes
+     *   Total: 9+ bytes with data[0]==report_id.
+     *
+     * NKRO (N-Key Rollover) bitmap: typically >8 bytes.
+     *   [0]=modifier  [1..N]=bitmap where each bit = one keycode.
+     *
+     * Detection order:
+     * 1. Exactly 8 bytes -> boot protocol
+     * 2. >8 bytes, data[0]==report_id, data[2]==0 -> report-ID prepended
+     *    boot protocol (strip first byte, parse remaining as boot)
+     * 3. Everything else -> NKRO bitmap */
+
+    if (len == 8) {
+        ESP_LOGD(TAG, "Boot protocol (8 bytes)");
+        process_boot_report(data, len);
+        return;
+    }
+
+    /* Check for report-ID prepended boot protocol:
+     * data[0] matches report_id, and after stripping it we get
+     * a plausible boot report (data[2] == 0 is the reserved byte). */
+    if (len >= 9 && report_id > 0 && data[0] == report_id && data[2] == 0) {
+        ESP_LOGD(TAG, "Boot protocol with report ID prefix (%d bytes)",
+                 len);
+        process_boot_report(data + 1, len - 1);
+        return;
+    }
+
+    /* NKRO bitmap format */
+    ESP_LOGD(TAG, "NKRO bitmap (%d bytes)", len);
+    process_nkro_report(data, len);
 }
 
 /* ---- Unified HID Host callback ---- */
@@ -341,6 +447,8 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_hidh_dev   = NULL;
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
+        memset(s_prev_report, 0, sizeof(s_prev_report));
+        s_prev_report_len = 0;
         s_dev_name[0] = '\0';
         ESP_LOGI(TAG, "HID device disconnected, reconnecting...");
         if (s_connect_cb) s_connect_cb(false);
@@ -356,11 +464,14 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                  (int)param->input.map_index,
                  (int)param->input.report_id,
                  (int)param->input.length);
-        /* Boot keyboard report: 8 bytes (modifier, reserved, keys[6]) */
+        /* Keyboard report: standard boot protocol (8 bytes) or
+         * NKRO bitmap (variable length, typically >8 bytes).
+         * process_keyboard_report handles both formats. */
         if (param->input.usage == ESP_HID_USAGE_KEYBOARD &&
-            param->input.length >= 8) {
+            param->input.length >= 3) {
             process_keyboard_report(param->input.data,
-                                    (int)param->input.length);
+                                    (int)param->input.length,
+                                    (uint8_t)param->input.report_id);
         }
         break;
     }
