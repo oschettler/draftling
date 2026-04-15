@@ -195,6 +195,18 @@ static lv_style_t *style_for_type(md_line_type_t type)
     }
 }
 
+/* Return the monospace cell width (in pixels) for a given Departure Mono
+ * font size.  The values are the advance widths stored in the generated
+ * font data, divided by 16 and rounded to the nearest integer (LVGL
+ * stores advances in 1/16-px units). */
+static int char_width_for_font(const lv_font_t *font)
+{
+    if (font == FONT_18) return 11;   /* adv_w 183 / 16 = 11.4 */
+    if (font == FONT_16) return 10;   /* adv_w 163 / 16 = 10.2 */
+    if (font == FONT_14) return 9;    /* adv_w 143 / 16 = 8.9  */
+    return CHAR_W;                    /* FONT_11: adv_w 112 / 16 = 7.0 */
+}
+
 extern "C" void editor_ui_refresh(void)
 {
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
@@ -224,9 +236,16 @@ extern "C" void editor_ui_refresh(void)
 
     /* Render visible lines */
     char line_buf[256];
+    int y_pos = 0;       /* running y position in editor content area */
+    int cur_y = -1;      /* cursor y position (set when cursor line is rendered) */
+    int cur_x = -1;      /* cursor x position */
+    int cur_h = LINE_H;  /* cursor height (matches font of cursor line) */
+    int cur_line, cur_col;
+    editor_get_cursor_pos(&cur_line, &cur_col);
+
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
         int line_idx = scroll + i;
-        if (line_idx >= total) {
+        if (line_idx >= total || y_pos >= EDITOR_H) {
             if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
             continue;
         }
@@ -266,7 +285,7 @@ extern "C" void editor_ui_refresh(void)
         if (!s_line_labels[i]) {
             s_line_labels[i] = lv_label_create(s_cont_edit);
             lv_obj_set_width(s_line_labels[i], SCR_W - 4);
-            lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_CLIP);
+            lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
         }
         lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_style_all(s_line_labels[i]);
@@ -280,15 +299,53 @@ extern "C" void editor_ui_refresh(void)
         memcpy(tmp, disp_text, clen);
         tmp[clen] = '\0';
         lv_label_set_text(s_line_labels[i], tmp);
-        lv_obj_set_pos(s_line_labels[i], 2, i * LINE_H);
+        lv_obj_set_pos(s_line_labels[i], 2, y_pos);
+
+        /* Get the font for this line to compute correct char width */
+        const lv_font_t *line_font = lv_obj_get_style_text_font(
+                                        s_line_labels[i], LV_PART_MAIN);
+        int line_char_w = char_width_for_font(line_font);
+        int line_h = lv_font_get_line_height(line_font ? line_font : FONT_11);
+
+        /* Determine actual rendered height (may be taller if text wraps) */
+        lv_obj_update_layout(s_line_labels[i]);
+        int rendered_h = lv_obj_get_height(s_line_labels[i]);
+        if (rendered_h < line_h) rendered_h = line_h;
+
+        /* If this is the cursor line, compute its pixel position.
+         * For headings, md_parse_line strips the "# " prefix from content,
+         * so the cursor column (which counts from the raw line start) needs
+         * to be adjusted. */
+        if (line_idx == cur_line) {
+            int col_in_display = cur_col;
+            /* content pointer offset from raw line start, in UTF-8 chars */
+            if (mi.content > lt) {
+                int prefix_chars = 0;
+                for (const char *pp = lt; pp < mi.content; pp++) {
+                    if ((*pp & 0xC0) != 0x80) prefix_chars++;
+                }
+                col_in_display -= prefix_chars;
+                if (col_in_display < 0) col_in_display = 0;
+            }
+
+            /* Account for wrapping: figure out the visual row and x offset */
+            int chars_per_row = (SCR_W - 4) / line_char_w;
+            if (chars_per_row < 1) chars_per_row = 1;
+            int wrap_row = col_in_display / chars_per_row;
+            int wrap_col = col_in_display % chars_per_row;
+
+            cur_x = 2 + wrap_col * line_char_w;
+            cur_y = y_pos + wrap_row * line_h;
+            cur_h = line_h;
+        }
+
+        y_pos += rendered_h;
     }
 
     /* Update cursor position */
-    int cur_line, cur_col;
-    editor_get_cursor_pos(&cur_line, &cur_col);
-    int vis_line = cur_line - scroll;
-    if (vis_line >= 0 && vis_line < VISIBLE_LINES && s_cursor) {
-        lv_obj_set_pos(s_cursor, 2 + cur_col * CHAR_W, vis_line * LINE_H);
+    if (cur_y >= 0 && cur_y < EDITOR_H && s_cursor) {
+        lv_obj_set_size(s_cursor, 2, cur_h);
+        lv_obj_set_pos(s_cursor, cur_x, cur_y);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         s_cursor_visible = true;
     } else if (s_cursor) {
@@ -344,7 +401,7 @@ static void refresh_file_list(void)
 
 extern "C" void editor_ui_show_file_browser(void)
 {
-    editor_set_mode(EDITOR_MODE_NORMAL);
+    editor_close_file();
     refresh_file_list();
     lv_scr_load(s_scr_browser);
 }
@@ -643,15 +700,46 @@ static void handle_editor_key(const kb_event_t *ev)
 
     /* Ctrl shortcuts */
     if (ctrl) {
-        /* Translate keycode without Ctrl modifier to get the base
-         * character.  ev->character is always 0 because ble_keyboard
-         * does not fill it -- all translation goes through kb_layout. */
-        uint8_t base_mod = ev->modifier &
-            (uint8_t)~(KB_MOD_LCTRL | KB_MOD_RCTRL);
-        const char *ctrl_t = kb_layout_translate(ev->keycode, base_mod);
-        char ch = (ctrl_t && ctrl_t[0] && !ctrl_t[1]) ? ctrl_t[0] : 0;
+        /* Interpret Ctrl shortcuts by physical key position (HID keycode),
+         * NOT by the current layout translation.  This ensures that
+         * Ctrl+S, Ctrl+L, etc. work regardless of the active layout.
+         * HID keycodes 0x04..0x1D map to a..z. */
+        char ch = 0;
+        if (ev->keycode >= 0x04 && ev->keycode <= 0x1D) {
+            ch = 'a' + (ev->keycode - 0x04);
+        }
         switch (ch) {
-        case 's': editor_save_file(); editor_ui_set_status("Saved"); break;
+        case 's':
+            if (editor_get_file_path() == NULL) {
+                /* No filename yet -- generate a default name and save */
+                char path[256];
+                const char *mp = sd_card_get_mount_point();
+                /* Find a unique filename draft_NNN.md */
+                for (int seq = 1; seq < 1000; seq++) {
+                    snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
+                    size_t dummy_len = 0;
+                    char *dummy = NULL;
+                    if (sd_card_read_file(path, &dummy, &dummy_len) != ESP_OK) {
+                        /* File does not exist -- use this name */
+                        break;
+                    }
+                    free(dummy);
+                }
+                esp_err_t err = editor_save_file_as(path);
+                if (err == ESP_OK) {
+                    char msg[80];
+                    const char *slash = strrchr(path, '/');
+                    snprintf(msg, sizeof(msg), "Saved as %s",
+                             slash ? slash + 1 : path);
+                    editor_ui_set_status(msg);
+                } else {
+                    editor_ui_set_status("Save failed!");
+                }
+            } else {
+                editor_save_file();
+                editor_ui_set_status("Saved");
+            }
+            break;
         case 'n': editor_new_file(); break;
         case 'o': editor_ui_show_file_browser(); return;
         case 'g':
@@ -1049,6 +1137,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_border_width(s_menu_list, 0, 0);
     lv_obj_set_style_radius(s_menu_list, 0, 0);
     lv_obj_set_style_pad_all(s_menu_list, 0, 0);
+    lv_obj_set_style_text_font(s_menu_list, FONT_14, 0);
 
     /* ---- Settings screen ---- */
     s_scr_settings = lv_obj_create(NULL);
@@ -1067,6 +1156,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_border_width(s_settings_list, 0, 0);
     lv_obj_set_style_radius(s_settings_list, 0, 0);
     lv_obj_set_style_pad_all(s_settings_list, 0, 0);
+    lv_obj_set_style_text_font(s_settings_list, FONT_14, 0);
 
     /* ---- Passkey overlay (shown on the editor screen) ---- */
     s_passkey_panel = lv_obj_create(s_scr);

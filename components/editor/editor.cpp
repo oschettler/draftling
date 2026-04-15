@@ -140,7 +140,11 @@ extern "C" void editor_get_cursor_pos(int *line, int *col)
     int l = 0, c = 0;
     for (size_t i = 0; i < s_gap_start; i++) {
         if (s_buf[i] == '\n') { l++; c = 0; }
-        else { c++; }
+        else {
+            /* Count only the first byte of each UTF-8 character.
+             * Continuation bytes have the form 10xxxxxx (0x80..0xBF). */
+            if ((s_buf[i] & 0xC0) != 0x80) c++;
+        }
     }
     if (line) *line = l;
     if (col)  *col  = c;
