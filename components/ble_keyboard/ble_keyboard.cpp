@@ -181,6 +181,7 @@ static ble_connect_cb_t     s_connect_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
+static volatile bool s_hidh_ready = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 static volatile int s_battery_level = -1;  /* -1 = unknown */
@@ -407,6 +408,41 @@ static bool adv_is_hid_keyboard(uint8_t *adv_data, uint8_t adv_len)
     return false;
 }
 
+/* ---- Lazy HIDH initialization ---- */
+
+/* esp_hidh_init() internally calls esp_ble_gattc_app_register()
+ * which blocks on a BTC semaphore.  On some ESP-IDF / ESP32-S3
+ * configurations this call blocks indefinitely when invoked during
+ * early startup.  We therefore defer HIDH initialization until the
+ * first connection attempt so that BLE scanning can proceed
+ * unimpeded.  This function is safe to call multiple times -- it
+ * does nothing if HIDH is already initialized.
+ *
+ * After HIDH init we re-register our GAP callback because
+ * esp_hidh_init() registers its own internally (overwriting ours). */
+static void ensure_hidh_ready(void)
+{
+    if (s_hidh_ready) return;
+
+    ESP_LOGI(TAG, "Initializing HIDH (deferred)...");
+    esp_hidh_config_t hidh_cfg = {};
+    hidh_cfg.callback = hidh_callback;
+    hidh_cfg.event_stack_size = 4096;
+    esp_err_t err = esp_hidh_init(&hidh_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_hidh_init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "HIDH initialized");
+    s_hidh_ready = true;
+
+    /* esp_hidh_init() may overwrite our GAP callback.  Give its
+     * internal event-loop task time to finish, then re-register. */
+    vTaskDelay(pdMS_TO_TICKS(HIDH_INIT_SETTLE_MS));
+    esp_ble_gap_register_callback(gap_event_handler);
+    ESP_LOGI(TAG, "GAP callback re-registered after HIDH init");
+}
+
 /* ---- Connect task (runs esp_hidh_dev_open which blocks) ---- */
 
 /* Maximum number of open-connection retries.  esp_hidh_dev_open()
@@ -423,6 +459,20 @@ static void connect_task(void *arg)
              s_dev_name,
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
+
+    /* Lazy-init HIDH on first connection attempt.  This may block
+     * for a while but we are in our own task so scanning is
+     * unaffected. */
+    ensure_hidh_ready();
+    if (!s_hidh_ready) {
+        ESP_LOGE(TAG, "HIDH not available, cannot connect");
+        s_connecting = false;
+        if (s_reconn_timer) {
+            xTimerStart(s_reconn_timer, 0);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
 
     esp_hidh_dev_t *dev = NULL;
     for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
@@ -782,37 +832,12 @@ static void ble_init_task(void *arg)
                                    &rsp_key, sizeof(rsp_key));
     ESP_LOGI(TAG, "Security parameters configured");
 
-    /* Initialize the HID Host component BEFORE registering our GAP
-     * callback.  esp_hidh_init() internally calls
-     * esp_ble_gattc_app_register() which blocks on a BTC semaphore.
-     * Running in this dedicated task (not app_main) prevents the
-     * blocking call from stalling the rest of the system.
-     *
-     * We then register OUR GAP callback immediately after, which
-     * overwrites HIDH's.  This is fine because:
-     *   - HIDH uses GATTC callbacks (not GAP) for connection/service
-     *     discovery, so GATTC is unaffected.
-     *   - Our GAP handler processes all GAP events we need (scan
-     *     results, security/passkey, auth completion). */
-    esp_hidh_config_t hidh_cfg = {};
-    hidh_cfg.callback = hidh_callback;
-    hidh_cfg.event_stack_size = 4096;
-    esp_err_t hidh_err = esp_hidh_init(&hidh_cfg);
-    if (hidh_err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_hidh_init failed: %s",
-                 esp_err_to_name(hidh_err));
-    } else {
-        ESP_LOGI(TAG, "HIDH initialized");
-    }
-
-    /* esp_hidh_init() creates an internal event loop task that may
-     * asynchronously register its own GAP callback.  Give that task
-     * time to finish its setup before we overwrite the callback. */
-    vTaskDelay(pdMS_TO_TICKS(HIDH_INIT_SETTLE_MS));
-
-    /* Register our GAP callback.  This overwrites the one that
-     * esp_hidh_init() registered internally, giving us full control
-     * over scan and security events. */
+    /* Register our GAP callback immediately so we can start scanning.
+     * HIDH initialization (esp_hidh_init) is deferred to the first
+     * connection attempt because its internal call to
+     * esp_ble_gattc_app_register() blocks indefinitely on some
+     * ESP32-S3 / ESP-IDF configurations.  Scanning only needs the
+     * GAP callback and scan parameters, not HIDH. */
     esp_err_t gap_err = esp_ble_gap_register_callback(gap_event_handler);
     if (gap_err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gap_register_callback failed: %s",
