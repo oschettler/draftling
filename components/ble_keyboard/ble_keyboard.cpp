@@ -38,8 +38,16 @@ static const char *TAG = "BLEKeyboard";
 
 /* BLE HID service UUID */
 #define BLE_SVC_HID_UUID16         0x1812
-/* BLE appearance: keyboard */
+/* BLE appearance values -- HID category */
+#define BLE_APPEARANCE_HID_GENERIC 0x03C0
 #define BLE_APPEARANCE_KEYBOARD    0x03C1
+
+/* 128-bit BLE base UUID for HID service (little-endian):
+ * 00001812-0000-1000-8000-00805f9b34fb */
+static const uint8_t BLE_SVC_HID_UUID128[16] = {
+    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80,
+    0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00
+};
 
 /* Scan duration in seconds */
 #define SCAN_DURATION_SEC          30
@@ -303,35 +311,59 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
 
 /* ---- Advertisement data parser ---- */
 
+/* Check whether a 16-bit UUID list (AD type) contains the HID service UUID */
+static bool adv_has_hid_uuid16(uint8_t *adv_data, uint8_t adv_len,
+                                uint8_t ad_type)
+{
+    uint8_t field_len = 0;
+    uint8_t *field = esp_ble_resolve_adv_data(adv_data, ad_type, &field_len);
+    for (int i = 0; field && i + 1 < (int)field_len; i += 2) {
+        uint16_t uuid = (uint16_t)field[i] | ((uint16_t)field[i + 1] << 8);
+        if (uuid == BLE_SVC_HID_UUID16) return true;
+    }
+    return false;
+}
+
+/* Check whether a 128-bit UUID list (AD type) contains the HID service UUID */
+static bool adv_has_hid_uuid128(uint8_t *adv_data, uint8_t adv_len,
+                                 uint8_t ad_type)
+{
+    uint8_t field_len = 0;
+    uint8_t *field = esp_ble_resolve_adv_data(adv_data, ad_type, &field_len);
+    for (int i = 0; field && i + 15 < (int)field_len; i += 16) {
+        if (memcmp(&field[i], BLE_SVC_HID_UUID128, 16) == 0) return true;
+    }
+    return false;
+}
+
 static bool adv_is_hid_keyboard(uint8_t *adv_data, uint8_t adv_len)
 {
     uint8_t *field;
     uint8_t field_len;
 
-    /* Check appearance for keyboard (0x03C1) */
+    /* Check appearance for keyboard (0x03C1) or generic HID (0x03C0) */
     field = esp_ble_resolve_adv_data(adv_data,
                                      ESP_BLE_AD_TYPE_APPEARANCE, &field_len);
     if (field && field_len >= 2) {
         uint16_t appearance = (uint16_t)field[0] |
                               ((uint16_t)field[1] << 8);
-        if (appearance == BLE_APPEARANCE_KEYBOARD) return true;
+        if (appearance == BLE_APPEARANCE_KEYBOARD ||
+            appearance == BLE_APPEARANCE_HID_GENERIC) return true;
     }
 
-    /* Check complete 16-bit service UUID list for HID (0x1812) */
-    field = esp_ble_resolve_adv_data(adv_data,
-                                     ESP_BLE_AD_TYPE_16SRV_CMPL, &field_len);
-    for (int i = 0; field && i + 1 < (int)field_len; i += 2) {
-        uint16_t uuid = (uint16_t)field[i] | ((uint16_t)field[i + 1] << 8);
-        if (uuid == BLE_SVC_HID_UUID16) return true;
-    }
+    /* Check 16-bit service UUID lists (complete, incomplete, solicitation) */
+    if (adv_has_hid_uuid16(adv_data, adv_len,
+                           ESP_BLE_AD_TYPE_16SRV_CMPL)) return true;
+    if (adv_has_hid_uuid16(adv_data, adv_len,
+                           ESP_BLE_AD_TYPE_16SRV_PART)) return true;
+    if (adv_has_hid_uuid16(adv_data, adv_len,
+                           ESP_BLE_AD_TYPE_SOL_SRV_UUID)) return true;
 
-    /* Check incomplete 16-bit service UUID list */
-    field = esp_ble_resolve_adv_data(adv_data,
-                                     ESP_BLE_AD_TYPE_16SRV_PART, &field_len);
-    for (int i = 0; field && i + 1 < (int)field_len; i += 2) {
-        uint16_t uuid = (uint16_t)field[i] | ((uint16_t)field[i + 1] << 8);
-        if (uuid == BLE_SVC_HID_UUID16) return true;
-    }
+    /* Check 128-bit service UUID lists (complete, incomplete) */
+    if (adv_has_hid_uuid128(adv_data, adv_len,
+                            ESP_BLE_AD_TYPE_128SRV_CMPL)) return true;
+    if (adv_has_hid_uuid128(adv_data, adv_len,
+                            ESP_BLE_AD_TYPE_128SRV_PART)) return true;
 
     return false;
 }
@@ -453,22 +485,29 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             if (s_connected || s_connecting) break;
 
             uint8_t total_len = scan->adv_data_len + scan->scan_rsp_len;
+
+            /* Extract device name for logging */
+            char tmp_name[64] = "";
+            uint8_t name_len = 0;
+            uint8_t *name = esp_ble_resolve_adv_data(
+                scan->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
+            if (!name) {
+                name = esp_ble_resolve_adv_data(
+                    scan->ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT,
+                    &name_len);
+            }
+            if (name && name_len > 0) {
+                int len = (int)name_len;
+                if (len > (int)sizeof(tmp_name) - 1)
+                    len = (int)sizeof(tmp_name) - 1;
+                memcpy(tmp_name, name, (size_t)len);
+                tmp_name[len] = '\0';
+            }
+
             if (adv_is_hid_keyboard(scan->ble_adv, total_len)) {
-                /* Extract device name from advertisement */
-                uint8_t name_len = 0;
-                uint8_t *name = esp_ble_resolve_adv_data(
-                    scan->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
-                if (!name) {
-                    name = esp_ble_resolve_adv_data(
-                        scan->ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT,
-                        &name_len);
-                }
-                if (name && name_len > 0) {
-                    int len = (int)name_len;
-                    if (len > (int)sizeof(s_dev_name) - 1)
-                        len = (int)sizeof(s_dev_name) - 1;
-                    memcpy(s_dev_name, name, (size_t)len);
-                    s_dev_name[len] = '\0';
+                if (tmp_name[0]) {
+                    strncpy(s_dev_name, tmp_name, sizeof(s_dev_name) - 1);
+                    s_dev_name[sizeof(s_dev_name) - 1] = '\0';
                 }
 
                 /* Prioritize already-bonded devices during scan */
@@ -492,6 +531,15 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                 memcpy(s_target_bda, scan->bda, sizeof(esp_bd_addr_t));
                 s_target_addr_type = scan->ble_addr_type;
                 esp_ble_gap_stop_scanning();
+            } else {
+                /* Log non-HID devices at DEBUG level for diagnostics */
+                ESP_LOGD(TAG, "Skipping non-HID device: \"%s\" "
+                         "(%02x:%02x:%02x:%02x:%02x:%02x) "
+                         "adv=%d rsp=%d",
+                         tmp_name,
+                         scan->bda[0], scan->bda[1], scan->bda[2],
+                         scan->bda[3], scan->bda[4], scan->bda[5],
+                         scan->adv_data_len, scan->scan_rsp_len);
             }
         } else if (scan->search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
             /* Scan complete -- retry after a delay if not connected */
@@ -602,7 +650,7 @@ extern "C" void ble_keyboard_init(void)
     scan_params.scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL;
     scan_params.scan_interval      = 0x0060;  /* 60 ms */
     scan_params.scan_window        = 0x0030;  /* 30 ms */
-    scan_params.scan_duplicate     = BLE_SCAN_DUPLICATE_ENABLE;
+    scan_params.scan_duplicate     = BLE_SCAN_DUPLICATE_DISABLE;
     esp_ble_gap_set_scan_params(&scan_params);
 
     /* Initialize HID Host (esp_hid component) */
