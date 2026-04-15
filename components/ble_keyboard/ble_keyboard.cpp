@@ -56,10 +56,13 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
  * starts or a connection is established. */
 #define STARTUP_SAFETY_TIMER_MS   3000
 
-/* Stack size for the BLE connect task.  Needs room for deferred
- * esp_hidh_init() plus esp_hidh_dev_open() which both use
- * significant stack space. */
+/* Stack size for the BLE connect task.  Needs room for
+ * esp_hidh_dev_open() which uses significant stack space. */
 #define CONNECT_TASK_STACK        6144
+
+/* Delay (ms) after esp_hidh_init() to let its internal event loop
+ * task finish registering callbacks before we overwrite them. */
+#define HIDH_INIT_SETTLE_MS       200
 
 /* Maximum number of bonded keyboards stored in NVS */
 #define MAX_BONDED  8
@@ -790,7 +793,7 @@ extern "C" void ble_keyboard_init(void)
     /* esp_hidh_init() creates an internal event loop task that may
      * asynchronously register its own GAP callback.  Give that task
      * time to finish its setup before we overwrite the callback. */
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(HIDH_INIT_SETTLE_MS));
 
     /* Register our GAP callback.  This overwrites the one that
      * esp_hidh_init() registered internally, giving us full control
