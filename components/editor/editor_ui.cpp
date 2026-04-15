@@ -961,8 +961,8 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_color(s_img_logo, lv_color_make(0x80, 0x80, 0x80), 0);
     lv_obj_set_style_text_align(s_img_logo, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_img_logo, "draftling");
-    /* Center vertically: FONT_18 is ~18px tall */
-    lv_obj_set_pos(s_img_logo, 0, (EDITOR_H - 18) / 2);
+    lv_obj_set_pos(s_img_logo, 0,
+                   (EDITOR_H - lv_font_get_line_height(FONT_18)) / 2);
     lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
     /* Cursor (thin vertical bar) */
@@ -1027,7 +1027,8 @@ extern "C" void editor_ui_init(void)
         lv_obj_set_style_text_color(title, lv_color_black(), 0);
         lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_text(title, "draftling");
-        lv_obj_set_pos(title, 0, SCR_H / 4 - 12);
+        int fh = lv_font_get_line_height(FONT_18);
+        lv_obj_set_pos(title, 0, SCR_H / 4 - fh / 2);
     }
 
     /* Prompt label below center */
