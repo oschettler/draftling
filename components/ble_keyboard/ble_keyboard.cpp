@@ -173,7 +173,6 @@ static ble_connect_cb_t     s_connect_cb = NULL;
 static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
-static volatile bool s_hidh_initialized  = false;
 static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 static volatile int s_battery_level = -1;  /* -1 = unknown */
@@ -208,33 +207,6 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param);
 static void hidh_callback(void *handler_args, esp_event_base_t base,
                            int32_t id, void *event_data);
-
-/* Lazily initialize the HID Host component.  Called from connect_task
- * just before the first esp_hidh_dev_open().  Deferring this avoids
- * the race condition where esp_hidh_init() overwrites our GAP
- * callback at startup, which prevents scan events from arriving. */
-static bool ensure_hidh_initialized(void)
-{
-    if (s_hidh_initialized) return true;
-
-    ESP_LOGI(TAG, "Initializing HIDH (deferred)...");
-    esp_hidh_config_t hidh_cfg = {};
-    hidh_cfg.callback = hidh_callback;
-    hidh_cfg.event_stack_size = 4096;
-    esp_err_t err = esp_hidh_init(&hidh_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_hidh_init failed: %s", esp_err_to_name(err));
-        return false;
-    }
-    s_hidh_initialized = true;
-    ESP_LOGI(TAG, "HIDH initialized");
-
-    /* esp_hidh_init() registers its own GAP callback internally.
-     * Re-register ours so we keep receiving security events. */
-    esp_ble_gap_register_callback(gap_event_handler);
-    ESP_LOGI(TAG, "GAP callback re-registered after HIDH init");
-    return true;
-}
 
 /* Helper: fill in standard BLE scan parameters */
 static void fill_scan_params(esp_ble_scan_params_t *p)
@@ -429,9 +401,9 @@ static bool adv_is_hid_keyboard(uint8_t *adv_data, uint8_t adv_len)
 
 /* ---- Connect task (runs esp_hidh_dev_open which blocks) ---- */
 
-/* Maximum number of open-connection retries.  After deferred HIDH
- * init, the GATTC client might not be ready immediately.  A short
- * retry loop handles this. */
+/* Maximum number of open-connection retries.  esp_hidh_dev_open()
+ * can fail transiently if the remote device is slow to respond.
+ * A short retry loop handles this. */
 #define CONNECT_RETRIES     4
 #define CONNECT_RETRY_MS  250
 
@@ -443,19 +415,6 @@ static void connect_task(void *arg)
              s_dev_name,
              s_target_bda[0], s_target_bda[1], s_target_bda[2],
              s_target_bda[3], s_target_bda[4], s_target_bda[5]);
-
-    /* Lazily initialize HIDH on first connection attempt.
-     * This is deferred from ble_keyboard_init() so that esp_hidh_init()
-     * cannot overwrite our GAP callback during the scanning phase. */
-    if (!ensure_hidh_initialized()) {
-        ESP_LOGE(TAG, "HIDH init failed, aborting connection");
-        s_connecting = false;
-        if (s_reconn_timer) {
-            xTimerStart(s_reconn_timer, 0);
-        }
-        vTaskDelete(NULL);
-        return;
-    }
 
     esp_hidh_dev_t *dev = NULL;
     for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
@@ -569,9 +528,8 @@ static void startup_timer_cb(TimerHandle_t timer)
         return;
     }
 
-    ESP_LOGW(TAG, "Safety-net timer fired "
-             "(scan_params_ready=%d, hidh_init=%d)",
-             (int)s_scan_params_ready, (int)s_hidh_initialized);
+    ESP_LOGW(TAG, "Safety-net timer fired (scan_params_ready=%d)",
+             (int)s_scan_params_ready);
 
     if (!s_scan_params_ready) {
         ESP_LOGW(TAG, "Scan params not ready; re-sending");
@@ -803,16 +761,33 @@ extern "C" void ble_keyboard_init(void)
                                    &rsp_key, sizeof(rsp_key));
     ESP_LOGI(TAG, "Security parameters configured");
 
-    /* Register BLE GAP callback.
+    /* Initialize the HID Host component BEFORE registering our GAP
+     * callback.  esp_hidh_init() internally calls
+     * esp_ble_gattc_app_register() (which blocks until the BTC task
+     * confirms) and registers its own GAP callback.  Doing this here
+     * while the BT stack is idle avoids the hang that occurs when
+     * HIDH init is attempted later during an active scan.
      *
-     * IMPORTANT: esp_hidh_init() is intentionally NOT called here.
-     * It is deferred to connect_task() (the first time we actually
-     * need to open a HID connection).  This is because esp_hidh_init()
-     * internally calls esp_ble_gap_register_callback() which would
-     * overwrite our GAP callback, preventing us from receiving scan
-     * events.  By deferring HIDH init, our callback is the ONLY one
-     * registered during the scanning phase, eliminating the race
-     * condition entirely. */
+     * We then register OUR GAP callback immediately after, which
+     * overwrites HIDH's.  This is fine because:
+     *   - HIDH uses GATTC callbacks (not GAP) for connection/service
+     *     discovery, so GATTC is unaffected.
+     *   - Our GAP handler processes all GAP events we need (scan
+     *     results, security/passkey, auth completion). */
+    esp_hidh_config_t hidh_cfg = {};
+    hidh_cfg.callback = hidh_callback;
+    hidh_cfg.event_stack_size = 4096;
+    esp_err_t hidh_err = esp_hidh_init(&hidh_cfg);
+    if (hidh_err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_hidh_init failed: %s",
+                 esp_err_to_name(hidh_err));
+    } else {
+        ESP_LOGI(TAG, "HIDH initialized");
+    }
+
+    /* Register our GAP callback.  This overwrites the one that
+     * esp_hidh_init() registered internally, giving us full control
+     * over scan and security events. */
     esp_err_t gap_err = esp_ble_gap_register_callback(gap_event_handler);
     if (gap_err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ble_gap_register_callback failed: %s",
@@ -856,7 +831,7 @@ extern "C" void ble_keyboard_init(void)
         xTimerStart(s_startup_timer, 0);
     }
 
-    ESP_LOGI(TAG, "BLE keyboard host initialized (HIDH deferred)");
+    ESP_LOGI(TAG, "BLE keyboard host initialized");
 }
 
 extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
