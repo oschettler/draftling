@@ -442,59 +442,56 @@ static void process_keyboard_report(const uint8_t *data, int len,
      * Key-array without reserved byte (NKRO key-array): variable.
      *   [0]=modifier  [1..N]=keycodes  (no reserved byte)
      *
-     * Some keyboards prepend the report ID as the first data byte.
-     *   [0]=report_id  [1]=modifier  [2]=reserved(0)  [3..8]=keycodes
-     *   Total: 9+ bytes with data[0]==report_id.
-     *
      * NKRO bitmap: modifier + N bitmap bytes where each BIT is a
      *   keycode.
      *
      * Format detection uses a "sticky" approach: once a format is
      * identified for this connection, it is reused for all subsequent
-     * reports to avoid ambiguity. */
+     * reports.  This is checked FIRST to avoid false positives where
+     * modifier byte values (e.g. 0x01=LCtrl) coincide with report
+     * IDs or reserved-byte patterns. */
 
-    /* Boot protocol / report-ID-prepended boot are always detectable
-     * from the reserved byte being 0 and exact size constraints. */
+    /* ---- Sticky format: use previously detected format ---- */
+    switch (s_report_fmt) {
+    case REPORT_FMT_BOOT:
+        ESP_LOGD(TAG, "Boot protocol (sticky, %d bytes)", len);
+        process_boot_report(data, len);
+        return;
+    case REPORT_FMT_BOOT_EXT:
+        ESP_LOGD(TAG, "Key-array (sticky, %d bytes)", len);
+        process_key_array(&data[1], len - 1, data[0]);
+        return;
+    case REPORT_FMT_NKRO_BM:
+        ESP_LOGD(TAG, "NKRO bitmap (sticky, %d bytes)", len);
+        process_nkro_report(data, len);
+        return;
+    case REPORT_FMT_UNKNOWN:
+    default:
+        break;  /* fall through to first-time detection */
+    }
+
+    /* ---- First-time format detection ---- */
 
     /* Case: exactly 8 bytes with reserved byte == 0 -> boot protocol */
     if (len == 8 && data[1] == 0) {
         s_report_fmt = REPORT_FMT_BOOT;
-        ESP_LOGD(TAG, "Boot protocol (8 bytes)");
+        ESP_LOGI(TAG, "Detected boot protocol (8 bytes)");
         process_boot_report(data, len);
         return;
     }
 
-    /* Case: report-ID prepended boot protocol */
-    if (len >= 9 && report_id > 0 && data[0] == report_id && data[2] == 0) {
-        ESP_LOGD(TAG, "Boot protocol with report ID prefix (%d bytes)",
-                 len);
-        process_boot_report(data + 1, len - 1);
-        return;
-    }
-
-    /* Case: extended boot protocol (reserved byte present, > 8 bytes) */
+    /* Case: extended boot protocol (reserved byte present, > 8 bytes).
+     * data[1]==0 is the reserved byte that distinguishes boot-style
+     * reports from key-array / NKRO bitmap formats. */
     if (data[1] == 0 && len > 8) {
         s_report_fmt = REPORT_FMT_BOOT_EXT;
-        ESP_LOGD(TAG, "Extended boot protocol (%d bytes)", len);
+        ESP_LOGI(TAG, "Detected extended boot protocol (%d bytes)", len);
         process_boot_report(data, len);
         return;
     }
 
     /* For reports where byte[1] != 0 we must distinguish between
-     * key-array and NKRO bitmap.  Use sticky format if already known. */
-    if (s_report_fmt == REPORT_FMT_BOOT_EXT) {
-        ESP_LOGD(TAG, "Key-array (sticky, %d bytes)", len);
-        uint8_t modifier = data[0];
-        process_key_array(&data[1], len - 1, modifier);
-        return;
-    }
-    if (s_report_fmt == REPORT_FMT_NKRO_BM) {
-        ESP_LOGD(TAG, "NKRO bitmap (sticky, %d bytes)", len);
-        process_nkro_report(data, len);
-        return;
-    }
-
-    /* First-time detection: examine payload bytes data[1..len-1].
+     * key-array and NKRO bitmap.
      *
      * Key insight: in a key-array, each non-zero byte IS a HID keycode
      * (0x04..0xE7).  In a bitmap, each byte is a bit-field where
