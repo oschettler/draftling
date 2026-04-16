@@ -293,6 +293,11 @@ done:
     if (ret == ESP_OK) {
         snprintf(s_last_sync, sizeof(s_last_sync), "OK");
         notify(GIT_SYNC_SUCCESS, "Sync complete");
+    } else {
+        /* Ensure the UI is notified even when do_pull/do_push already
+         * called set_error() -- reset the state so a new sync can be
+         * triggered later. */
+        s_state = GIT_SYNC_ERROR;
     }
 
     /* Free the HTTP response buffer to reclaim memory */
@@ -394,8 +399,14 @@ extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
     if (!s_cfg.configured) { set_error("Not configured"); return ESP_ERR_INVALID_STATE; }
     if (s_state == GIT_SYNC_IN_PROGRESS) { return ESP_ERR_INVALID_STATE; }
 
-    xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
-                            (void *)(intptr_t)direction, 3, NULL, 0);
+    s_state = GIT_SYNC_IN_PROGRESS;
+
+    BaseType_t ok = xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
+                                            (void *)(intptr_t)direction, 3, NULL, 0);
+    if (ok != pdPASS) {
+        set_error("Failed to start sync task");
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 

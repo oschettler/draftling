@@ -871,9 +871,12 @@ static void menu_activate_item(int idx)
         break;
     case 4: /* Git sync */
         if (git_sync_is_configured() && wifi_manager_is_connected()) {
-            editor_ui_set_status("Git: syncing...");
             close_menu();
-            git_sync_start(GIT_SYNC_BOTH);
+            if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
+                editor_ui_set_status("Git: syncing...");
+            } else {
+                editor_ui_set_status("Git: failed to start sync");
+            }
         } else if (!wifi_manager_is_connected()) {
             editor_ui_set_status("Git: connect WiFi first");
         } else {
@@ -1151,8 +1154,11 @@ static void handle_editor_key(const kb_event_t *ev)
             return;
         case 'g':
             if (git_sync_is_configured() && wifi_manager_is_connected()) {
-                editor_ui_set_status("Git: syncing...");
-                git_sync_start(GIT_SYNC_BOTH);
+                if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
+                    editor_ui_set_status("Git: syncing...");
+                } else {
+                    editor_ui_set_status("Git: failed to start sync");
+                }
             } else {
                 editor_ui_set_status("Git: connect WiFi first (F1)");
             }
