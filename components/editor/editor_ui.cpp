@@ -383,81 +383,31 @@ extern "C" void editor_ui_refresh(void)
             int rendered_h = lv_obj_get_height(s_line_labels[i]);
             if (rendered_h < line_h) rendered_h = line_h;
 
-            /* Selection highlight: per-character highlight using gray
-             * rectangles for partial selections, or full-line inversion
-             * when the entire line is within the selection range. */
+            /* Selection highlight.  On this monochrome e-paper display,
+             * gray is thresholded to white and therefore invisible.
+             * Use full-line color inversion (black bg, white text)
+             * for any line that overlaps the selection range. */
             if (has_sel) {
                 size_t line_off = (size_t)(lt - flat_text);
                 size_t line_end_off = line_off + ll;
-                bool fully = (sel_start <= line_off && sel_end >= line_end_off);
-                bool partial = !fully &&
-                    (sel_start < line_end_off && sel_end > line_off);
-                /* Include trailing newline for overlap check */
-                if (!fully && !partial && line_end_off < text_len &&
+                bool overlaps = (sel_start <= line_end_off &&
+                                 sel_end > line_off);
+                /* Include trailing newline in overlap check */
+                if (!overlaps && line_end_off < text_len &&
                     flat_text[line_end_off] == '\n') {
-                    partial = (sel_start < line_end_off + 1 &&
-                               sel_end > line_off);
+                    overlaps = (sel_start < line_end_off + 1 &&
+                                sel_end > line_off);
                 }
-                if (fully) {
+                if (overlaps) {
                     lv_obj_set_style_bg_color(s_line_labels[i],
                                               lv_color_black(), 0);
                     lv_obj_set_style_bg_opa(s_line_labels[i],
                                             LV_OPA_COVER, 0);
                     lv_obj_set_style_text_color(s_line_labels[i],
                                                 lv_color_white(), 0);
-                    if (s_sel_rects[i])
-                        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
-                } else if (partial && s_sel_rects[i]) {
-                    /* Compute selection byte range within this line */
-                    size_t raw_s = (sel_start > line_off)
-                                       ? sel_start - line_off : 0;
-                    size_t raw_e = (sel_end < line_end_off)
-                                       ? sel_end - line_off : ll;
-                    /* Convert raw byte offsets to display char indices.
-                     * md_parse_line may strip a prefix (e.g. "# ") or
-                     * a bullet formatter may prepend characters. */
-                    size_t prefix_bytes = (size_t)(mi.content - lt);
-                    int disp_s, disp_e;
-                    if (raw_s <= prefix_bytes) disp_s = 0;
-                    else disp_s = utf8_chars_in_bytes(
-                                      mi.content, raw_s - prefix_bytes);
-                    if (raw_e <= prefix_bytes) disp_e = 0;
-                    else disp_e = utf8_chars_in_bytes(
-                                      mi.content, raw_e - prefix_bytes);
-                    if (mi.type == MD_LINE_BULLET) {
-                        int bp = mi.indent_level * 2 + 2;
-                        disp_s += bp;
-                        disp_e += bp;
-                    }
-                    if (disp_e > disp_s) {
-                        lv_point_t sp, ep;
-                        lv_label_get_letter_pos(s_line_labels[i],
-                                                (uint32_t)disp_s, &sp);
-                        lv_label_get_letter_pos(s_line_labels[i],
-                                                (uint32_t)disp_e, &ep);
-                        if (sp.y == ep.y) {
-                            /* Single visual row */
-                            lv_obj_set_pos(s_sel_rects[i],
-                                           2 + sp.x, y_pos + sp.y);
-                            lv_obj_set_size(s_sel_rects[i],
-                                            ep.x - sp.x, line_h);
-                        } else {
-                            /* Multi-row: cover full width */
-                            lv_obj_set_pos(s_sel_rects[i],
-                                           2, y_pos + sp.y);
-                            lv_obj_set_size(s_sel_rects[i], SCR_W - 4,
-                                            ep.y - sp.y + line_h);
-                        }
-                        lv_obj_remove_flag(s_sel_rects[i],
-                                           LV_OBJ_FLAG_HIDDEN);
-                    } else {
-                        lv_obj_add_flag(s_sel_rects[i],
-                                        LV_OBJ_FLAG_HIDDEN);
-                    }
-                } else {
-                    if (s_sel_rects[i])
-                        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
                 }
+                if (s_sel_rects[i])
+                    lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
             } else {
                 if (s_sel_rects[i])
                     lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
@@ -1560,12 +1510,13 @@ extern "C" void editor_ui_init(void)
     lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
     /* Selection highlight rectangles (created before cursor and line
-     * labels so they sit behind text in the z-order; gray background
-     * shows through labels' transparent bg for partial selections). */
+     * labels so they sit behind text in the z-order).  Use black so
+     * the highlight is visible on monochrome e-paper displays where
+     * gray (0x80) is thresholded to white and therefore invisible. */
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
         s_sel_rects[i] = lv_obj_create(s_cont_edit);
         lv_obj_set_style_bg_color(s_sel_rects[i],
-                                  lv_color_make(0x80, 0x80, 0x80), 0);
+                                  lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
         lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
