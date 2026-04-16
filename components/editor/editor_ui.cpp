@@ -621,6 +621,7 @@ extern "C" void editor_ui_show_editor(void)
 
 extern "C" void editor_ui_set_status(const char *msg)
 {
+    ESP_LOGI(TAG, "Status: %s", msg);
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
 }
 
