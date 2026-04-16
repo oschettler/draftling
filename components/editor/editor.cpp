@@ -19,6 +19,9 @@ static bool s_modified    = false;
 static bool s_flat_dirty  = true;
 static editor_mode_t s_mode = EDITOR_MODE_NORMAL;
 static int s_scroll_line  = 0;
+static int s_sel_anchor   = -1;   /* logical byte offset, -1 = no selection */
+static char *s_clipboard  = NULL;
+static size_t s_clip_len  = 0;
 
 /* Content length (excluding gap) */
 static inline size_t content_len(void) { return s_buf_size - (s_gap_end - s_gap_start); }
@@ -71,6 +74,7 @@ extern "C" esp_err_t editor_open_file(const char *path)
     s_path[sizeof(s_path) - 1] = '\0';
     s_modified = false;
     s_scroll_line = 0;
+    s_sel_anchor = -1;
     invalidate_flat();
     s_mode = EDITOR_MODE_EDITING;
 
@@ -102,6 +106,7 @@ extern "C" void editor_new_file(void)
     s_path[0]   = '\0';
     s_modified  = false;
     s_scroll_line = 0;
+    s_sel_anchor = -1;
     invalidate_flat();
     s_mode = EDITOR_MODE_EDITING;
 }
@@ -113,6 +118,7 @@ extern "C" void editor_close_file(void)
     s_path[0]   = '\0';
     s_modified  = false;
     s_scroll_line = 0;
+    s_sel_anchor = -1;
     invalidate_flat();
     s_mode = EDITOR_MODE_NORMAL;
 }
@@ -197,6 +203,25 @@ static void gap_shift_right(void)
     s_buf[s_gap_start] = s_buf[s_gap_end];
     s_gap_start++;
     s_gap_end++;
+    invalidate_flat();
+}
+
+/* Move the gap to a given logical position using memmove (faster than
+ * byte-by-byte shifting for large distances). */
+static void move_gap_to(size_t pos)
+{
+    if (pos == s_gap_start) return;
+    if (pos < s_gap_start) {
+        size_t n = s_gap_start - pos;
+        memmove(s_buf + s_gap_end - n, s_buf + pos, n);
+        s_gap_start = pos;
+        s_gap_end -= n;
+    } else {
+        size_t n = pos - s_gap_start;
+        memmove(s_buf + s_gap_start, s_buf + s_gap_end, n);
+        s_gap_start += n;
+        s_gap_end += n;
+    }
     invalidate_flat();
 }
 
@@ -398,6 +423,101 @@ extern "C" void editor_delete_line(void)
     s_gap_end = end;
     s_modified = true;
     invalidate_flat();
+}
+
+extern "C" void editor_set_cursor(size_t pos)
+{
+    size_t len = content_len();
+    if (pos > len) pos = len;
+    move_gap_to(pos);
+}
+
+/* ---- Selection ---- */
+
+extern "C" bool editor_selection_active(void)
+{
+    return s_sel_anchor >= 0 && (size_t)s_sel_anchor != s_gap_start;
+}
+
+extern "C" void editor_set_selection_anchor(void)
+{
+    if (s_sel_anchor < 0) s_sel_anchor = (int)s_gap_start;
+}
+
+extern "C" void editor_clear_selection(void)
+{
+    s_sel_anchor = -1;
+}
+
+extern "C" void editor_get_selection_range(size_t *start, size_t *end)
+{
+    if (!editor_selection_active()) {
+        if (start) *start = s_gap_start;
+        if (end)   *end   = s_gap_start;
+        return;
+    }
+    size_t a = (size_t)s_sel_anchor;
+    size_t c = s_gap_start;
+    if (start) *start = (a < c) ? a : c;
+    if (end)   *end   = (a > c) ? a : c;
+}
+
+extern "C" bool editor_delete_selection(void)
+{
+    if (!editor_selection_active()) return false;
+    size_t sel_s, sel_e;
+    editor_get_selection_range(&sel_s, &sel_e);
+    move_gap_to(sel_e);
+    s_gap_start = sel_s;
+    s_sel_anchor = -1;
+    s_modified = true;
+    invalidate_flat();
+    return true;
+}
+
+extern "C" void editor_select_all(void)
+{
+    s_sel_anchor = 0;
+    move_gap_to(content_len());
+}
+
+/* ---- Clipboard ---- */
+
+extern "C" bool editor_copy(void)
+{
+    if (!editor_selection_active()) return false;
+    size_t sel_s, sel_e;
+    editor_get_selection_range(&sel_s, &sel_e);
+    size_t len = sel_e - sel_s;
+
+    const char *text = editor_get_text(NULL);
+
+    if (s_clipboard) { free(s_clipboard); s_clipboard = NULL; s_clip_len = 0; }
+    s_clipboard = (char *)heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
+    if (!s_clipboard) return false;
+    memcpy(s_clipboard, text + sel_s, len);
+    s_clipboard[len] = '\0';
+    s_clip_len = len;
+    return true;
+}
+
+extern "C" bool editor_cut(void)
+{
+    if (!editor_copy()) return false;
+    editor_delete_selection();
+    return true;
+}
+
+extern "C" void editor_paste(void)
+{
+    if (!s_clipboard || s_clip_len == 0) return;
+    editor_delete_selection();
+    editor_insert_text(s_clipboard, s_clip_len);
+}
+
+extern "C" bool editor_has_clipboard(void)
+{
+    return s_clipboard != NULL && s_clip_len > 0;
 }
 
 extern "C" editor_mode_t editor_get_mode(void) { return s_mode; }

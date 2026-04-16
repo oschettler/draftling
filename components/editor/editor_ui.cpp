@@ -252,7 +252,7 @@ extern "C" void editor_ui_refresh(void)
 
     /* Show logo when no file is loaded and buffer is empty */
     size_t text_len = 0;
-    editor_get_text(&text_len);
+    const char *flat_text = editor_get_text(&text_len);
     bool show_logo = (editor_get_file_path() == NULL && text_len == 0);
     if (s_img_logo) {
         if (show_logo) {
@@ -265,6 +265,11 @@ extern "C" void editor_ui_refresh(void)
     int scroll = editor_get_scroll_line();
     int total  = editor_get_line_count();
     bool in_code = false;
+
+    /* Selection range (byte offsets in flat text) */
+    size_t sel_start = 0, sel_end = 0;
+    bool has_sel = editor_selection_active();
+    if (has_sel) editor_get_selection_range(&sel_start, &sel_end);
 
     /* Track code fence state up to scroll line */
     for (int i = 0; i < scroll && i < total; i++) {
@@ -353,6 +358,25 @@ extern "C" void editor_ui_refresh(void)
         lv_obj_update_layout(s_line_labels[i]);
         int rendered_h = lv_obj_get_height(s_line_labels[i]);
         if (rendered_h < line_h) rendered_h = line_h;
+
+        /* Selection highlight: invert the entire line label when any
+         * part of it falls inside the active selection range. */
+        if (has_sel) {
+            size_t line_off = (size_t)(lt - flat_text);
+            size_t line_byte_end = line_off + ll;
+            /* Include trailing newline for overlap detection */
+            if (line_byte_end < text_len &&
+                flat_text[line_byte_end] == '\n')
+                line_byte_end++;
+            if (sel_start < line_byte_end && sel_end > line_off) {
+                lv_obj_set_style_bg_color(s_line_labels[i],
+                                          lv_color_black(), 0);
+                lv_obj_set_style_bg_opa(s_line_labels[i],
+                                        LV_OPA_COVER, 0);
+                lv_obj_set_style_text_color(s_line_labels[i],
+                                            lv_color_white(), 0);
+            }
+        }
 
         /* If this is the cursor line, compute its pixel position.
          * For headings, md_parse_line strips the "# " prefix from content,
@@ -927,7 +951,8 @@ static void handle_save_prompt_key(const kb_event_t *ev)
 
 static void handle_editor_key(const kb_event_t *ev)
 {
-    bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+    bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+    bool shift = (ev->modifier & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
 
     /* Clear the escape-save-prompt on any key other than Esc */
     if (ev->keycode != KB_KEY_ESCAPE && s_esc_pending) {
@@ -958,6 +983,28 @@ static void handle_editor_key(const kb_event_t *ev)
             break;
         case 'n': editor_new_file(); break;
         case 'o': editor_ui_show_file_browser(); return;
+        case 'c':
+            if (editor_copy())
+                editor_ui_set_status("Copied");
+            ensure_cursor_visible();
+            editor_ui_refresh();
+            return;
+        case 'x':
+            if (editor_cut())
+                editor_ui_set_status("Cut");
+            ensure_cursor_visible();
+            editor_ui_refresh();
+            return;
+        case 'v':
+            editor_paste();
+            ensure_cursor_visible();
+            editor_ui_refresh();
+            return;
+        case 'a':
+            editor_select_all();
+            ensure_cursor_visible();
+            editor_ui_refresh();
+            return;
         case 'g':
             if (git_sync_is_configured() && wifi_manager_is_connected()) {
                 editor_ui_set_status("Git: syncing...");
@@ -980,11 +1027,27 @@ static void handle_editor_key(const kb_event_t *ev)
             break;
         default: break;
         }
-        /* Ctrl+arrow for word movement */
-        if (ev->keycode == KB_KEY_LEFT)  { editor_move_word_left();  }
-        if (ev->keycode == KB_KEY_RIGHT) { editor_move_word_right(); }
-        if (ev->keycode == KB_KEY_HOME)  { editor_move_doc_start();  }
-        if (ev->keycode == KB_KEY_END)   { editor_move_doc_end();    }
+        /* Ctrl+arrow / Ctrl+Home / Ctrl+End for word/doc movement */
+        if (ev->keycode == KB_KEY_LEFT) {
+            if (shift) editor_set_selection_anchor();
+            else editor_clear_selection();
+            editor_move_word_left();
+        }
+        if (ev->keycode == KB_KEY_RIGHT) {
+            if (shift) editor_set_selection_anchor();
+            else editor_clear_selection();
+            editor_move_word_right();
+        }
+        if (ev->keycode == KB_KEY_HOME) {
+            if (shift) editor_set_selection_anchor();
+            else editor_clear_selection();
+            editor_move_doc_start();
+        }
+        if (ev->keycode == KB_KEY_END) {
+            if (shift) editor_set_selection_anchor();
+            else editor_clear_selection();
+            editor_move_doc_end();
+        }
         ensure_cursor_visible();
         editor_ui_refresh();
         return;
@@ -992,18 +1055,66 @@ static void handle_editor_key(const kb_event_t *ev)
 
     /* Special keys */
     switch (ev->keycode) {
-    case KB_KEY_LEFT:      editor_move_left();  break;
-    case KB_KEY_RIGHT:     editor_move_right(); break;
-    case KB_KEY_UP:        editor_move_up();    break;
-    case KB_KEY_DOWN:      editor_move_down();  break;
-    case KB_KEY_HOME:      editor_move_home();  break;
-    case KB_KEY_END:       editor_move_end();   break;
-    case KB_KEY_PAGEUP:    editor_move_page_up(VISIBLE_LINES);   break;
-    case KB_KEY_PAGEDOWN:  editor_move_page_down(VISIBLE_LINES); break;
-    case KB_KEY_BACKSPACE: editor_delete_back();    break;
-    case KB_KEY_DELETE:    editor_delete_forward(); break;
-    case KB_KEY_ENTER:     editor_insert_newline(); break;
-    case KB_KEY_TAB:       editor_insert_text("    ", 4); break;
+    case KB_KEY_LEFT:
+        if (shift) { editor_set_selection_anchor(); editor_move_left(); }
+        else if (editor_selection_active()) {
+            size_t s, e; editor_get_selection_range(&s, &e);
+            editor_clear_selection(); editor_set_cursor(s);
+        } else { editor_move_left(); }
+        break;
+    case KB_KEY_RIGHT:
+        if (shift) { editor_set_selection_anchor(); editor_move_right(); }
+        else if (editor_selection_active()) {
+            size_t s, e; editor_get_selection_range(&s, &e);
+            editor_clear_selection(); editor_set_cursor(e);
+        } else { editor_move_right(); }
+        break;
+    case KB_KEY_UP:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_up();
+        break;
+    case KB_KEY_DOWN:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_down();
+        break;
+    case KB_KEY_HOME:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_home();
+        break;
+    case KB_KEY_END:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_end();
+        break;
+    case KB_KEY_PAGEUP:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_page_up(VISIBLE_LINES);
+        break;
+    case KB_KEY_PAGEDOWN:
+        if (shift) editor_set_selection_anchor();
+        else editor_clear_selection();
+        editor_move_page_down(VISIBLE_LINES);
+        break;
+    case KB_KEY_BACKSPACE:
+        if (!editor_delete_selection())
+            editor_delete_back();
+        break;
+    case KB_KEY_DELETE:
+        if (!editor_delete_selection())
+            editor_delete_forward();
+        break;
+    case KB_KEY_ENTER:
+        editor_delete_selection();
+        editor_insert_newline();
+        break;
+    case KB_KEY_TAB:
+        editor_delete_selection();
+        editor_insert_text("    ", 4);
+        break;
     case KB_KEY_ESCAPE:
         if (editor_is_modified()) {
             if (s_esc_pending) {
@@ -1025,6 +1136,7 @@ static void handle_editor_key(const kb_event_t *ev)
         /* Use keyboard layout to translate keycode to UTF-8 */
         const char *text = kb_layout_translate(ev->keycode, ev->modifier);
         if (text) {
+            editor_delete_selection();
             editor_insert_text(text, strlen(text));
         }
         break;

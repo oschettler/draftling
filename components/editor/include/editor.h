@@ -51,6 +51,22 @@ void editor_delete_back(void);
 void editor_delete_forward(void);
 void editor_delete_line(void);
 
+void editor_set_cursor(size_t pos);
+
+/* Selection */
+bool editor_selection_active(void);
+void editor_set_selection_anchor(void);
+void editor_clear_selection(void);
+void editor_get_selection_range(size_t *start, size_t *end);
+bool editor_delete_selection(void);
+void editor_select_all(void);
+
+/* Clipboard */
+bool editor_copy(void);
+bool editor_cut(void);
+void editor_paste(void);
+bool editor_has_clipboard(void);
+
 editor_mode_t editor_get_mode(void);
 void editor_set_mode(editor_mode_t mode);
 
