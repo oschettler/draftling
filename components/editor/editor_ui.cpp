@@ -145,6 +145,9 @@ static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
 #define MAX_LINE_LABELS 24
 static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
 
+/* Selection highlight rectangle pool (one per visible line) */
+static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
+
 /* Styles */
 static lv_style_t s_style_body;
 static lv_style_t s_style_h1;
@@ -246,6 +249,16 @@ static int char_width_for_font(const lv_font_t *font)
     return CHAR_W;                    /* FONT_11: adv_w  96 / 16 = 6 */
 }
 
+/* Count UTF-8 characters in the first byte_len bytes of text. */
+static int utf8_chars_in_bytes(const char *text, size_t byte_len)
+{
+    int count = 0;
+    for (size_t i = 0; i < byte_len; i++) {
+        if ((text[i] & 0xC0) != 0x80) count++;
+    }
+    return count;
+}
+
 extern "C" void editor_ui_refresh(void)
 {
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
@@ -302,6 +315,7 @@ extern "C" void editor_ui_refresh(void)
             int line_idx = scroll + i;
             if (line_idx >= total || y_pos >= EDITOR_H) {
                 if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+                if (s_sel_rects[i]) lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
                 continue;
             }
 
@@ -369,23 +383,84 @@ extern "C" void editor_ui_refresh(void)
             int rendered_h = lv_obj_get_height(s_line_labels[i]);
             if (rendered_h < line_h) rendered_h = line_h;
 
-            /* Selection highlight: invert the entire line label when any
-             * part of it falls inside the active selection range. */
+            /* Selection highlight: per-character highlight using gray
+             * rectangles for partial selections, or full-line inversion
+             * when the entire line is within the selection range. */
             if (has_sel) {
                 size_t line_off = (size_t)(lt - flat_text);
-                size_t line_byte_end = line_off + ll;
-                /* Include trailing newline for overlap detection */
-                if (line_byte_end < text_len &&
-                    flat_text[line_byte_end] == '\n')
-                    line_byte_end++;
-                if (sel_start < line_byte_end && sel_end > line_off) {
+                size_t line_end_off = line_off + ll;
+                bool fully = (sel_start <= line_off && sel_end >= line_end_off);
+                bool partial = !fully &&
+                    (sel_start < line_end_off && sel_end > line_off);
+                /* Include trailing newline for overlap check */
+                if (!fully && !partial && line_end_off < text_len &&
+                    flat_text[line_end_off] == '\n') {
+                    partial = (sel_start < line_end_off + 1 &&
+                               sel_end > line_off);
+                }
+                if (fully) {
                     lv_obj_set_style_bg_color(s_line_labels[i],
                                               lv_color_black(), 0);
                     lv_obj_set_style_bg_opa(s_line_labels[i],
                                             LV_OPA_COVER, 0);
                     lv_obj_set_style_text_color(s_line_labels[i],
                                                 lv_color_white(), 0);
+                    if (s_sel_rects[i])
+                        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+                } else if (partial && s_sel_rects[i]) {
+                    /* Compute selection byte range within this line */
+                    size_t raw_s = (sel_start > line_off)
+                                       ? sel_start - line_off : 0;
+                    size_t raw_e = (sel_end < line_end_off)
+                                       ? sel_end - line_off : ll;
+                    /* Convert raw byte offsets to display char indices.
+                     * md_parse_line may strip a prefix (e.g. "# ") or
+                     * a bullet formatter may prepend characters. */
+                    size_t prefix_bytes = (size_t)(mi.content - lt);
+                    int disp_s, disp_e;
+                    if (raw_s <= prefix_bytes) disp_s = 0;
+                    else disp_s = utf8_chars_in_bytes(
+                                      mi.content, raw_s - prefix_bytes);
+                    if (raw_e <= prefix_bytes) disp_e = 0;
+                    else disp_e = utf8_chars_in_bytes(
+                                      mi.content, raw_e - prefix_bytes);
+                    if (mi.type == MD_LINE_BULLET) {
+                        int bp = mi.indent_level * 2 + 2;
+                        disp_s += bp;
+                        disp_e += bp;
+                    }
+                    if (disp_e > disp_s) {
+                        lv_point_t sp, ep;
+                        lv_label_get_letter_pos(s_line_labels[i],
+                                                (uint32_t)disp_s, &sp);
+                        lv_label_get_letter_pos(s_line_labels[i],
+                                                (uint32_t)disp_e, &ep);
+                        if (sp.y == ep.y) {
+                            /* Single visual row */
+                            lv_obj_set_pos(s_sel_rects[i],
+                                           2 + sp.x, y_pos + sp.y);
+                            lv_obj_set_size(s_sel_rects[i],
+                                            ep.x - sp.x, line_h);
+                        } else {
+                            /* Multi-row: cover full width */
+                            lv_obj_set_pos(s_sel_rects[i],
+                                           2, y_pos + sp.y);
+                            lv_obj_set_size(s_sel_rects[i], SCR_W - 4,
+                                            ep.y - sp.y + line_h);
+                        }
+                        lv_obj_remove_flag(s_sel_rects[i],
+                                           LV_OBJ_FLAG_HIDDEN);
+                    } else {
+                        lv_obj_add_flag(s_sel_rects[i],
+                                        LV_OBJ_FLAG_HIDDEN);
+                    }
+                } else {
+                    if (s_sel_rects[i])
+                        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
                 }
+            } else {
+                if (s_sel_rects[i])
+                    lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
             }
 
             /* If this is the cursor line, compute its pixel position.
@@ -420,9 +495,10 @@ extern "C" void editor_ui_refresh(void)
         }
 
         /* If the cursor line is in the expected range but wrapped lines
-         * pushed it off-screen, increment scroll and re-render. */
+         * pushed it off-screen, increment scroll and re-render.
+         * Use cur_y + cur_h to ensure the full cursor row is visible. */
         if (cur_line >= scroll && scroll < cur_line &&
-            (cur_y < 0 || cur_y >= EDITOR_H)) {
+            (cur_y < 0 || cur_y + cur_h > EDITOR_H)) {
             editor_set_scroll_line(scroll + 1);
             continue;
         }
@@ -430,7 +506,7 @@ extern "C" void editor_ui_refresh(void)
     }
 
     /* Update cursor position */
-    if (cur_y >= 0 && cur_y < EDITOR_H && s_cursor) {
+    if (cur_y >= 0 && cur_y + cur_h <= EDITOR_H && s_cursor) {
         lv_obj_set_size(s_cursor, 2, cur_h);
         lv_obj_set_pos(s_cursor, cur_x, cur_y);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
@@ -1391,11 +1467,17 @@ static void ble_connect_status_cb(bool connected)
                 "Keyboard connected!");
         }
     } else {
-        /* Keyboard disconnected -- close any open menus/settings so the
+        /* Keyboard disconnected -- close any open overlays so the
          * UI is in a clean state when we reconnect.  Do NOT call
          * editor_close_file() -- preserve the user's work. */
         s_menu_open = false;
         s_settings_open = false;
+        s_save_open = false;
+        if (s_save_panel) lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+        /* Cancel any in-progress key repeat so stale keys do not
+         * keep firing after reconnection. */
+        s_repeat_held = false;
+        s_repeat_firing = false;
         if (s_ble_prompt_lbl) {
             lv_label_set_text(s_ble_prompt_lbl,
                 "Keyboard disconnected.\nReconnecting...");
@@ -1476,6 +1558,20 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_pos(s_img_logo, 0,
                    (EDITOR_H - lv_font_get_line_height(FONT_18)) / 2);
     lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
+
+    /* Selection highlight rectangles (created before cursor and line
+     * labels so they sit behind text in the z-order; gray background
+     * shows through labels' transparent bg for partial selections). */
+    for (int i = 0; i < MAX_LINE_LABELS; i++) {
+        s_sel_rects[i] = lv_obj_create(s_cont_edit);
+        lv_obj_set_style_bg_color(s_sel_rects[i],
+                                  lv_color_make(0x80, 0x80, 0x80), 0);
+        lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
+        lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
+        lv_obj_set_style_pad_all(s_sel_rects[i], 0, 0);
+        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* Cursor (thin vertical bar) */
     s_cursor = lv_obj_create(s_cont_edit);
