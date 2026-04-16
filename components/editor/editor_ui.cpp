@@ -19,6 +19,7 @@
 #include "lvgl_port.h"
 #include "standby.h"
 #include "greybeard.h"
+#include "freertos/task.h"
 
 /*
  * Font aliases.
@@ -856,7 +857,7 @@ static void menu_activate_item(int idx)
         if (!wifi_manager_is_connected()) {
             editor_ui_set_status("WiFi: connecting...");
             close_menu();
-            wifi_manager_connect();
+            wifi_connect_async();
         }
         break;
     case 3: /* WiFi disconnect */
@@ -1155,7 +1156,7 @@ static void handle_editor_key(const kb_event_t *ev)
         case 'w':
             if (!wifi_manager_is_connected()) {
                 editor_ui_set_status("WiFi: connecting...");
-                wifi_manager_connect();
+                wifi_connect_async();
             } else {
                 editor_ui_set_status("WiFi: already connected");
             }
@@ -1545,6 +1546,96 @@ static void ble_status_text_cb(const char *text)
     lvgl_port_unlock();
 }
 
+/* ---- WiFi connect task ----
+ * wifi_manager_connect() blocks for up to 30 seconds while waiting for
+ * the connection.  Running it on a separate task keeps the LVGL render
+ * loop responsive so the user sees status updates in real time. */
+static void wifi_connect_task(void *arg)
+{
+    (void)arg;
+    esp_err_t ret = wifi_manager_connect();
+    if (ret == ESP_ERR_NOT_FOUND) {
+        /* No credentials -- the wifi_state callback will not fire,
+         * so update the status bar directly. */
+        if (lvgl_port_lock(200)) {
+            editor_ui_set_status("WiFi: no credentials found");
+            lvgl_port_unlock();
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+/* Start WiFi connection on a background task. */
+static void wifi_connect_async(void)
+{
+    xTaskCreatePinnedToCore(wifi_connect_task, "wifi_conn", 4096,
+                            NULL, 3, NULL, 0);
+}
+
+/* ---- WiFi state callback ----
+ * Called from the WiFi manager (event handler context) when the
+ * connection state changes.  Must take the LVGL lock before touching
+ * any UI objects. */
+static void wifi_state_cb(wifi_state_t state)
+{
+    if (!lvgl_port_lock(200)) return;
+
+    switch (state) {
+    case WIFI_STATE_CONNECTED:
+    {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
+                 wifi_manager_get_ssid(), wifi_manager_get_ip());
+        editor_ui_set_status(buf);
+        break;
+    }
+    case WIFI_STATE_ERROR:
+        editor_ui_set_status("WiFi: connection failed");
+        break;
+    case WIFI_STATE_DISCONNECTED:
+        editor_ui_set_status("WiFi: disconnected");
+        break;
+    default:
+        break;
+    }
+
+    lvgl_port_unlock();
+}
+
+/* ---- Git sync callback ----
+ * Called from the git_sync task when the sync state changes.
+ * Must take the LVGL lock before touching any UI objects. */
+static void git_sync_cb(git_sync_state_t state, const char *message)
+{
+    if (!lvgl_port_lock(200)) return;
+
+    switch (state) {
+    case GIT_SYNC_IN_PROGRESS:
+    {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "Git: %s",
+                 message ? message : "syncing...");
+        editor_ui_set_status(buf);
+        break;
+    }
+    case GIT_SYNC_SUCCESS:
+        editor_ui_set_status("Git: sync complete");
+        break;
+    case GIT_SYNC_ERROR:
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Git: %s",
+                 message ? message : "error");
+        editor_ui_set_status(buf);
+        break;
+    }
+    default:
+        break;
+    }
+
+    lvgl_port_unlock();
+}
+
 /* ---- Initialization ---- */
 
 extern "C" void editor_ui_init(void)
@@ -1807,6 +1898,10 @@ extern "C" void editor_ui_init(void)
 
     /* ---- Key repeat timer ---- */
     s_repeat_timer = lv_timer_create(key_repeat_cb, KEY_REPEAT_RATE_MS, NULL);
+
+    /* Register WiFi and Git sync status callbacks */
+    wifi_manager_set_callback(wifi_state_cb);
+    git_sync_set_callback(git_sync_cb);
 
     /* Start on BLE prompt screen (transitions to file browser on connect) */
     lv_scr_load(s_scr_ble_prompt);

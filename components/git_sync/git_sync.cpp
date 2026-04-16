@@ -295,6 +295,14 @@ done:
         notify(GIT_SYNC_SUCCESS, "Sync complete");
     }
 
+    /* Free the HTTP response buffer to reclaim memory */
+    if (s_resp_buf) {
+        heap_caps_free(s_resp_buf);
+        s_resp_buf = NULL;
+        s_resp_len = 0;
+        s_resp_cap = 0;
+    }
+
     vTaskDelete(NULL);
 }
 
@@ -386,7 +394,7 @@ extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
     if (!s_cfg.configured) { set_error("Not configured"); return ESP_ERR_INVALID_STATE; }
     if (s_state == GIT_SYNC_IN_PROGRESS) { return ESP_ERR_INVALID_STATE; }
 
-    xTaskCreatePinnedToCore(sync_task, "git_sync", 16 * 1024,
+    xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
                             (void *)(intptr_t)direction, 3, NULL, 0);
     return ESP_OK;
 }
