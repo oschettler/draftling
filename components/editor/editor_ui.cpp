@@ -329,6 +329,9 @@ extern "C" void editor_ui_refresh(void)
         lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_style_all(s_line_labels[i]);
         lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
+        /* Re-apply width after style reset (remove_style_all clears it)
+         * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
+        lv_obj_set_width(s_line_labels[i], SCR_W - 4);
         lv_label_set_text_static(s_line_labels[i], "");
 
         /* Copy text to a persistent buffer (label needs it) */
