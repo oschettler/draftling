@@ -93,6 +93,15 @@ static bool      s_settings_open = false;
 static lv_obj_t *s_passkey_panel = NULL;
 static lv_obj_t *s_passkey_label = NULL;
 
+/* Save-prompt overlay objects */
+static lv_obj_t *s_save_panel    = NULL;
+static lv_obj_t *s_save_hdr_lbl  = NULL;
+static lv_obj_t *s_save_name_lbl = NULL;
+static lv_obj_t *s_save_cur      = NULL;   /* blinking cursor in name field */
+static bool      s_save_open     = false;
+static char      s_save_buf[128] = "";     /* editable filename (no directory) */
+static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byte) */
+
 /* Escape-save-prompt: when true the user has been warned about unsaved
  * changes and a second Esc will discard + close. */
 static bool s_esc_pending = false;
@@ -108,6 +117,20 @@ static lv_timer_t   *s_key_drain_timer = NULL;
 
 /* Maximum number of auto-generated draft filenames (draft_001..draft_999) */
 #define MAX_DRAFT_SEQ 999
+
+/* ---- Key repeat ----
+ * When a key is held down the BLE HID report keeps sending the same
+ * keycodes, but some keyboards only send a single report.  We implement
+ * software key repeat: after an initial delay (KEY_REPEAT_DELAY_MS) we
+ * start re-injecting the last key-down event at KEY_REPEAT_RATE_MS
+ * intervals.  The repeat is cancelled on key-up. */
+#define KEY_REPEAT_DELAY_MS   500
+#define KEY_REPEAT_RATE_MS    50
+static kb_event_t s_repeat_ev    = {};      /* last key-down event */
+static bool       s_repeat_held  = false;   /* is a key currently held? */
+static uint32_t   s_repeat_start = 0;       /* tick when key was pressed */
+static bool       s_repeat_firing = false;  /* past initial delay? */
+static lv_timer_t *s_repeat_timer = NULL;
 
 /* Standby timeout options in seconds: 0=Off, 300=5min, 600=10min, etc. */
 static const uint32_t TIMEOUT_OPTIONS[] = { 0, 300, 600, 900, 1800, 3600 };
@@ -693,6 +716,173 @@ static void handle_menu_key(const kb_event_t *ev)
     }
 }
 
+/* ---- Save-prompt overlay ---- */
+
+/* Compute a default filename for a new (untitled) document.
+ * Returns the bare filename (no directory prefix). */
+static bool generate_default_name(char *buf, size_t buf_size)
+{
+    const char *mp = sd_card_get_mount_point();
+    char path[256];
+    for (int seq = 1; seq <= MAX_DRAFT_SEQ; seq++) {
+        snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
+        if (!sd_card_file_exists(path)) {
+            snprintf(buf, buf_size, "draft_%03d.md", seq);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void refresh_save_prompt(void)
+{
+    if (!s_save_panel) return;
+    lv_label_set_text(s_save_name_lbl, s_save_buf);
+
+    /* Position the thin cursor bar after the character at s_save_pos.
+     * We measure the pixel width of the text up to the cursor position
+     * using the monospace character width. */
+    int cw = char_width_for_font(FONT_11);
+    /* Count UTF-8 characters up to s_save_pos bytes */
+    int chars = 0;
+    for (int i = 0; i < s_save_pos; i++) {
+        if ((s_save_buf[i] & 0xC0) != 0x80) chars++;
+    }
+    int cx = 6 + chars * cw;   /* 6 = pad_left of the panel */
+    lv_obj_set_pos(s_save_cur, cx, 20);
+    lv_obj_remove_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_save_prompt(void)
+{
+    /* Pre-fill with existing filename (bare name, no directory) */
+    const char *path = editor_get_file_path();
+    if (path) {
+        const char *slash = strrchr(path, '/');
+        const char *name = slash ? slash + 1 : path;
+        strncpy(s_save_buf, name, sizeof(s_save_buf) - 1);
+        s_save_buf[sizeof(s_save_buf) - 1] = '\0';
+    } else {
+        if (!generate_default_name(s_save_buf, sizeof(s_save_buf))) {
+            editor_ui_set_status("Save failed: too many drafts");
+            return;
+        }
+    }
+    s_save_pos = (int)strlen(s_save_buf);
+    s_save_open = true;
+    lv_obj_remove_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+    refresh_save_prompt();
+}
+
+static void close_save_prompt(void)
+{
+    s_save_open = false;
+    lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void save_prompt_confirm(void)
+{
+    if (s_save_buf[0] == '\0') {
+        /* Empty name -- ignore */
+        return;
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s",
+             sd_card_get_mount_point(), s_save_buf);
+    esp_err_t err = editor_save_file_as(path);
+    close_save_prompt();
+    if (err == ESP_OK) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Saved as %.40s", s_save_buf);
+        editor_ui_set_status(msg);
+    } else {
+        editor_ui_set_status("Save failed!");
+    }
+    editor_ui_refresh();
+}
+
+static void handle_save_prompt_key(const kb_event_t *ev)
+{
+    switch (ev->keycode) {
+    case KB_KEY_ENTER:
+        save_prompt_confirm();
+        return;
+    case KB_KEY_ESCAPE:
+        close_save_prompt();
+        editor_ui_set_status(
+            "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+        return;
+    case KB_KEY_LEFT:
+        if (s_save_pos > 0) {
+            /* Move back one UTF-8 character */
+            do { s_save_pos--; }
+            while (s_save_pos > 0 &&
+                   (s_save_buf[s_save_pos] & 0xC0) == 0x80);
+        }
+        break;
+    case KB_KEY_RIGHT:
+        if (s_save_pos < (int)strlen(s_save_buf)) {
+            /* Move forward one UTF-8 character */
+            s_save_pos++;
+            while (s_save_pos < (int)strlen(s_save_buf) &&
+                   (s_save_buf[s_save_pos] & 0xC0) == 0x80)
+                s_save_pos++;
+        }
+        break;
+    case KB_KEY_HOME:
+        s_save_pos = 0;
+        break;
+    case KB_KEY_END:
+        s_save_pos = (int)strlen(s_save_buf);
+        break;
+    case KB_KEY_BACKSPACE:
+        if (s_save_pos > 0) {
+            /* Delete the previous UTF-8 character */
+            int prev = s_save_pos - 1;
+            while (prev > 0 && (s_save_buf[prev] & 0xC0) == 0x80)
+                prev--;
+            int len = (int)strlen(s_save_buf);
+            memmove(s_save_buf + prev, s_save_buf + s_save_pos,
+                    (size_t)(len - s_save_pos + 1));
+            s_save_pos = prev;
+        }
+        break;
+    case KB_KEY_DELETE: {
+        int len = (int)strlen(s_save_buf);
+        if (s_save_pos < len) {
+            /* Find end of current UTF-8 character */
+            int next = s_save_pos + 1;
+            while (next < len && (s_save_buf[next] & 0xC0) == 0x80)
+                next++;
+            memmove(s_save_buf + s_save_pos, s_save_buf + next,
+                    (size_t)(len - next + 1));
+        }
+        break;
+    }
+    default: {
+        /* Insert typed character (use layout translation) */
+        bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+        if (ctrl) break; /* ignore ctrl combos in filename */
+        const char *text = kb_layout_translate(ev->keycode, ev->modifier);
+        if (text && text[0]) {
+            size_t tlen = strlen(text);
+            size_t cur_len = strlen(s_save_buf);
+            /* Reject path separators and control chars */
+            if (text[0] == '/' || text[0] < 0x20) break;
+            if (cur_len + tlen < sizeof(s_save_buf) - 1) {
+                memmove(s_save_buf + s_save_pos + tlen,
+                        s_save_buf + s_save_pos,
+                        cur_len - (size_t)s_save_pos + 1);
+                memcpy(s_save_buf + s_save_pos, text, tlen);
+                s_save_pos += (int)tlen;
+            }
+        }
+        break;
+    }
+    }
+    refresh_save_prompt();
+}
+
 /* ---- Keyboard handler (registered as BLE callback) ---- */
 
 static void handle_editor_key(const kb_event_t *ev)
@@ -724,41 +914,7 @@ static void handle_editor_key(const kb_event_t *ev)
         }
         switch (ch) {
         case 's':
-            if (editor_get_file_path() == NULL) {
-                /* No filename yet -- generate a default name and save */
-                char path[256];
-                const char *mp = sd_card_get_mount_point();
-                bool found = false;
-                /* Find a unique filename draft_NNN.md */
-                for (int seq = 1; seq <= MAX_DRAFT_SEQ; seq++) {
-                    snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
-                    size_t dummy_len = 0;
-                    char *dummy = NULL;
-                    if (sd_card_read_file(path, &dummy, &dummy_len) != ESP_OK) {
-                        /* File does not exist -- use this name */
-                        found = true;
-                        break;
-                    }
-                    free(dummy);
-                }
-                if (!found) {
-                    editor_ui_set_status("Save failed: too many drafts");
-                    break;
-                }
-                esp_err_t err = editor_save_file_as(path);
-                if (err == ESP_OK) {
-                    char msg[80];
-                    const char *slash = strrchr(path, '/');
-                    snprintf(msg, sizeof(msg), "Saved as %.40s",
-                             slash ? slash + 1 : path);
-                    editor_ui_set_status(msg);
-                } else {
-                    editor_ui_set_status("Save failed!");
-                }
-            } else {
-                editor_save_file();
-                editor_ui_set_status("Saved");
-            }
+            show_save_prompt();
             break;
         case 'n': editor_new_file(); break;
         case 'o': editor_ui_show_file_browser(); return;
@@ -921,7 +1077,9 @@ static void process_key_event(const kb_event_t *ev)
     }
     const kb_event_t *e = &norm;
 
-    if (s_settings_open) {
+    if (s_save_open) {
+        handle_save_prompt_key(e);
+    } else if (s_settings_open) {
         handle_settings_key(e);
     } else if (s_menu_open) {
         handle_menu_key(e);
@@ -950,15 +1108,52 @@ static void key_drain_cb(lv_timer_t *timer)
 extern "C" void editor_ui_handle_key(const void *event)
 {
     const kb_event_t *ev = (const kb_event_t *)event;
-    if (!ev->pressed) return; /* only handle key-down */
 
-    /* Reset standby inactivity timer on key-down */
-    standby_reset_timer();
+    if (ev->pressed) {
+        /* Reset standby inactivity timer on key-down */
+        standby_reset_timer();
 
-    if (s_key_queue) {
-        /* Use overwrite-from-ISR variant so we never block.
-         * xQueueSend with 0 timeout will drop if queue is full. */
-        xQueueSend(s_key_queue, ev, 0);
+        /* Start key-repeat tracking */
+        s_repeat_ev     = *ev;
+        s_repeat_held   = true;
+        s_repeat_start  = xTaskGetTickCount();
+        s_repeat_firing = false;
+
+        if (s_key_queue) {
+            xQueueSend(s_key_queue, ev, 0);
+        }
+    } else {
+        /* Key released -- cancel repeat for the released key */
+        if (s_repeat_held && ev->keycode == s_repeat_ev.keycode) {
+            s_repeat_held  = false;
+            s_repeat_firing = false;
+        }
+    }
+}
+
+/* ---- Key repeat timer ---- */
+
+/* Called periodically by an LVGL timer.  If a key is held longer than
+ * KEY_REPEAT_DELAY_MS, inject the stored key event at the repeat rate. */
+static void key_repeat_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    if (!s_repeat_held) return;
+
+    uint32_t now = xTaskGetTickCount();
+    uint32_t elapsed = (now - s_repeat_start) * portTICK_PERIOD_MS;
+
+    if (!s_repeat_firing) {
+        if (elapsed >= KEY_REPEAT_DELAY_MS) {
+            s_repeat_firing = true;
+            /* Inject the first repeat event */
+            process_key_event(&s_repeat_ev);
+        }
+    } else {
+        /* Already past the initial delay -- inject at the repeat rate.
+         * The timer fires every KEY_REPEAT_RATE_MS so one event per
+         * invocation is sufficient. */
+        process_key_event(&s_repeat_ev);
     }
 }
 
@@ -1256,6 +1451,45 @@ extern "C" void editor_ui_init(void)
 
     /* Register passkey display callback */
     ble_keyboard_set_passkey_callback(passkey_display_cb);
+
+    /* ---- Save-prompt overlay (shown on the editor screen) ---- */
+    s_save_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_save_panel, SCR_W - 20, 46);
+    lv_obj_set_pos(s_save_panel, 10, (SCR_H - 46) / 2);
+    lv_obj_set_style_bg_color(s_save_panel, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_save_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_save_panel, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_save_panel, 2, 0);
+    lv_obj_set_style_radius(s_save_panel, 4, 0);
+    lv_obj_set_style_pad_all(s_save_panel, 6, 0);
+    lv_obj_remove_flag(s_save_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_save_hdr_lbl = lv_label_create(s_save_panel);
+    lv_obj_set_style_text_font(s_save_hdr_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_save_hdr_lbl, lv_color_black(), 0);
+    lv_label_set_text(s_save_hdr_lbl, "Save as (Enter/Esc):");
+    lv_obj_set_pos(s_save_hdr_lbl, 0, 0);
+
+    s_save_name_lbl = lv_label_create(s_save_panel);
+    lv_obj_set_style_text_font(s_save_name_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_save_name_lbl, lv_color_black(), 0);
+    lv_obj_set_width(s_save_name_lbl, SCR_W - 20 - 12);
+    lv_label_set_text(s_save_name_lbl, "");
+    lv_obj_set_pos(s_save_name_lbl, 0, 20);
+
+    /* Thin cursor bar inside the save prompt name field */
+    s_save_cur = lv_obj_create(s_save_panel);
+    lv_obj_set_size(s_save_cur, 2, 14);
+    lv_obj_set_style_bg_color(s_save_cur, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_save_cur, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_save_cur, 0, 0);
+    lv_obj_set_style_radius(s_save_cur, 0, 0);
+    lv_obj_set_style_pad_all(s_save_cur, 0, 0);
+    lv_obj_add_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
+
+    /* ---- Key repeat timer ---- */
+    s_repeat_timer = lv_timer_create(key_repeat_cb, KEY_REPEAT_RATE_MS, NULL);
 
     /* Start on BLE prompt screen (transitions to file browser on connect) */
     lv_scr_load(s_scr_ble_prompt);
