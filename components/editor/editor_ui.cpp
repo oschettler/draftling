@@ -259,6 +259,22 @@ static int utf8_chars_in_bytes(const char *text, size_t byte_len)
     return count;
 }
 
+/* Return the byte offset of the n-th UTF-8 character in text. */
+static size_t utf8_char_offset(const char *text, int n)
+{
+    size_t off = 0;
+    int ch = 0;
+    while (text[off] && ch < n) {
+        unsigned char c = (unsigned char)text[off];
+        if (c < 0x80) off += 1;
+        else if ((c & 0xE0) == 0xC0) off += 2;
+        else if ((c & 0xF0) == 0xE0) off += 3;
+        else off += 4;
+        ch++;
+    }
+    return off;
+}
+
 extern "C" void editor_ui_refresh(void)
 {
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
@@ -383,13 +399,12 @@ extern "C" void editor_ui_refresh(void)
             int rendered_h = lv_obj_get_height(s_line_labels[i]);
             if (rendered_h < line_h) rendered_h = line_h;
 
-            /* Selection highlight.  Fully-selected lines use color
-             * inversion (black bg, white text).  Partially-selected
-             * lines use a black rectangle behind the selected chars;
-             * on the monochrome e-paper display, the black rect makes
-             * those characters appear inverted while the rest stays
-             * normal.  (The old gray rectangles were thresholded to
-             * white and therefore invisible.) */
+            /* Selection highlight.  Fully-selected lines and multi-row
+             * partial selections use color inversion on the label
+             * itself (black bg, white text).  Single-row partial
+             * selections use an overlay label (s_sel_rects) that
+             * renders only the selected substring in white on black,
+             * positioned exactly over those characters. */
             if (has_sel) {
                 size_t line_off = (size_t)(lt - flat_text);
                 size_t line_end_off = line_off + ll;
@@ -441,20 +456,42 @@ extern "C" void editor_ui_refresh(void)
                         lv_label_get_letter_pos(s_line_labels[i],
                                                 (uint32_t)disp_e, &ep);
                         if (sp.y == ep.y) {
-                            /* Single visual row */
+                            /* Single visual row: overlay label with
+                             * only the selected substring in white
+                             * on black background. */
+                            size_t byte_s = utf8_char_offset(tmp, disp_s);
+                            size_t byte_e = utf8_char_offset(tmp, disp_e);
+                            char sel_buf[256];
+                            size_t sel_len = byte_e - byte_s;
+                            if (sel_len >= sizeof(sel_buf))
+                                sel_len = sizeof(sel_buf) - 1;
+                            memcpy(sel_buf, tmp + byte_s, sel_len);
+                            sel_buf[sel_len] = '\0';
+
+                            const lv_font_t *sf =
+                                lv_obj_get_style_text_font(
+                                    s_line_labels[i], LV_PART_MAIN);
+                            lv_obj_set_style_text_font(
+                                s_sel_rects[i],
+                                sf ? sf : FONT_11, 0);
+                            lv_label_set_text(s_sel_rects[i], sel_buf);
                             lv_obj_set_pos(s_sel_rects[i],
                                            2 + sp.x, y_pos + sp.y);
-                            lv_obj_set_size(s_sel_rects[i],
-                                            ep.x - sp.x, line_h);
+                            lv_obj_move_foreground(s_sel_rects[i]);
+                            lv_obj_remove_flag(s_sel_rects[i],
+                                               LV_OBJ_FLAG_HIDDEN);
                         } else {
-                            /* Multi-row: cover full width */
-                            lv_obj_set_pos(s_sel_rects[i],
-                                           2, y_pos + sp.y);
-                            lv_obj_set_size(s_sel_rects[i], SCR_W - 4,
-                                            ep.y - sp.y + line_h);
+                            /* Multi-row partial: fall back to
+                             * full-line inversion on the label. */
+                            lv_obj_set_style_bg_color(s_line_labels[i],
+                                                      lv_color_black(), 0);
+                            lv_obj_set_style_bg_opa(s_line_labels[i],
+                                                    LV_OPA_COVER, 0);
+                            lv_obj_set_style_text_color(s_line_labels[i],
+                                                        lv_color_white(), 0);
+                            lv_obj_add_flag(s_sel_rects[i],
+                                            LV_OBJ_FLAG_HIDDEN);
                         }
-                        lv_obj_remove_flag(s_sel_rects[i],
-                                           LV_OBJ_FLAG_HIDDEN);
                     } else {
                         lv_obj_add_flag(s_sel_rects[i],
                                         LV_OBJ_FLAG_HIDDEN);
@@ -1564,18 +1601,22 @@ extern "C" void editor_ui_init(void)
                    (EDITOR_H - lv_font_get_line_height(FONT_18)) / 2);
     lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
-    /* Selection highlight rectangles (created before cursor and line
-     * labels so they sit behind text in the z-order).  Use black so
-     * the highlight is visible on monochrome e-paper displays where
-     * gray (0x80) is thresholded to white and therefore invisible. */
+    /* Selection overlay labels (created before cursor and line labels
+     * so their initial z-order is behind text; partial-selection code
+     * calls lv_obj_move_foreground() to bring them on top).  These
+     * display the selected text in white on a black background for
+     * proper inversion on the monochrome e-paper display. */
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        s_sel_rects[i] = lv_obj_create(s_cont_edit);
+        s_sel_rects[i] = lv_label_create(s_cont_edit);
         lv_obj_set_style_bg_color(s_sel_rects[i],
                                   lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(s_sel_rects[i],
+                                    lv_color_white(), 0);
         lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
         lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
         lv_obj_set_style_pad_all(s_sel_rects[i], 0, 0);
+        lv_label_set_text(s_sel_rects[i], "");
         lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
     }
 
