@@ -18,22 +18,22 @@
 #include "sd_card.h"
 #include "lvgl_port.h"
 #include "standby.h"
-#include "departure_mono.h"
+#include "greybeard.h"
 
 /*
  * Font aliases.
  *
- * Departure Mono is a monospaced pixel font that includes Latin,
+ * Greybeard is a monospaced bitmap font that includes Latin,
  * Latin-1 Supplement, and Cyrillic glyphs in every size, so a
  * single set of fonts covers all enabled keyboard layouts.
  *
  * FONT_11 is the primary body / UI font.  Its metrics match
- * the editor LINE_H and CHAR_W exactly (line_height 14, advance 7 px).
+ * the editor LINE_H and CHAR_W exactly (line_height 11, advance 6 px).
  */
-#define FONT_11 (&departure_mono_11)
-#define FONT_14 (&departure_mono_14)
-#define FONT_16 (&departure_mono_16)
-#define FONT_18 (&departure_mono_18)
+#define FONT_11 (&greybeard_11)
+#define FONT_14 (&greybeard_14)
+#define FONT_16 (&greybeard_16)
+#define FONT_18 (&greybeard_18)
 
 static const char *TAG = "EditorUI";
 
@@ -50,9 +50,9 @@ static const char *TAG = "EditorUI";
 #define STATUS_H     16
 #define EDITOR_Y     HEADER_H
 #define EDITOR_H     (SCR_H - HEADER_H - STATUS_H)
-#define LINE_H       14
+#define LINE_H       11
 #define VISIBLE_LINES (EDITOR_H / LINE_H)
-#define CHAR_W       7   /* departure_mono_11 advance: 112/16 = 7 px (monospace) */
+#define CHAR_W       6   /* greybeard_11 advance: 96/16 = 6 px (monospace) */
 #define LIST_PANEL_H (SCR_H - 18)  /* height for list panels below header */
 
 /* LVGL objects */
@@ -235,16 +235,15 @@ static lv_style_t *style_for_type(md_line_type_t type)
     }
 }
 
-/* Return the monospace cell width (in pixels) for a given Departure Mono
+/* Return the monospace cell width (in pixels) for a given Greybeard
  * font size.  The values are the advance widths stored in the generated
- * font data, divided by 16 and rounded to the nearest integer (LVGL
- * stores advances in 1/16-px units). */
+ * font data, divided by 16 (LVGL stores advances in 1/16-px units). */
 static int char_width_for_font(const lv_font_t *font)
 {
-    if (font == FONT_18) return 11;   /* adv_w 183 / 16 = 11.4 */
-    if (font == FONT_16) return 10;   /* adv_w 163 / 16 = 10.2 */
-    if (font == FONT_14) return 9;    /* adv_w 143 / 16 = 8.9  */
-    return CHAR_W;                    /* FONT_11: adv_w 112 / 16 = 7.0 */
+    if (font == FONT_18) return 9;    /* adv_w 144 / 16 = 9 */
+    if (font == FONT_16) return 8;    /* adv_w 128 / 16 = 8 */
+    if (font == FONT_14) return 7;    /* adv_w 112 / 16 = 7 */
+    return CHAR_W;                    /* FONT_11: adv_w  96 / 16 = 6 */
 }
 
 extern "C" void editor_ui_refresh(void)
@@ -1518,7 +1517,7 @@ extern "C" void editor_ui_init(void)
 
     /* Thin cursor bar inside the save prompt name field */
     s_save_cur = lv_obj_create(s_save_panel);
-    lv_obj_set_size(s_save_cur, 2, 14);
+    lv_obj_set_size(s_save_cur, 2, LINE_H);
     lv_obj_set_style_bg_color(s_save_cur, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(s_save_cur, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_save_cur, 0, 0);

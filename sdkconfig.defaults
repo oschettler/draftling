@@ -16,7 +16,7 @@ CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # LVGL fonts -- only keep the default Montserrat 14 for LVGL internals.
-# The editor UI uses custom Departure Mono fonts exclusively.
+# The editor UI uses custom Greybeard fonts exclusively.
 CONFIG_LV_FONT_MONTSERRAT_14=y
 
 # Compiler
