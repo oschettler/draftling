@@ -1568,7 +1568,7 @@ static void wifi_connect_task(void *arg)
 /* Start WiFi connection on a background task. */
 static void wifi_connect_async(void)
 {
-    xTaskCreatePinnedToCore(wifi_connect_task, "wifi_conn", 4096,
+    xTaskCreatePinnedToCore(wifi_connect_task, "wifi_conn", 4 * 1024,
                             NULL, 3, NULL, 0);
 }
 
