@@ -843,6 +843,10 @@ static void handle_settings_key(const kb_event_t *ev)
     }
 }
 
+/* Forward declarations for WiFi background connect (defined below) */
+static void wifi_connect_task(void *arg);
+static void wifi_connect_async(void);
+
 static void menu_activate_item(int idx)
 {
     switch (idx) {
