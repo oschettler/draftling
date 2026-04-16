@@ -780,7 +780,7 @@ static void refresh_save_prompt(void)
     for (int i = 0; i < s_save_pos; i++) {
         if ((s_save_buf[i] & 0xC0) != 0x80) chars++;
     }
-    int cx = 6 + chars * cw;   /* 6 = pad_left of the panel */
+    int cx = chars * cw;
     lv_obj_set_pos(s_save_cur, cx, 20);
     lv_obj_remove_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
 }
