@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cstring>
 #include <esp_log.h>
+#include <esp_system.h>
+#include <nvs_flash.h>
 #include "sdkconfig.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
@@ -88,6 +90,7 @@ static lv_obj_t *s_scr_settings  = NULL;
 static lv_obj_t *s_settings_list = NULL;
 static int       s_settings_sel  = 0;
 static bool      s_settings_open = false;
+static bool      s_factory_reset_confirm = false; /* awaiting second Enter */
 
 /* Passkey overlay objects */
 static lv_obj_t *s_passkey_panel = NULL;
@@ -561,7 +564,15 @@ static void refresh_settings_items(void)
     /* 1: Sleep now */
     lv_list_add_btn(s_settings_list, NULL, "Sleep now");
 
-    /* 2: Back */
+    /* 2: Factory reset */
+    if (s_factory_reset_confirm) {
+        lv_list_add_btn(s_settings_list, NULL,
+                        "Factory reset -- ENTER again to confirm");
+    } else {
+        lv_list_add_btn(s_settings_list, NULL, "Factory reset");
+    }
+
+    /* 3: Back */
     lv_list_add_btn(s_settings_list, NULL, "Back (Esc)");
 
     /* Highlight selection */
@@ -584,6 +595,7 @@ static void show_settings(void)
     s_settings_open = true;
     s_menu_open = false;
     s_settings_sel = 0;
+    s_factory_reset_confirm = false;
     refresh_settings_items();
     lv_scr_load(s_scr_settings);
 }
@@ -596,6 +608,12 @@ static void close_settings(void)
 
 static void settings_activate_item(int idx)
 {
+    /* Moving away from the factory-reset item cancels confirmation */
+    if (idx != 2 && s_factory_reset_confirm) {
+        s_factory_reset_confirm = false;
+        refresh_settings_items();
+    }
+
     switch (idx) {
     case 0: {
         /* Cycle to next timeout option */
@@ -614,6 +632,18 @@ static void settings_activate_item(int idx)
         standby_enter_sleep();
         break;
     case 2:
+        /* Factory reset -- requires double-press confirmation */
+        if (s_factory_reset_confirm) {
+            ESP_LOGW(TAG, "Factory reset: erasing NVS and restarting");
+            nvs_flash_erase();
+            esp_restart();
+            /* does not return */
+        } else {
+            s_factory_reset_confirm = true;
+            refresh_settings_items();
+        }
+        break;
+    case 3:
         close_settings();
         break;
     default:
@@ -621,17 +651,19 @@ static void settings_activate_item(int idx)
     }
 }
 
-#define SETTINGS_ITEM_COUNT 3
+#define SETTINGS_ITEM_COUNT 4
 
 static void handle_settings_key(const kb_event_t *ev)
 {
     switch (ev->keycode) {
     case KB_KEY_UP:
         if (s_settings_sel > 0) s_settings_sel--;
+        s_factory_reset_confirm = false;
         refresh_settings_items();
         break;
     case KB_KEY_DOWN:
         if (s_settings_sel < SETTINGS_ITEM_COUNT - 1) s_settings_sel++;
+        s_factory_reset_confirm = false;
         refresh_settings_items();
         break;
     case KB_KEY_ENTER:
@@ -723,6 +755,7 @@ static void handle_menu_key(const kb_event_t *ev)
 static bool generate_default_name(char *buf, size_t buf_size)
 {
     const char *mp = sd_card_get_mount_point();
+    if (!mp) return false;
     char path[256];
     for (int seq = 1; seq <= MAX_DRAFT_SEQ; seq++) {
         snprintf(path, sizeof(path), "%s/draft_%03d.md", mp, seq);
@@ -786,9 +819,14 @@ static void save_prompt_confirm(void)
         /* Empty name -- ignore */
         return;
     }
+    const char *mp = sd_card_get_mount_point();
+    if (!mp) {
+        close_save_prompt();
+        editor_ui_set_status("Save failed: SD card not ready");
+        return;
+    }
     char path[512];
-    snprintf(path, sizeof(path), "%s/%s",
-             sd_card_get_mount_point(), s_save_buf);
+    snprintf(path, sizeof(path), "%s/%s", mp, s_save_buf);
     esp_err_t err = editor_save_file_as(path);
     close_save_prompt();
     if (err == ESP_OK) {
@@ -868,7 +906,7 @@ static void handle_save_prompt_key(const kb_event_t *ev)
             size_t tlen = strlen(text);
             size_t cur_len = strlen(s_save_buf);
             /* Reject path separators and control chars */
-            if (text[0] == '/' || text[0] < 0x20) break;
+            if (text[0] == '/' || text[0] == '\\' || text[0] < 0x20) break;
             if (cur_len + tlen < sizeof(s_save_buf) - 1) {
                 memmove(s_save_buf + s_save_pos + tlen,
                         s_save_buf + s_save_pos,
