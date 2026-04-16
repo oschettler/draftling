@@ -348,10 +348,9 @@ extern "C" void editor_ui_refresh(void)
         lv_label_set_text(s_line_labels[i], tmp);
         lv_obj_set_pos(s_line_labels[i], 2, y_pos);
 
-        /* Get the font for this line to compute correct char width */
+        /* Get the font for this line to compute correct line height */
         const lv_font_t *line_font = lv_obj_get_style_text_font(
                                         s_line_labels[i], LV_PART_MAIN);
-        int line_char_w = char_width_for_font(line_font);
         int line_h = lv_font_get_line_height(line_font ? line_font : FONT_11);
 
         /* Determine actual rendered height (may be taller if text wraps) */
@@ -394,14 +393,15 @@ extern "C" void editor_ui_refresh(void)
                 if (col_in_display < 0) col_in_display = 0;
             }
 
-            /* Account for wrapping: figure out the visual row and x offset */
-            int chars_per_row = (SCR_W - 4) / line_char_w;
-            if (chars_per_row < 1) chars_per_row = 1;
-            int wrap_row = col_in_display / chars_per_row;
-            int wrap_col = col_in_display % chars_per_row;
-
-            cur_x = 2 + wrap_col * line_char_w;
-            cur_y = y_pos + wrap_row * line_h;
+            /* Use LVGL to find the actual pixel position of the cursor
+             * character.  This correctly handles word-level wrapping
+             * where the break point differs from a simple chars_per_row
+             * calculation. */
+            lv_point_t lpos;
+            lv_label_get_letter_pos(s_line_labels[i],
+                                    (uint32_t)col_in_display, &lpos);
+            cur_x = 2 + lpos.x;
+            cur_y = y_pos + lpos.y;
             cur_h = line_h;
         }
 
