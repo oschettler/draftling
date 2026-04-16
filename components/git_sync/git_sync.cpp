@@ -401,9 +401,9 @@ extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
 
     s_state = GIT_SYNC_IN_PROGRESS;
 
-    BaseType_t ok = xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
+    BaseType_t rc = xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
                                             (void *)(intptr_t)direction, 3, NULL, 0);
-    if (ok != pdPASS) {
+    if (rc != pdPASS) {
         set_error("Failed to start sync task");
         return ESP_FAIL;
     }
