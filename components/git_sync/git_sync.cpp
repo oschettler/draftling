@@ -397,7 +397,7 @@ extern "C" esp_err_t git_sync_init(void)
 extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
 {
     if (!s_cfg.configured) { set_error("Not configured"); return ESP_ERR_INVALID_STATE; }
-    if (s_state == GIT_SYNC_IN_PROGRESS) { return ESP_ERR_INVALID_STATE; }
+    if (s_state == GIT_SYNC_IN_PROGRESS) { set_error("Sync already in progress"); return ESP_ERR_INVALID_STATE; }
 
     s_state = GIT_SYNC_IN_PROGRESS;
 
