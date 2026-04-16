@@ -913,14 +913,22 @@ static void handle_browser_key(const kb_event_t *ev)
 /* Process a single key event (must be called with LVGL lock held). */
 static void process_key_event(const kb_event_t *ev)
 {
+    /* Normalize Keypad Enter to regular Enter so all handlers
+     * only need to check for KB_KEY_ENTER. */
+    kb_event_t norm = *ev;
+    if (norm.keycode == KB_KEY_KP_ENTER) {
+        norm.keycode = KB_KEY_ENTER;
+    }
+    const kb_event_t *e = &norm;
+
     if (s_settings_open) {
-        handle_settings_key(ev);
+        handle_settings_key(e);
     } else if (s_menu_open) {
-        handle_menu_key(ev);
+        handle_menu_key(e);
     } else if (editor_get_mode() == EDITOR_MODE_EDITING) {
-        handle_editor_key(ev);
+        handle_editor_key(e);
     } else {
-        handle_browser_key(ev);
+        handle_browser_key(e);
     }
 }
 
@@ -992,18 +1000,34 @@ static void ble_connect_status_cb(bool connected)
     }
 
     if (connected) {
+        /* Flush any stale key events that accumulated while
+         * the keyboard was disconnected / reconnecting. */
+        if (s_key_queue) {
+            xQueueReset(s_key_queue);
+        }
+
         /* Keyboard just connected -- if we are on the BLE prompt screen,
-         * transition to the file browser. */
+         * return to whatever the user was doing before disconnect. */
         if (lv_scr_act() == s_scr_ble_prompt) {
-            editor_ui_show_file_browser();
+            if (editor_get_mode() == EDITOR_MODE_EDITING) {
+                /* Restore the editor -- file contents are still in
+                 * the gap buffer; no need to close/reopen. */
+                lv_scr_load(s_scr);
+                editor_ui_refresh();
+            } else {
+                editor_ui_show_file_browser();
+            }
         }
         if (s_ble_prompt_lbl) {
             lv_label_set_text(s_ble_prompt_lbl,
                 "Keyboard connected!");
         }
     } else {
-        /* Keyboard disconnected -- switch to BLE prompt screen so the
-         * user can see the reconnection status. */
+        /* Keyboard disconnected -- close any open menus/settings so the
+         * UI is in a clean state when we reconnect.  Do NOT call
+         * editor_close_file() -- preserve the user's work. */
+        s_menu_open = false;
+        s_settings_open = false;
         if (s_ble_prompt_lbl) {
             lv_label_set_text(s_ble_prompt_lbl,
                 "Keyboard disconnected.\nReconnecting...");

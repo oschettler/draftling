@@ -44,6 +44,7 @@ typedef enum {
     KB_KEY_F10       = 0x43,
     KB_KEY_F11       = 0x44,
     KB_KEY_F12       = 0x45,
+    KB_KEY_KP_ENTER  = 0x58,
 } kb_special_key_t;
 
 typedef struct {

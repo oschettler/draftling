@@ -76,13 +76,18 @@ static const uint8_t BLE_SVC_HID_UUID128[16] = {
 #define NVS_KEY_COUNT   "bond_cnt"
 #define NVS_KEY_LAST    "bond_last"
 /* Per-device keys: "bond_0" .. "bond_7", each stores 7 bytes
- * (6-byte BDA + 1-byte address type) */
+ * (6-byte BDA + 1-byte address type).
+ * Per-device name keys: "name_0" .. "name_7", each stores a
+ * NUL-terminated device name string (up to 63 chars). */
 
 /* ---- Bonded device storage ---- */
+
+#define BONDED_NAME_LEN 64
 
 typedef struct {
     esp_bd_addr_t       bda;
     esp_ble_addr_type_t addr_type;
+    char                name[BONDED_NAME_LEN];
 } bonded_dev_t;
 
 static bonded_dev_t s_bonded[MAX_BONDED];
@@ -128,6 +133,14 @@ static void bonded_load(void)
             memcpy(s_bonded[s_bonded_count].bda, buf, 6);
             s_bonded[s_bonded_count].addr_type =
                 (esp_ble_addr_type_t)buf[6];
+            /* Load stored device name (if any) */
+            char name_key[12];
+            snprintf(name_key, sizeof(name_key), "name_%d", i);
+            size_t nlen = sizeof(s_bonded[s_bonded_count].name);
+            if (nvs_get_str(h, name_key,
+                            s_bonded[s_bonded_count].name, &nlen) != ESP_OK) {
+                s_bonded[s_bonded_count].name[0] = '\0';
+            }
             s_bonded_count++;
         }
     }
@@ -152,6 +165,14 @@ static void bonded_save(void)
         memcpy(buf, s_bonded[i].bda, 6);
         buf[6] = (uint8_t)s_bonded[i].addr_type;
         nvs_set_blob(h, key, buf, sizeof(buf));
+        /* Save device name */
+        char name_key[12];
+        snprintf(name_key, sizeof(name_key), "name_%d", i);
+        if (s_bonded[i].name[0]) {
+            nvs_set_str(h, name_key, s_bonded[i].name);
+        } else {
+            nvs_erase_key(h, name_key); /* no name stored */
+        }
     }
     nvs_commit(h);
     nvs_close(h);
@@ -182,11 +203,19 @@ static void bonded_add(const esp_bd_addr_t bda,
         idx = s_bonded_count;
         memcpy(s_bonded[idx].bda, bda, 6);
         s_bonded[idx].addr_type = addr_type;
+        s_bonded[idx].name[0] = '\0';
         s_bonded_count++;
+    }
+    /* Update stored name from the current device name */
+    if (s_dev_name[0]) {
+        strncpy(s_bonded[idx].name, s_dev_name,
+                sizeof(s_bonded[idx].name) - 1);
+        s_bonded[idx].name[sizeof(s_bonded[idx].name) - 1] = '\0';
     }
     s_last_bonded = idx;
     bonded_save();
-    ESP_LOGI(TAG, "Bonded device saved at index %d", idx);
+    ESP_LOGI(TAG, "Bonded device saved at index %d (\"%s\")",
+             idx, s_bonded[idx].name);
 }
 
 /* ---- State ---- */
@@ -584,7 +613,7 @@ static inline bool is_hidh_ready(void)
  * A short retry loop handles this.  Keep this low (2) so that
  * re-pairing scenarios (where the old address is unreachable) do
  * not block for too long before scanning for the new address. */
-#define CONNECT_RETRIES     2
+#define CONNECT_RETRIES     1
 #define CONNECT_RETRY_MS  250
 
 static void connect_task(void *arg)
@@ -647,7 +676,16 @@ static void try_connect_bonded(int idx)
     s_connecting = true;
     memcpy(s_target_bda, s_bonded[idx].bda, 6);
     s_target_addr_type = s_bonded[idx].addr_type;
-    snprintf(s_dev_name, sizeof(s_dev_name), "(bonded #%d)", idx);
+    /* Use stored device name, falling back to BDA if unknown */
+    if (s_bonded[idx].name[0]) {
+        strncpy(s_dev_name, s_bonded[idx].name, sizeof(s_dev_name) - 1);
+        s_dev_name[sizeof(s_dev_name) - 1] = '\0';
+    } else {
+        snprintf(s_dev_name, sizeof(s_dev_name),
+                 "%02x:%02x:%02x:%02x:%02x:%02x",
+                 s_target_bda[0], s_target_bda[1], s_target_bda[2],
+                 s_target_bda[3], s_target_bda[4], s_target_bda[5]);
+    }
     ESP_LOGI(TAG, "Trying bonded device %d "
              "(%02x:%02x:%02x:%02x:%02x:%02x)...",
              idx,
@@ -665,7 +703,10 @@ static void start_reconnection(void)
     case RECONN_LAST:
         if (s_last_bonded >= 0 && s_last_bonded < s_bonded_count) {
             ESP_LOGI(TAG, "Reconnect phase: trying last-connected");
-            notify_status("Trying last keyboard...");
+            int li = s_last_bonded;
+            const char *lname = s_bonded[li].name[0]
+                                ? s_bonded[li].name : "last keyboard";
+            notify_status("Trying %s...", lname);
             s_reconn_phase = RECONN_KNOWN;
             s_reconn_idx   = 0;
             try_connect_bonded(s_last_bonded);
@@ -680,7 +721,9 @@ static void start_reconnection(void)
             int idx = s_reconn_idx++;
             if (idx == s_last_bonded) continue; /* already tried */
             ESP_LOGI(TAG, "Reconnect phase: trying known device %d", idx);
-            notify_status("Trying known keyboard %d...", idx + 1);
+            const char *kname = s_bonded[idx].name[0]
+                                ? s_bonded[idx].name : "known keyboard";
+            notify_status("Trying %s...", kname);
             try_connect_bonded(idx);
             return;
         }
