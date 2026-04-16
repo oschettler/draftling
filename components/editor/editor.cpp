@@ -183,24 +183,52 @@ extern "C" void editor_set_scroll_line(int line) { s_scroll_line = line < 0 ? 0 
 
 /* ---- Cursor movement ---- */
 
+/* Byte-level gap shifts (internal primitives). */
+static void gap_shift_left(void)
+{
+    s_gap_end--;
+    s_buf[s_gap_end] = s_buf[s_gap_start - 1];
+    s_gap_start--;
+    invalidate_flat();
+}
+
+static void gap_shift_right(void)
+{
+    s_buf[s_gap_start] = s_buf[s_gap_end];
+    s_gap_start++;
+    s_gap_end++;
+    invalidate_flat();
+}
+
+/* Count UTF-8 characters in s_buf[start..end) (before the gap). */
+static int utf8_char_count(size_t start, size_t end)
+{
+    int n = 0;
+    for (size_t i = start; i < end; i++) {
+        if ((s_buf[i] & 0xC0) != 0x80) n++;
+    }
+    return n;
+}
+
 extern "C" void editor_move_left(void)
 {
-    if (s_gap_start > 0) {
-        s_gap_end--;
-        s_buf[s_gap_end] = s_buf[s_gap_start - 1];
-        s_gap_start--;
-        invalidate_flat();
-    }
+    if (s_gap_start == 0) return;
+    /* Move back one byte, then keep going while we are on a
+     * UTF-8 continuation byte (10xxxxxx) to land on the start
+     * byte of the previous character. */
+    do {
+        gap_shift_left();
+    } while (s_gap_start > 0 && (s_buf[s_gap_start] & 0xC0) == 0x80);
 }
 
 extern "C" void editor_move_right(void)
 {
-    if (s_gap_end < s_buf_size) {
-        s_buf[s_gap_start] = s_buf[s_gap_end];
-        s_gap_start++;
-        s_gap_end++;
-        invalidate_flat();
-    }
+    if (s_gap_end >= s_buf_size) return;
+    /* Move forward one byte, then skip any continuation bytes
+     * so we land at the start of the next character. */
+    gap_shift_right();
+    while (s_gap_end < s_buf_size && (s_buf[s_gap_end] & 0xC0) == 0x80)
+        gap_shift_right();
 }
 
 static size_t find_line_start(size_t pos)
@@ -211,46 +239,53 @@ static size_t find_line_start(size_t pos)
     return (s_buf[i] == '\n') ? i + 1 : 0;
 }
 
-static size_t find_line_end_in_gap(void)
-{
-    /* Find end of current line after cursor (in the part after gap) */
-    size_t i = s_gap_end;
-    while (i < s_buf_size && s_buf[i] != '\n') i++;
-    return i;
-}
-
 extern "C" void editor_move_up(void)
 {
     size_t line_start = find_line_start(s_gap_start);
-    int col = (int)(s_gap_start - line_start);
     if (line_start == 0) return; /* already on first line */
-    /* Go to previous line */
-    size_t prev_end = line_start - 1; /* the '\n' before this line */
-    size_t prev_start = (prev_end == 0) ? 0 : find_line_start(prev_end);
-    size_t prev_len = prev_end - prev_start;
-    size_t target = prev_start + ((size_t)col < prev_len ? (size_t)col : prev_len);
-    /* Move cursor to target */
-    while (s_gap_start > target) editor_move_left();
-    while (s_gap_start < target) editor_move_right();
+
+    /* Remember the cursor column in UTF-8 characters */
+    int col_chars = utf8_char_count(line_start, s_gap_start);
+
+    /* Move to beginning of current line (byte-level) */
+    while (s_gap_start > line_start) gap_shift_left();
+
+    /* Step past the '\n' onto the end of the previous line */
+    gap_shift_left();
+
+    /* Find the start of the previous line and move there */
+    size_t prev_start = find_line_start(s_gap_start);
+    while (s_gap_start > prev_start) gap_shift_left();
+
+    /* Advance by col_chars characters (or to end of line) */
+    for (int i = 0; i < col_chars; i++) {
+        if (s_gap_end >= s_buf_size || s_buf[s_gap_end] == '\n') break;
+        editor_move_right();
+    }
 }
 
 extern "C" void editor_move_down(void)
 {
     size_t line_start = find_line_start(s_gap_start);
-    int col = (int)(s_gap_start - line_start);
-    /* Find next line start (after gap) */
-    size_t next_start = find_line_end_in_gap();
-    if (next_start >= s_buf_size) return; /* no next line */
-    next_start++; /* skip the '\n' */
-    /* Find next line length */
-    size_t next_end = next_start;
-    while (next_end < s_buf_size && s_buf[next_end] != '\n') next_end++;
-    size_t next_len = next_end - next_start;
-    /* Move cursor right to reach target */
-    size_t steps_to_eol = find_line_end_in_gap() - s_gap_end;
-    size_t steps_into_next = ((size_t)col < next_len) ? (size_t)col : next_len;
-    size_t total_steps = steps_to_eol + 1 + steps_into_next;
-    for (size_t i = 0; i < total_steps; i++) editor_move_right();
+
+    /* Remember the cursor column in UTF-8 characters */
+    int col_chars = utf8_char_count(line_start, s_gap_start);
+
+    /* Move to end of current line (byte-level) */
+    while (s_gap_end < s_buf_size && s_buf[s_gap_end] != '\n')
+        gap_shift_right();
+
+    /* If at end of buffer, there is no next line */
+    if (s_gap_end >= s_buf_size) return;
+
+    /* Skip the '\n' to reach the start of the next line */
+    gap_shift_right();
+
+    /* Advance by col_chars characters (or to end of line) */
+    for (int i = 0; i < col_chars; i++) {
+        if (s_gap_end >= s_buf_size || s_buf[s_gap_end] == '\n') break;
+        editor_move_right();
+    }
 }
 
 extern "C" void editor_move_home(void)
@@ -333,20 +368,25 @@ extern "C" void editor_insert_newline(void)
 
 extern "C" void editor_delete_back(void)
 {
-    if (s_gap_start > 0) {
+    if (s_gap_start == 0) return;
+    /* Remove all bytes of the previous UTF-8 character by expanding
+     * the gap leftward past continuation bytes and the start byte. */
+    do {
         s_gap_start--;
-        s_modified = true;
-        invalidate_flat();
-    }
+    } while (s_gap_start > 0 && (s_buf[s_gap_start] & 0xC0) == 0x80);
+    s_modified = true;
+    invalidate_flat();
 }
 
 extern "C" void editor_delete_forward(void)
 {
-    if (s_gap_end < s_buf_size) {
+    if (s_gap_end >= s_buf_size) return;
+    /* Remove the start byte and any following continuation bytes. */
+    s_gap_end++;
+    while (s_gap_end < s_buf_size && (s_buf[s_gap_end] & 0xC0) == 0x80)
         s_gap_end++;
-        s_modified = true;
-        invalidate_flat();
-    }
+    s_modified = true;
+    invalidate_flat();
 }
 
 extern "C" void editor_delete_line(void)
