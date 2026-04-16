@@ -51,7 +51,7 @@ static const char *TAG = "EditorUI";
 #define LINE_H       14
 #define VISIBLE_LINES (EDITOR_H / LINE_H)
 #define CHAR_W       7   /* departure_mono_11 advance: 112/16 = 7 px (monospace) */
-#define LIST_H       (SCR_H - 18)  /* height for list panels below header */
+#define LIST_PANEL_H (SCR_H - 18)  /* height for list panels below header */
 
 /* LVGL objects */
 static lv_obj_t *s_scr       = NULL;
@@ -749,7 +749,7 @@ static void handle_editor_key(const kb_event_t *ev)
                 if (err == ESP_OK) {
                     char msg[80];
                     const char *slash = strrchr(path, '/');
-                    snprintf(msg, sizeof(msg), "Saved as %s",
+                    snprintf(msg, sizeof(msg), "Saved as %.40s",
                              slash ? slash + 1 : path);
                     editor_ui_set_status(msg);
                 } else {
@@ -1132,7 +1132,7 @@ extern "C" void editor_ui_init(void)
 
     s_list_files = lv_list_create(s_scr_browser);
     lv_obj_set_pos(s_list_files, 0, 18);
-    lv_obj_set_size(s_list_files, SCR_W, LIST_H);
+    lv_obj_set_size(s_list_files, SCR_W, LIST_PANEL_H);
     lv_obj_set_style_border_width(s_list_files, 0, 0);
     lv_obj_set_style_radius(s_list_files, 0, 0);
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
@@ -1183,7 +1183,7 @@ extern "C" void editor_ui_init(void)
 
     s_menu_list = lv_list_create(s_scr_menu);
     lv_obj_set_pos(s_menu_list, 0, 18);
-    lv_obj_set_size(s_menu_list, SCR_W, LIST_H);
+    lv_obj_set_size(s_menu_list, SCR_W, LIST_PANEL_H);
     lv_obj_set_style_border_width(s_menu_list, 0, 0);
     lv_obj_set_style_radius(s_menu_list, 0, 0);
     lv_obj_set_style_pad_all(s_menu_list, 0, 0);
@@ -1202,7 +1202,7 @@ extern "C" void editor_ui_init(void)
 
     s_settings_list = lv_list_create(s_scr_settings);
     lv_obj_set_pos(s_settings_list, 0, 18);
-    lv_obj_set_size(s_settings_list, SCR_W, LIST_H);
+    lv_obj_set_size(s_settings_list, SCR_W, LIST_PANEL_H);
     lv_obj_set_style_border_width(s_settings_list, 0, 0);
     lv_obj_set_style_radius(s_settings_list, 0, 0);
     lv_obj_set_style_pad_all(s_settings_list, 0, 0);
