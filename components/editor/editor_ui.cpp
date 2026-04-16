@@ -262,150 +262,171 @@ extern "C" void editor_ui_refresh(void)
         }
     }
 
-    int scroll = editor_get_scroll_line();
     int total  = editor_get_line_count();
-    bool in_code = false;
 
     /* Selection range (byte offsets in flat text) */
     size_t sel_start = 0, sel_end = 0;
     bool has_sel = editor_selection_active();
     if (has_sel) editor_get_selection_range(&sel_start, &sel_end);
 
-    /* Track code fence state up to scroll line */
-    for (int i = 0; i < scroll && i < total; i++) {
-        size_t ll;
-        const char *lt = editor_get_line(i, &ll);
-        if (md_is_code_fence(lt, ll)) in_code = !in_code;
-    }
-
-    /* Render visible lines */
-    char line_buf[256];
-    int y_pos = 0;       /* running y position in editor content area */
-    int cur_y = -1;      /* cursor y position (set when cursor line is rendered) */
-    int cur_x = -1;      /* cursor x position */
-    int cur_h = LINE_H;  /* cursor height (matches font of cursor line) */
     int cur_line, cur_col;
     editor_get_cursor_pos(&cur_line, &cur_col);
 
-    for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        int line_idx = scroll + i;
-        if (line_idx >= total || y_pos >= EDITOR_H) {
-            if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+    int cur_y = -1;      /* cursor y position (set when cursor line is rendered) */
+    int cur_x = -1;      /* cursor x position */
+    int cur_h = LINE_H;  /* cursor height (matches font of cursor line) */
+
+    /* Render visible lines.  Wrapped lines consume more vertical space
+     * than a single LINE_H row, so the cursor may be pushed off-screen
+     * even though ensure_cursor_visible() thought it was in range.
+     * When that happens, increment scroll and re-render (bounded). */
+    for (int _scroll_retry = 0; _scroll_retry < MAX_LINE_LABELS;
+         _scroll_retry++) {
+        int scroll = editor_get_scroll_line();
+        bool in_code = false;
+
+        /* Track code fence state up to scroll line */
+        for (int i = 0; i < scroll && i < total; i++) {
+            size_t ll;
+            const char *lt = editor_get_line(i, &ll);
+            if (md_is_code_fence(lt, ll)) in_code = !in_code;
+        }
+
+        char line_buf[256];
+        int y_pos = 0;       /* running y position in editor content area */
+        cur_y = -1;
+        cur_x = -1;
+        cur_h = LINE_H;
+
+        for (int i = 0; i < MAX_LINE_LABELS; i++) {
+            int line_idx = scroll + i;
+            if (line_idx >= total || y_pos >= EDITOR_H) {
+                if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+                continue;
+            }
+
+            size_t ll;
+            const char *lt = editor_get_line(line_idx, &ll);
+
+            md_line_info_t mi;
+            md_parse_line(lt, ll, &mi, in_code);
+            if (mi.type == MD_LINE_CODE_FENCE) in_code = !in_code;
+
+            /* Prepare display text */
+            const char *disp_text = mi.content;
+            size_t disp_len = mi.content_len;
+            if (mi.type == MD_LINE_BULLET) {
+                int prefix = mi.indent_level * 2;
+                int n = snprintf(line_buf, sizeof(line_buf), "%*s* ", prefix, "");
+                if (disp_len > 0 && (size_t)n + disp_len < sizeof(line_buf) - 1) {
+                    memcpy(line_buf + n, disp_text, disp_len);
+                    line_buf[n + disp_len] = '\0';
+                } else {
+                    line_buf[n] = '\0';
+                }
+                disp_text = line_buf;
+                disp_len = strlen(line_buf);
+            } else if (mi.type == MD_LINE_HR) {
+                memset(line_buf, '-', 40);
+                line_buf[40] = '\0';
+                disp_text = line_buf;
+                disp_len = 40;
+            } else if (mi.type == MD_LINE_EMPTY) {
+                disp_text = " ";
+                disp_len = 1;
+            }
+
+            /* Create or reuse label */
+            if (!s_line_labels[i]) {
+                s_line_labels[i] = lv_label_create(s_cont_edit);
+                lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+                lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
+            }
+            lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_style_all(s_line_labels[i]);
+            lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
+            /* Re-apply width after style reset (remove_style_all clears it)
+             * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
+            lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+            lv_label_set_text_static(s_line_labels[i], "");
+
+            /* Copy text to a persistent buffer (label needs it) */
+            /* Use lv_label_set_text which copies internally */
+            char tmp[256];
+            size_t clen = disp_len < sizeof(tmp) - 1 ? disp_len : sizeof(tmp) - 1;
+            memcpy(tmp, disp_text, clen);
+            tmp[clen] = '\0';
+            lv_label_set_text(s_line_labels[i], tmp);
+            lv_obj_set_pos(s_line_labels[i], 2, y_pos);
+
+            /* Get the font for this line to compute correct line height */
+            const lv_font_t *line_font = lv_obj_get_style_text_font(
+                                            s_line_labels[i], LV_PART_MAIN);
+            int line_h = lv_font_get_line_height(line_font ? line_font : FONT_11);
+
+            /* Determine actual rendered height (may be taller if text wraps) */
+            lv_obj_update_layout(s_line_labels[i]);
+            int rendered_h = lv_obj_get_height(s_line_labels[i]);
+            if (rendered_h < line_h) rendered_h = line_h;
+
+            /* Selection highlight: invert the entire line label when any
+             * part of it falls inside the active selection range. */
+            if (has_sel) {
+                size_t line_off = (size_t)(lt - flat_text);
+                size_t line_byte_end = line_off + ll;
+                /* Include trailing newline for overlap detection */
+                if (line_byte_end < text_len &&
+                    flat_text[line_byte_end] == '\n')
+                    line_byte_end++;
+                if (sel_start < line_byte_end && sel_end > line_off) {
+                    lv_obj_set_style_bg_color(s_line_labels[i],
+                                              lv_color_black(), 0);
+                    lv_obj_set_style_bg_opa(s_line_labels[i],
+                                            LV_OPA_COVER, 0);
+                    lv_obj_set_style_text_color(s_line_labels[i],
+                                                lv_color_white(), 0);
+                }
+            }
+
+            /* If this is the cursor line, compute its pixel position.
+             * For headings, md_parse_line strips the "# " prefix from content,
+             * so the cursor column (which counts from the raw line start) needs
+             * to be adjusted. */
+            if (line_idx == cur_line) {
+                int col_in_display = cur_col;
+                /* content pointer offset from raw line start, in UTF-8 chars */
+                if (mi.content > lt) {
+                    int prefix_chars = 0;
+                    for (const char *pp = lt; pp < mi.content; pp++) {
+                        if ((*pp & 0xC0) != 0x80) prefix_chars++;
+                    }
+                    col_in_display -= prefix_chars;
+                    if (col_in_display < 0) col_in_display = 0;
+                }
+
+                /* Use LVGL to find the actual pixel position of the cursor
+                 * character.  This correctly handles word-level wrapping
+                 * where the break point differs from a simple chars_per_row
+                 * calculation. */
+                lv_point_t lpos;
+                lv_label_get_letter_pos(s_line_labels[i],
+                                        (uint32_t)col_in_display, &lpos);
+                cur_x = 2 + lpos.x;
+                cur_y = y_pos + lpos.y;
+                cur_h = line_h;
+            }
+
+            y_pos += rendered_h;
+        }
+
+        /* If the cursor line is in the expected range but wrapped lines
+         * pushed it off-screen, increment scroll and re-render. */
+        if (cur_line >= scroll && scroll < cur_line &&
+            (cur_y < 0 || cur_y >= EDITOR_H)) {
+            editor_set_scroll_line(scroll + 1);
             continue;
         }
-
-        size_t ll;
-        const char *lt = editor_get_line(line_idx, &ll);
-
-        md_line_info_t mi;
-        md_parse_line(lt, ll, &mi, in_code);
-        if (mi.type == MD_LINE_CODE_FENCE) in_code = !in_code;
-
-        /* Prepare display text */
-        const char *disp_text = mi.content;
-        size_t disp_len = mi.content_len;
-        if (mi.type == MD_LINE_BULLET) {
-            int prefix = mi.indent_level * 2;
-            int n = snprintf(line_buf, sizeof(line_buf), "%*s* ", prefix, "");
-            if (disp_len > 0 && (size_t)n + disp_len < sizeof(line_buf) - 1) {
-                memcpy(line_buf + n, disp_text, disp_len);
-                line_buf[n + disp_len] = '\0';
-            } else {
-                line_buf[n] = '\0';
-            }
-            disp_text = line_buf;
-            disp_len = strlen(line_buf);
-        } else if (mi.type == MD_LINE_HR) {
-            memset(line_buf, '-', 40);
-            line_buf[40] = '\0';
-            disp_text = line_buf;
-            disp_len = 40;
-        } else if (mi.type == MD_LINE_EMPTY) {
-            disp_text = " ";
-            disp_len = 1;
-        }
-
-        /* Create or reuse label */
-        if (!s_line_labels[i]) {
-            s_line_labels[i] = lv_label_create(s_cont_edit);
-            lv_obj_set_width(s_line_labels[i], SCR_W - 4);
-            lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
-        }
-        lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_style_all(s_line_labels[i]);
-        lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
-        /* Re-apply width after style reset (remove_style_all clears it)
-         * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
-        lv_obj_set_width(s_line_labels[i], SCR_W - 4);
-        lv_label_set_text_static(s_line_labels[i], "");
-
-        /* Copy text to a persistent buffer (label needs it) */
-        /* Use lv_label_set_text which copies internally */
-        char tmp[256];
-        size_t clen = disp_len < sizeof(tmp) - 1 ? disp_len : sizeof(tmp) - 1;
-        memcpy(tmp, disp_text, clen);
-        tmp[clen] = '\0';
-        lv_label_set_text(s_line_labels[i], tmp);
-        lv_obj_set_pos(s_line_labels[i], 2, y_pos);
-
-        /* Get the font for this line to compute correct line height */
-        const lv_font_t *line_font = lv_obj_get_style_text_font(
-                                        s_line_labels[i], LV_PART_MAIN);
-        int line_h = lv_font_get_line_height(line_font ? line_font : FONT_11);
-
-        /* Determine actual rendered height (may be taller if text wraps) */
-        lv_obj_update_layout(s_line_labels[i]);
-        int rendered_h = lv_obj_get_height(s_line_labels[i]);
-        if (rendered_h < line_h) rendered_h = line_h;
-
-        /* Selection highlight: invert the entire line label when any
-         * part of it falls inside the active selection range. */
-        if (has_sel) {
-            size_t line_off = (size_t)(lt - flat_text);
-            size_t line_byte_end = line_off + ll;
-            /* Include trailing newline for overlap detection */
-            if (line_byte_end < text_len &&
-                flat_text[line_byte_end] == '\n')
-                line_byte_end++;
-            if (sel_start < line_byte_end && sel_end > line_off) {
-                lv_obj_set_style_bg_color(s_line_labels[i],
-                                          lv_color_black(), 0);
-                lv_obj_set_style_bg_opa(s_line_labels[i],
-                                        LV_OPA_COVER, 0);
-                lv_obj_set_style_text_color(s_line_labels[i],
-                                            lv_color_white(), 0);
-            }
-        }
-
-        /* If this is the cursor line, compute its pixel position.
-         * For headings, md_parse_line strips the "# " prefix from content,
-         * so the cursor column (which counts from the raw line start) needs
-         * to be adjusted. */
-        if (line_idx == cur_line) {
-            int col_in_display = cur_col;
-            /* content pointer offset from raw line start, in UTF-8 chars */
-            if (mi.content > lt) {
-                int prefix_chars = 0;
-                for (const char *pp = lt; pp < mi.content; pp++) {
-                    if ((*pp & 0xC0) != 0x80) prefix_chars++;
-                }
-                col_in_display -= prefix_chars;
-                if (col_in_display < 0) col_in_display = 0;
-            }
-
-            /* Use LVGL to find the actual pixel position of the cursor
-             * character.  This correctly handles word-level wrapping
-             * where the break point differs from a simple chars_per_row
-             * calculation. */
-            lv_point_t lpos;
-            lv_label_get_letter_pos(s_line_labels[i],
-                                    (uint32_t)col_in_display, &lpos);
-            cur_x = 2 + lpos.x;
-            cur_y = y_pos + lpos.y;
-            cur_h = line_h;
-        }
-
-        y_pos += rendered_h;
+        break;
     }
 
     /* Update cursor position */
