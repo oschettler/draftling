@@ -231,10 +231,29 @@ static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
 static volatile bool s_hidh_ready = false;
-static uint8_t s_prev_keys[6] = {0};
+/* Maximum number of keycode slots in an extended boot / key-array
+ * report.  Most NKRO key-array keyboards use up to 15 slots. */
+#define MAX_KEY_SLOTS 20
+static uint8_t s_prev_keys[MAX_KEY_SLOTS] = {0};
+static int     s_prev_key_count = 0;
 /* Previous full report buffer for NKRO bitmap comparison */
 static uint8_t s_prev_report[32] = {0};
 static int     s_prev_report_len = 0;
+
+/* Detected keyboard report format (sticky after first detection).
+ * REPORT_FMT_UNKNOWN  -- not yet determined for this connection
+ * REPORT_FMT_BOOT     -- standard boot protocol (8 bytes, reserved byte)
+ * REPORT_FMT_BOOT_EXT -- extended boot / key-array (variable length)
+ * REPORT_FMT_NKRO_BM  -- NKRO bitmap
+ */
+typedef enum {
+    REPORT_FMT_UNKNOWN = 0,
+    REPORT_FMT_BOOT,
+    REPORT_FMT_BOOT_EXT,
+    REPORT_FMT_NKRO_BM,
+} report_fmt_t;
+static report_fmt_t s_report_fmt = REPORT_FMT_UNKNOWN;
+
 static volatile int s_battery_level = -1;  /* -1 = unknown */
 
 /* Active HIDH device handle (valid while connected) */
@@ -305,32 +324,47 @@ static void dispatch_key(uint8_t modifier, uint8_t keycode, bool pressed)
     s_callback(&ev);
 }
 
-/* Standard boot-protocol keyboard report: 8+ bytes
- * [0] modifier, [1] reserved, [2..7] up to 6 keycodes */
-static void process_boot_report(const uint8_t *data, int len)
+/* Standard boot-protocol keyboard report (or extended key-array).
+ * Boot protocol: [0]=modifier, [1]=reserved(0), [2..N]=keycodes
+ * Key-array (no reserved byte): [0]=modifier, [1..N]=keycodes
+ * The caller provides a pointer to the key array and its count. */
+static void process_key_array(const uint8_t *keys, int key_count,
+                              uint8_t modifier)
 {
-    uint8_t modifier = data[0];
-    const uint8_t *keys = &data[2]; /* keys[0..5] */
+    if (key_count > MAX_KEY_SLOTS) key_count = MAX_KEY_SLOTS;
 
     /* Detect newly pressed keys */
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < key_count; i++) {
         uint8_t kc = keys[i];
         if (kc == 0) continue;
-        if (!key_in_report(kc, s_prev_keys, 6)) {
+        if (!key_in_report(kc, s_prev_keys, s_prev_key_count)) {
             dispatch_key(modifier, kc, true);
         }
     }
 
     /* Detect released keys */
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < s_prev_key_count; i++) {
         uint8_t kc = s_prev_keys[i];
         if (kc == 0) continue;
-        if (!key_in_report(kc, keys, 6)) {
+        if (!key_in_report(kc, keys, key_count)) {
             dispatch_key(modifier, kc, false);
         }
     }
 
-    memcpy(s_prev_keys, keys, 6);
+    memset(s_prev_keys, 0, sizeof(s_prev_keys));
+    int copy_count = key_count < MAX_KEY_SLOTS ? key_count : MAX_KEY_SLOTS;
+    memcpy(s_prev_keys, keys, (size_t)copy_count);
+    s_prev_key_count = copy_count;
+}
+
+/* Legacy wrapper: standard boot protocol [mod, reserved, k0..k5] */
+static void process_boot_report(const uint8_t *data, int len)
+{
+    uint8_t modifier = data[0];
+    const uint8_t *keys = &data[2]; /* skip reserved byte */
+    int key_count = len - 2;
+    if (key_count < 0) key_count = 0;
+    process_key_array(keys, key_count, modifier);
 }
 
 /* NKRO bitmap keyboard report: modifier + N bitmap bytes.
@@ -398,31 +432,39 @@ static void process_keyboard_report(const uint8_t *data, int len,
 
     /* Determine report format.
      *
-     * Standard boot-protocol keyboard: exactly 8 bytes.
-     *   [0]=modifier  [1]=reserved(0)  [2..7]=keycodes
+     * Standard boot-protocol keyboard: 8 bytes.
+     *   [0]=modifier  [1]=reserved(0)  [2..7]=keycodes (6 slots)
+     *
+     * Extended boot protocol (some keyboards): >8 bytes with
+     *   the same layout, just more keycode slots.
+     *   [0]=modifier  [1]=reserved(0)  [2..N]=keycodes
+     *
+     * Key-array without reserved byte (NKRO key-array): variable.
+     *   [0]=modifier  [1..N]=keycodes  (no reserved byte)
      *
      * Some keyboards prepend the report ID as the first data byte.
      *   [0]=report_id  [1]=modifier  [2]=reserved(0)  [3..8]=keycodes
      *   Total: 9+ bytes with data[0]==report_id.
      *
-     * NKRO (N-Key Rollover) bitmap: typically >8 bytes.
-     *   [0]=modifier  [1..N]=bitmap where each bit = one keycode.
+     * NKRO bitmap: modifier + N bitmap bytes where each BIT is a
+     *   keycode.
      *
-     * Detection order:
-     * 1. Exactly 8 bytes -> boot protocol
-     * 2. >8 bytes, data[0]==report_id, data[2]==0 -> report-ID prepended
-     *    boot protocol (strip first byte, parse remaining as boot)
-     * 3. Everything else -> NKRO bitmap */
+     * Format detection uses a "sticky" approach: once a format is
+     * identified for this connection, it is reused for all subsequent
+     * reports to avoid ambiguity. */
 
-    if (len == 8) {
+    /* Boot protocol / report-ID-prepended boot are always detectable
+     * from the reserved byte being 0 and exact size constraints. */
+
+    /* Case: exactly 8 bytes with reserved byte == 0 -> boot protocol */
+    if (len == 8 && data[1] == 0) {
+        s_report_fmt = REPORT_FMT_BOOT;
         ESP_LOGD(TAG, "Boot protocol (8 bytes)");
         process_boot_report(data, len);
         return;
     }
 
-    /* Check for report-ID prepended boot protocol:
-     * data[0] matches report_id, and after stripping it we get
-     * a plausible boot report (data[2] == 0 is the reserved byte). */
+    /* Case: report-ID prepended boot protocol */
     if (len >= 9 && report_id > 0 && data[0] == report_id && data[2] == 0) {
         ESP_LOGD(TAG, "Boot protocol with report ID prefix (%d bytes)",
                  len);
@@ -430,9 +472,79 @@ static void process_keyboard_report(const uint8_t *data, int len,
         return;
     }
 
-    /* NKRO bitmap format */
-    ESP_LOGD(TAG, "NKRO bitmap (%d bytes)", len);
-    process_nkro_report(data, len);
+    /* Case: extended boot protocol (reserved byte present, > 8 bytes) */
+    if (data[1] == 0 && len > 8) {
+        s_report_fmt = REPORT_FMT_BOOT_EXT;
+        ESP_LOGD(TAG, "Extended boot protocol (%d bytes)", len);
+        process_boot_report(data, len);
+        return;
+    }
+
+    /* For reports where byte[1] != 0 we must distinguish between
+     * key-array and NKRO bitmap.  Use sticky format if already known. */
+    if (s_report_fmt == REPORT_FMT_BOOT_EXT) {
+        ESP_LOGD(TAG, "Key-array (sticky, %d bytes)", len);
+        uint8_t modifier = data[0];
+        process_key_array(&data[1], len - 1, modifier);
+        return;
+    }
+    if (s_report_fmt == REPORT_FMT_NKRO_BM) {
+        ESP_LOGD(TAG, "NKRO bitmap (sticky, %d bytes)", len);
+        process_nkro_report(data, len);
+        return;
+    }
+
+    /* First-time detection: examine payload bytes data[1..len-1].
+     *
+     * Key insight: in a key-array, each non-zero byte IS a HID keycode
+     * (0x04..0xE7).  In a bitmap, each byte is a bit-field where
+     * individual bits represent keycodes.
+     *
+     * Heuristic: if any payload byte is 0x01-0x03, those are reserved
+     * HID keycodes that would never appear in a key-array, so it must
+     * be a bitmap.  Otherwise, check if any non-zero byte has multiple
+     * bits set AND is a plausible keycode (>= 0x04).  In a bitmap,
+     * having multiple bits set in one byte means multiple keys in the
+     * same 8-keycode group are pressed simultaneously -- uncommon for
+     * a first-report heuristic.  A key-array byte for common keys
+     * (like 0x11=N) naturally has multiple bits set.
+     *
+     * If all non-zero bytes have exactly 1 bit set, it is ambiguous.
+     * Default to NKRO bitmap to preserve backward compatibility. */
+    {
+        bool has_low_value = false;  /* any byte 0x01-0x03 */
+        bool has_multi_bit = false;  /* any byte with >1 bit set */
+        for (int i = 1; i < len; i++) {
+            uint8_t b = data[i];
+            if (b == 0) continue;
+            if (b >= 0x01 && b <= 0x03) { has_low_value = true; break; }
+            /* __builtin_popcount counts set bits */
+            if (__builtin_popcount(b) > 1) has_multi_bit = true;
+        }
+        if (has_low_value) {
+            /* Definitely bitmap: 0x01-0x03 are impossible as keycodes */
+            s_report_fmt = REPORT_FMT_NKRO_BM;
+            ESP_LOGI(TAG, "Detected NKRO bitmap format (%d bytes)", len);
+            process_nkro_report(data, len);
+            return;
+        }
+        if (has_multi_bit) {
+            /* Byte like 0x11 (N) has bits 0 and 4 set -- common as a
+             * keycode value but very unusual as a bitmap byte (would
+             * need keycodes 0 and 4 pressed simultaneously).  Treat
+             * as key-array. */
+            s_report_fmt = REPORT_FMT_BOOT_EXT;
+            ESP_LOGI(TAG, "Detected key-array format (%d bytes)", len);
+            uint8_t modifier = data[0];
+            process_key_array(&data[1], len - 1, modifier);
+            return;
+        }
+        /* Ambiguous: all non-zero bytes are power-of-two values >= 4.
+         * Default to NKRO bitmap for backward compatibility. */
+        s_report_fmt = REPORT_FMT_NKRO_BM;
+        ESP_LOGI(TAG, "Assuming NKRO bitmap format (%d bytes)", len);
+        process_nkro_report(data, len);
+    }
 }
 
 /* ---- Unified HID Host callback ---- */
@@ -501,6 +613,8 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         s_hidh_dev   = NULL;
         s_battery_level = -1;
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
+        s_prev_key_count = 0;
+        s_report_fmt = REPORT_FMT_UNKNOWN;
         memset(s_prev_report, 0, sizeof(s_prev_report));
         s_prev_report_len = 0;
         s_dev_name[0] = '\0';
