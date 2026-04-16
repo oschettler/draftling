@@ -97,6 +97,10 @@ static int          s_last_bonded  = -1; /* index into s_bonded */
 /* Forward-declare status text callback (full declaration with other callbacks below) */
 static ble_status_text_cb_t s_status_text_cb = NULL;
 
+/* Device name -- declared here (before bonded_add) so it is visible
+ * throughout the file.  Sized to match BONDED_NAME_LEN. */
+static char s_dev_name[BONDED_NAME_LEN] = "";
+
 /* Helper: notify the UI of a human-readable status message */
 static void notify_status(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
@@ -227,7 +231,6 @@ static volatile bool s_connected  = false;
 static volatile bool s_connecting = false;
 static volatile bool s_scan_params_ready = false;
 static volatile bool s_hidh_ready = false;
-static char s_dev_name[64] = "";
 static uint8_t s_prev_keys[6] = {0};
 /* Previous full report buffer for NKRO bitmap comparison */
 static uint8_t s_prev_report[32] = {0};
