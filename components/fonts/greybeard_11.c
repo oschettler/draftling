@@ -4,11 +4,7 @@
  * Opts: --font greybeard/Greybeard-11px.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF --size 11 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_11 -o greybeard_11.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef GREYBEARD_11
 #define GREYBEARD_11 1
