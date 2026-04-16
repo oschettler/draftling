@@ -64,6 +64,7 @@ static lv_obj_t *s_lbl_status= NULL;
 static lv_obj_t *s_cursor    = NULL;
 static lv_obj_t *s_scr_browser = NULL;
 static lv_obj_t *s_list_files  = NULL;
+static lv_obj_t *s_lbl_br_status = NULL;
 static lv_obj_t *s_img_logo    = NULL;
 
 /* BLE connection prompt screen */
@@ -609,6 +610,18 @@ extern "C" void editor_ui_show_file_browser(void)
 {
     editor_close_file();
     refresh_file_list();
+
+    /* Show wifi status in the browser status bar */
+    if (wifi_manager_is_connected()) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
+                 wifi_manager_get_ssid(), wifi_manager_get_ip());
+        if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, buf);
+    } else {
+        if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status,
+                                                "F1:Menu  N:New file");
+    }
+
     lv_scr_load(s_scr_browser);
 }
 
@@ -623,6 +636,7 @@ extern "C" void editor_ui_set_status(const char *msg)
 {
     ESP_LOGI(TAG, "Status: %s", msg);
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
+    if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
 }
 
 /* ---- Menu system ---- */
@@ -1772,11 +1786,28 @@ extern "C" void editor_ui_init(void)
 
     s_list_files = lv_list_create(s_scr_browser);
     lv_obj_set_pos(s_list_files, 0, 18);
-    lv_obj_set_size(s_list_files, SCR_W, LIST_PANEL_H);
+    lv_obj_set_size(s_list_files, SCR_W, LIST_PANEL_H - STATUS_H);
     lv_obj_set_style_border_width(s_list_files, 0, 0);
     lv_obj_set_style_radius(s_list_files, 0, 0);
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
     lv_obj_set_style_text_font(s_list_files, FONT_14, 0);
+
+    /* File browser status bar */
+    lv_obj_t *br_sline = lv_obj_create(s_scr_browser);
+    lv_obj_set_size(br_sline, SCR_W, 1);
+    lv_obj_set_pos(br_sline, 0, SCR_H - STATUS_H);
+    lv_obj_set_style_bg_color(br_sline, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(br_sline, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(br_sline, 0, 0);
+    lv_obj_set_style_radius(br_sline, 0, 0);
+    lv_obj_set_style_pad_all(br_sline, 0, 0);
+
+    s_lbl_br_status = lv_label_create(s_scr_browser);
+    lv_obj_set_pos(s_lbl_br_status, 2, SCR_H - STATUS_H + 2);
+    lv_obj_set_width(s_lbl_br_status, SCR_W - 4);
+    lv_obj_set_style_text_font(s_lbl_br_status, FONT_11, 0);
+    lv_obj_set_style_text_color(s_lbl_br_status, lv_color_black(), 0);
+    lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
 
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
