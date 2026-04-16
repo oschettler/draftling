@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <freertos/FreeRTOS.h>
@@ -90,6 +91,7 @@ extern "C" esp_err_t sd_card_write_file(const char *path, const char *data, size
     FILE *f = fopen(path, "wb");
     if (!f) { ESP_LOGE(TAG, "Open for write failed: %s", path); return ESP_FAIL; }
     size_t wr = fwrite(data, 1, len, f);
+    fsync(fileno(f));
     fclose(f);
     return (wr == len) ? ESP_OK : ESP_FAIL;
 }
@@ -100,6 +102,7 @@ extern "C" esp_err_t sd_card_append_file(const char *path, const char *data, siz
     FILE *f = fopen(path, "ab");
     if (!f) return ESP_FAIL;
     fwrite(data, 1, len, f);
+    fsync(fileno(f));
     fclose(f);
     return ESP_OK;
 }
