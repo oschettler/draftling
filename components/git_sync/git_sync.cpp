@@ -281,17 +281,27 @@ static esp_err_t do_push(void)
     if (count < 0) { heap_caps_free(entries); set_error("Cannot list local files"); return ESP_FAIL; }
 
     int pushed = 0;
+    int attempted = 0;
     for (int i = 0; i < count; i++) {
         if (entries[i].is_dir) continue;
         const char *name = entries[i].name;
         size_t nlen = strlen(name);
         if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) continue;
 
+        attempted++;
         if (push_file(name) == ESP_OK) pushed++;
     }
 
     heap_caps_free(entries);
-    ESP_LOGI(TAG, "Pushed %d files", pushed);
+    ESP_LOGI(TAG, "Pushed %d/%d files", pushed, attempted);
+
+    if (attempted > 0 && pushed == 0) {
+        set_error("All files failed to push");
+        return ESP_FAIL;
+    }
+    if (pushed < attempted) {
+        ESP_LOGW(TAG, "%d file(s) failed to push", attempted - pushed);
+    }
     return ESP_OK;
 }
 
@@ -307,26 +317,44 @@ static void sync_task(void *arg)
         return;
     }
 
-    esp_err_t ret = ESP_OK;
+    esp_err_t pull_ret = ESP_OK;
+    esp_err_t push_ret = ESP_OK;
 
     if (dir == GIT_SYNC_PULL || dir == GIT_SYNC_BOTH) {
-        ret = do_pull();
-        if (ret != ESP_OK && dir != GIT_SYNC_BOTH) goto done;
+        pull_ret = do_pull();
+        if (pull_ret != ESP_OK && dir == GIT_SYNC_PULL) goto done;
+        /* For GIT_SYNC_BOTH a pull failure is non-fatal: the remote
+         * directory may not exist yet and will be created by push. */
     }
 
     if (dir == GIT_SYNC_PUSH || dir == GIT_SYNC_BOTH) {
-        ret = do_push();
+        push_ret = do_push();
     }
 
 done:
-    if (ret == ESP_OK) {
-        snprintf(s_last_sync, sizeof(s_last_sync), "OK");
-        notify(GIT_SYNC_SUCCESS, "Sync complete");
-    } else {
-        /* Ensure the UI is notified even when do_pull/do_push already
-         * called set_error() -- reset the state so a new sync can be
-         * triggered later. */
-        s_state = GIT_SYNC_ERROR;
+    {
+        /* Determine overall result.  For BOTH: pull failure alone is
+         * tolerable (empty remote), but push failure is always fatal. */
+        bool ok = false;
+        if (dir == GIT_SYNC_PULL) {
+            ok = (pull_ret == ESP_OK);
+        } else if (dir == GIT_SYNC_PUSH) {
+            ok = (push_ret == ESP_OK);
+        } else {
+            ok = (push_ret == ESP_OK);
+        }
+
+        if (ok) {
+            snprintf(s_last_sync, sizeof(s_last_sync), "OK");
+            notify(GIT_SYNC_SUCCESS, "Sync complete");
+        } else {
+            /* set_error() was already called by the failing operation;
+             * just make sure the state is ERROR so a new sync can be
+             * triggered later. */
+            if (s_state != GIT_SYNC_ERROR) {
+                set_error("Sync failed");
+            }
+        }
     }
 
     /* Free the HTTP response buffer to reclaim memory */
@@ -366,12 +394,23 @@ static void parse_config(const char *data)
             int val_len = trimmed - key_len - 1;
 
             if (key_len == 8 && memcmp(p, "repo_url", 8) == 0) {
+                /* Strip trailing .git and/or '/' if present -- the GitHub
+                 * API does not accept .git in repository paths and a
+                 * trailing slash would produce malformed URLs. */
+                int effective_len = val_len;
+                while (effective_len > 0 && val[effective_len - 1] == '/')
+                    effective_len--;
+                if (effective_len >= 4 && memcmp(val + effective_len - 4, ".git", 4) == 0) {
+                    effective_len -= 4;
+                }
+                while (effective_len > 0 && val[effective_len - 1] == '/')
+                    effective_len--;
                 /* Convert github.com URL to API URL */
-                if (val_len > 19 && memcmp(val, "https://github.com/", 19) == 0) {
+                if (effective_len > 19 && memcmp(val, "https://github.com/", 19) == 0) {
                     snprintf(s_cfg.api_url, sizeof(s_cfg.api_url),
-                             "https://api.github.com/repos/%.*s", val_len - 19, val + 19);
+                             "https://api.github.com/repos/%.*s", effective_len - 19, val + 19);
                 } else {
-                    int clen = val_len < (int)sizeof(s_cfg.api_url) - 1 ? val_len : (int)sizeof(s_cfg.api_url) - 1;
+                    int clen = effective_len < (int)sizeof(s_cfg.api_url) - 1 ? effective_len : (int)sizeof(s_cfg.api_url) - 1;
                     memcpy(s_cfg.api_url, val, clen);
                     s_cfg.api_url[clen] = '\0';
                 }
