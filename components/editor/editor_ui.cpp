@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
+#include <nvs.h>
 #include "sdkconfig.h"
 #include "lvgl.h"
 #include "freertos/FreeRTOS.h"
@@ -28,13 +29,17 @@
  * Latin-1 Supplement, and Cyrillic glyphs in every size, so a
  * single set of fonts covers all enabled keyboard layouts.
  *
- * FONT_11 is the primary body / UI font.  Its metrics match
- * the editor LINE_H and CHAR_W exactly (line_height 11, advance 6 px).
+ * The body font is selected at runtime via the base font size
+ * user setting (11, 14, or 16 px).  Heading fonts are scaled
+ * relative to the body size, using the 22 px font for large
+ * headings.  Status bars always use FONT_11 regardless of the
+ * body font setting.
  */
 #define FONT_11 (&greybeard_11)
 #define FONT_14 (&greybeard_14)
 #define FONT_16 (&greybeard_16)
 #define FONT_18 (&greybeard_18)
+#define FONT_22 (&greybeard_22)
 
 static const char *TAG = "EditorUI";
 
@@ -51,10 +56,107 @@ static const char *TAG = "EditorUI";
 #define STATUS_H     16
 #define EDITOR_Y     HEADER_H
 #define EDITOR_H     (SCR_H - HEADER_H - STATUS_H)
-#define LINE_H       11
-#define VISIBLE_LINES (EDITOR_H / LINE_H)
-#define CHAR_W       6   /* greybeard_11 advance: 96/16 = 6 px (monospace) */
 #define LIST_PANEL_H (SCR_H - 18)  /* height for list panels below header */
+
+/* ---- Base font size setting ----
+ * The user can pick 11, 14, or 16 px as the editor body font.
+ * Heading fonts are scaled up from the body size. */
+#define FONT_SIZE_COUNT 3
+static const int FONT_SIZE_OPTIONS[FONT_SIZE_COUNT] = { 11, 14, 16 };
+static const char *FONT_SIZE_LABELS[FONT_SIZE_COUNT] = { "11 px", "14 px", "16 px" };
+
+/* NVS namespace/key for font size */
+#define NVS_NS_EDITOR   "editor"
+#define NVS_KEY_FONTSZ  "fontsz"
+
+/* Current body font size in pixels (default 11) */
+static int s_font_size = 11;
+
+/* Derived layout values -- recomputed when font size changes */
+static int s_line_h       = 11;
+static int s_visible_lines = 0;   /* computed after s_line_h is set */
+static int s_char_w       = 6;
+
+/* Accessor macros that used to be compile-time constants */
+#define LINE_H        s_line_h
+#define VISIBLE_LINES s_visible_lines
+#define CHAR_W        s_char_w
+
+/* Forward declaration (defined below) */
+static int char_width_for_font(const lv_font_t *font);
+
+/* Return the body font for the current size setting. */
+static const lv_font_t *body_font(void)
+{
+    if (s_font_size == 16) return FONT_16;
+    if (s_font_size == 14) return FONT_14;
+    return FONT_11;
+}
+
+/* Return heading fonts (h1/h2/h3) scaled relative to the body size.
+ *   body 11 -> h3 14, h2 16, h1 18
+ *   body 14 -> h3 16, h2 18, h1 22
+ *   body 16 -> h3 18, h2 22, h1 22
+ */
+static const lv_font_t *h1_font(void)
+{
+    if (s_font_size >= 14) return FONT_22;
+    return FONT_18;
+}
+
+static const lv_font_t *h2_font(void)
+{
+    if (s_font_size == 16) return FONT_22;
+    if (s_font_size == 14) return FONT_18;
+    return FONT_16;
+}
+
+static const lv_font_t *h3_font(void)
+{
+    if (s_font_size == 16) return FONT_18;
+    if (s_font_size == 14) return FONT_16;
+    return FONT_14;
+}
+
+/* Recalculate derived layout values from the current body font. */
+static void recalc_layout(void)
+{
+    const lv_font_t *bf = body_font();
+    s_line_h = lv_font_get_line_height(bf);
+    s_char_w = char_width_for_font(bf);
+    s_visible_lines = EDITOR_H / s_line_h;
+}
+
+static int find_font_size_option(int sz)
+{
+    for (int i = 0; i < FONT_SIZE_COUNT; i++) {
+        if (FONT_SIZE_OPTIONS[i] == sz) return i;
+    }
+    return 0;
+}
+
+static void load_font_size_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t val = 0;
+        if (nvs_get_u8(h, NVS_KEY_FONTSZ, &val) == ESP_OK) {
+            if (val == 11 || val == 14 || val == 16)
+                s_font_size = val;
+        }
+        nvs_close(h);
+    }
+}
+
+static void save_font_size_to_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_FONTSZ, (uint8_t)s_font_size);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 
 /* LVGL objects */
 static lv_obj_t *s_scr       = NULL;
@@ -161,36 +263,38 @@ static lv_style_t s_style_quote;
 static void init_styles(void)
 {
     lv_style_init(&s_style_body);
-    lv_style_set_text_font(&s_style_body, FONT_11);
+    lv_style_set_text_font(&s_style_body, body_font());
     lv_style_set_text_color(&s_style_body, lv_color_black());
     lv_style_set_pad_all(&s_style_body, 0);
 
     lv_style_init(&s_style_h1);
-    lv_style_set_text_font(&s_style_h1, FONT_18);
+    lv_style_set_text_font(&s_style_h1, h1_font());
     lv_style_set_text_color(&s_style_h1, lv_color_black());
 
     lv_style_init(&s_style_h2);
-    lv_style_set_text_font(&s_style_h2, FONT_16);
+    lv_style_set_text_font(&s_style_h2, h2_font());
     lv_style_set_text_color(&s_style_h2, lv_color_black());
 
     lv_style_init(&s_style_h3);
-    lv_style_set_text_font(&s_style_h3, FONT_14);
+    lv_style_set_text_font(&s_style_h3, h3_font());
     lv_style_set_text_color(&s_style_h3, lv_color_black());
 
     lv_style_init(&s_style_code);
-    lv_style_set_text_font(&s_style_code, FONT_11);
+    lv_style_set_text_font(&s_style_code, body_font());
     lv_style_set_text_color(&s_style_code, lv_color_black());
     lv_style_set_border_width(&s_style_code, 1);
     lv_style_set_border_color(&s_style_code, lv_color_black());
     lv_style_set_pad_left(&s_style_code, 4);
 
     lv_style_init(&s_style_quote);
-    lv_style_set_text_font(&s_style_quote, FONT_11);
+    lv_style_set_text_font(&s_style_quote, body_font());
     lv_style_set_text_color(&s_style_quote, lv_color_black());
     lv_style_set_border_side(&s_style_quote, LV_BORDER_SIDE_LEFT);
     lv_style_set_border_width(&s_style_quote, 2);
     lv_style_set_border_color(&s_style_quote, lv_color_black());
     lv_style_set_pad_left(&s_style_quote, 8);
+
+    recalc_layout();
 }
 
 static void cursor_blink_cb(lv_timer_t *timer)
@@ -245,10 +349,11 @@ static lv_style_t *style_for_type(md_line_type_t type)
  * font data, divided by 16 (LVGL stores advances in 1/16-px units). */
 static int char_width_for_font(const lv_font_t *font)
 {
+    if (font == FONT_22) return 11;   /* adv_w 176 / 16 = 11 */
     if (font == FONT_18) return 9;    /* adv_w 144 / 16 = 9 */
     if (font == FONT_16) return 8;    /* adv_w 128 / 16 = 8 */
     if (font == FONT_14) return 7;    /* adv_w 112 / 16 = 7 */
-    return CHAR_W;                    /* FONT_11: adv_w  96 / 16 = 6 */
+    return 6;                         /* FONT_11: adv_w  96 / 16 = 6 */
 }
 
 /* Count UTF-8 characters in the first byte_len bytes of text. */
@@ -394,7 +499,7 @@ extern "C" void editor_ui_refresh(void)
             /* Get the font for this line to compute correct line height */
             const lv_font_t *line_font = lv_obj_get_style_text_font(
                                             s_line_labels[i], LV_PART_MAIN);
-            int line_h = lv_font_get_line_height(line_font ? line_font : FONT_11);
+            int line_h = lv_font_get_line_height(line_font ? line_font : body_font());
 
             /* Determine actual rendered height (may be taller if text wraps) */
             lv_obj_update_layout(s_line_labels[i]);
@@ -475,7 +580,7 @@ extern "C" void editor_ui_refresh(void)
                                     s_line_labels[i], LV_PART_MAIN);
                             lv_obj_set_style_text_font(
                                 s_sel_rects[i],
-                                sf ? sf : FONT_11, 0);
+                                sf ? sf : body_font(), 0);
                             lv_label_set_text(s_sel_rects[i], sel_buf);
                             lv_obj_set_pos(s_sel_rects[i],
                                            2 + sp.x, y_pos + sp.y);
@@ -742,10 +847,18 @@ static void refresh_settings_items(void)
     snprintf(buf, sizeof(buf), "Standby timeout: %s", cur_label);
     lv_list_add_btn(s_settings_list, NULL, buf);
 
-    /* 1: Sleep now */
+    /* 1: Base font size */
+    {
+        int fi = find_font_size_option(s_font_size);
+        snprintf(buf, sizeof(buf), "Base font size: %s",
+                 FONT_SIZE_LABELS[fi]);
+        lv_list_add_btn(s_settings_list, NULL, buf);
+    }
+
+    /* 2: Sleep now */
     lv_list_add_btn(s_settings_list, NULL, "Sleep now");
 
-    /* 2: Factory reset */
+    /* 3: Factory reset */
     if (s_factory_reset_confirm) {
         lv_list_add_btn(s_settings_list, NULL,
                         "Factory reset -- ENTER again to confirm");
@@ -753,7 +866,7 @@ static void refresh_settings_items(void)
         lv_list_add_btn(s_settings_list, NULL, "Factory reset");
     }
 
-    /* 3: Back */
+    /* 4: Back */
     lv_list_add_btn(s_settings_list, NULL, "Back (Esc)");
 
     /* Highlight selection */
@@ -790,7 +903,7 @@ static void close_settings(void)
 static void settings_activate_item(int idx)
 {
     /* Moving away from the factory-reset item cancels confirmation */
-    if (idx != 2 && s_factory_reset_confirm) {
+    if (idx != 3 && s_factory_reset_confirm) {
         s_factory_reset_confirm = false;
         refresh_settings_items();
     }
@@ -805,14 +918,24 @@ static void settings_activate_item(int idx)
         refresh_settings_items();
         break;
     }
-    case 1:
+    case 1: {
+        /* Cycle to next font size option */
+        int fi = find_font_size_option(s_font_size);
+        fi = (fi + 1) % FONT_SIZE_COUNT;
+        s_font_size = FONT_SIZE_OPTIONS[fi];
+        save_font_size_to_nvs();
+        init_styles();
+        refresh_settings_items();
+        break;
+    }
+    case 2:
         /* Sleep now -- auto-save first */
         if (editor_get_mode() == EDITOR_MODE_EDITING && editor_is_modified()) {
             editor_save_file();
         }
         standby_enter_sleep();
         break;
-    case 2:
+    case 3:
         /* Factory reset -- requires double-press confirmation */
         if (s_factory_reset_confirm) {
             ESP_LOGW(TAG, "Factory reset: erasing NVS and restarting");
@@ -824,7 +947,7 @@ static void settings_activate_item(int idx)
             refresh_settings_items();
         }
         break;
-    case 3:
+    case 4:
         close_settings();
         break;
     default:
@@ -832,7 +955,7 @@ static void settings_activate_item(int idx)
     }
 }
 
-#define SETTINGS_ITEM_COUNT 4
+#define SETTINGS_ITEM_COUNT 5
 
 static void handle_settings_key(const kb_event_t *ev)
 {
@@ -1723,6 +1846,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
 
 extern "C" void editor_ui_init(void)
 {
+    load_font_size_from_nvs();
     init_styles();
 
     /* Create key-event queue (must exist before BLE callback is set) */

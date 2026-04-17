@@ -61,14 +61,14 @@ Git repository via the GitHub REST API.
 | Ctrl+N | New file |
 | Ctrl+L | Cycle keyboard layout |
 | Ctrl+G | Git sync (pull + push) |
-| Ctrl+W | Connect WiFi |
+| Ctrl+W | Toggle WiFi (connect / disconnect) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
 
 ## Keyboard Layouts
 
-The editor supports seven keyboard layouts that can be switched with
+The editor supports four keyboard layouts that can be switched with
 **Ctrl+L** or through the **F1 menu**:
 
 | Code | Layout |
@@ -77,9 +77,6 @@ The editor supports seven keyboard layouts that can be switched with
 | UA | Ukrainian (Cyrillic) |
 | DE | German (QWERTZ with umlauts) |
 | FR | French (AZERTY with accents) |
-| KO | Korean (Dubeolsik) |
-| JA | Japanese (Kana) |
-| ZH | Chinese (Zhuyin/Bopomofo) |
 
 The current layout is shown in the title bar.
 
@@ -89,8 +86,6 @@ The set of compiled-in keyboard layouts is configurable via
 `idf.py menuconfig` under **DRAFTLING Keyboard Layouts**. Each layout
 can be independently enabled or disabled. By default **US-English** and
 **Ukrainian** are enabled. Disabling unused layouts saves flash space.
-CJK layouts (Korean, Japanese, Chinese) require additional font data
-and are disabled by default to conserve flash.
 
 ## Building
 
@@ -133,8 +128,7 @@ Found at the top-level **DRAFTLING Configuration** menu.
 
 Found at the top-level **DRAFTLING Keyboard Layouts** menu. Each layout
 can be independently enabled or disabled. Disabling unused layouts saves
-flash space. CJK layouts (Korean, Japanese, Chinese) require additional
-font data and are disabled by default.
+flash space.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -142,9 +136,6 @@ font data and are disabled by default.
 | Ukrainian (Cyrillic) | **y** | Ukrainian Cyrillic layout |
 | German (QWERTZ) | n | German layout with umlauts |
 | French (AZERTY) | n | French layout with accents |
-| Korean (Dubeolsik) | n | Korean Hangul Jamo input |
-| Japanese (Kana) | n | Japanese Hiragana (JIS kana) input |
-| Chinese (Zhuyin/Bopomofo) | n | Chinese Bopomofo phonetic input |
 
 ## Configuration Files
 
@@ -177,8 +168,8 @@ components/
   display/           Display driver (RLCD SPI) and LVGL v9 port
   sd_card/           SD card (SDMMC) file operations
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
-  kb_layout/         Keyboard layout translation (US/UA/DE/FR/KO/JA/ZH)
-  fonts/             Custom LVGL fonts (Cyrillic and CJK glyph coverage)
+  kb_layout/         Keyboard layout translation (US/UA/DE/FR)
+  fonts/             Custom LVGL fonts (Latin, Latin-1 Supplement, Cyrillic)
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   wifi_manager/      WiFi STA connection manager
   git_sync/          GitHub REST API file synchronization

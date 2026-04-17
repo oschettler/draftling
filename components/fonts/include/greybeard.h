@@ -14,6 +14,7 @@
  *   14 px: adv_w 112 -> char width  7, line_height 13
  *   16 px: adv_w 128 -> char width  8, line_height 15
  *   18 px: adv_w 144 -> char width  9, line_height 17
+ *   22 px: adv_w 176 -> char width 11, line_height 21
  *
  * All sizes include Latin, Latin-1 Supplement, and Cyrillic
  * coverage, so a single set of fonts serves every layout
@@ -38,6 +39,7 @@ extern const lv_font_t greybeard_11;
 extern const lv_font_t greybeard_14;
 extern const lv_font_t greybeard_16;
 extern const lv_font_t greybeard_18;
+extern const lv_font_t greybeard_22;
 
 #ifdef __cplusplus
 }
