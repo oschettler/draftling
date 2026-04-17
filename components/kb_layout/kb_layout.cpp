@@ -293,9 +293,9 @@ static const char *UA_NORMAL[] = {
     /* 33 ; */ "\xD0\xB6",   /* zh */
     /* 34 ' */ "\xD1\x94",   /* ye (Ukrainian) */
     /* 35 ` */ "\xD2\x91",   /* ghe with upturn (lowercase) */
-    /* 36 , */ ",",
-    /* 37 . */ ".",
-    /* 38 / */ "/",
+    /* 36 , */ "\xD0\xB1",   /* b (Ukrainian) */
+    /* 37 . */ "\xD1\x8E",   /* yu */
+    /* 38 / */ ".",
 };
 
 /* Uppercase Ukrainian */
@@ -337,9 +337,9 @@ static const char *UA_SHIFT[] = {
     /* 33 */ "\xD0\x96",     /* Zh */
     /* 34 */ "\xD0\x84",     /* Ye (upper, Ukrainian) */
     /* 35 */ "\xD2\x90",     /* Ghe with upturn (upper) */
-    /* 36 */ "<",
-    /* 37 */ ">",
-    /* 38 */ "?",
+    /* 36 */ "\xD0\x91",     /* B (Ukrainian, upper) */
+    /* 37 */ "\xD0\xAE",     /* Yu (upper) */
+    /* 38 */ ",",
 };
 #endif /* CONFIG_KB_LAYOUT_ENABLE_UA */
 
