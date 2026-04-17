@@ -31,6 +31,12 @@ static git_sync_callback_t s_callback = NULL;
 static char s_last_error[128] = "";
 static char s_last_sync[32]   = "";
 
+/* Task stack + TCB allocated from SPIRAM so that the sync task does not
+ * compete for scarce internal DRAM with BLE and WiFi. */
+#define GIT_SYNC_STACK_SIZE  (8 * 1024)
+static StackType_t *s_stack_buf = NULL;
+static StaticTask_t s_task_tcb;
+
 /* HTTP response accumulator */
 static char *s_resp_buf = NULL;
 static int   s_resp_len = 0;
@@ -408,9 +414,21 @@ extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
 
     s_state = GIT_SYNC_IN_PROGRESS;
 
-    BaseType_t rc = xTaskCreatePinnedToCore(sync_task, "git_sync", 8 * 1024,
-                                            (void *)(intptr_t)direction, 3, NULL, 0);
-    if (rc != pdPASS) {
+    /* Allocate the task stack from SPIRAM so we do not depend on scarce
+     * contiguous internal DRAM (BLE + WiFi consume most of it). */
+    if (!s_stack_buf) {
+        s_stack_buf = (StackType_t *)heap_caps_malloc(
+            GIT_SYNC_STACK_SIZE, MALLOC_CAP_SPIRAM);
+        if (!s_stack_buf) {
+            set_error("Failed to alloc sync stack");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    TaskHandle_t h = xTaskCreateStaticPinnedToCore(
+        sync_task, "git_sync", GIT_SYNC_STACK_SIZE / sizeof(StackType_t),
+        (void *)(intptr_t)direction, 3, s_stack_buf, &s_task_tcb, 0);
+    if (!h) {
         set_error("Failed to start sync task");
         return ESP_FAIL;
     }
