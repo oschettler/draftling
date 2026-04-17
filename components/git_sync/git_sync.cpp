@@ -123,10 +123,26 @@ static esp_err_t do_pull(void)
 {
     notify(GIT_SYNC_IN_PROGRESS, "Pulling remote files...");
 
-    /* List remote files */
+    /* List remote files.  When remote_path is empty the files live at the
+     * repository root, so the URL must be ".../contents?ref=..." (no
+     * trailing slash).  When a subdirectory is configured the path already
+     * ends with '/' thanks to parse_config(), so we strip it for the
+     * listing URL because the GitHub API returns 404 for paths that have
+     * a trailing slash and do not exist yet. */
     char url[512];
-    snprintf(url, sizeof(url), "%.255s/contents/%.127s?ref=%.63s",
-             s_cfg.api_url, s_cfg.remote_path, s_cfg.branch);
+    if (s_cfg.remote_path[0]) {
+        /* remote_path always ends with '/', trim it for the listing */
+        char trimmed[128];
+        strncpy(trimmed, s_cfg.remote_path, sizeof(trimmed) - 1);
+        trimmed[sizeof(trimmed) - 1] = '\0';
+        size_t tlen = strlen(trimmed);
+        if (tlen > 0 && trimmed[tlen - 1] == '/') trimmed[tlen - 1] = '\0';
+        snprintf(url, sizeof(url), "%.255s/contents/%.127s?ref=%.63s",
+                 s_cfg.api_url, trimmed, s_cfg.branch);
+    } else {
+        snprintf(url, sizeof(url), "%.255s/contents?ref=%.63s",
+                 s_cfg.api_url, s_cfg.branch);
+    }
 
     int status = 0;
     esp_err_t ret = api_request(url, HTTP_METHOD_GET, NULL, &status);
