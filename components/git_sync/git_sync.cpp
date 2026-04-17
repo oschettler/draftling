@@ -124,6 +124,170 @@ static esp_err_t api_request(const char *url, esp_http_client_method_t method,
     return ESP_OK;
 }
 
+/* ---- Git blob SHA helper ---- */
+
+static void compute_blob_sha(const char *content, size_t len, char out_hex[41])
+{
+    unsigned char hash[20];
+    char header[32];
+    int hlen = snprintf(header, sizeof(header), "blob %zu", len);
+
+    mbedtls_sha1_context ctx;
+    mbedtls_sha1_init(&ctx);
+    mbedtls_sha1_starts(&ctx);
+    mbedtls_sha1_update(&ctx, (const unsigned char *)header, hlen + 1);
+    mbedtls_sha1_update(&ctx, (const unsigned char *)content, len);
+    mbedtls_sha1_finish(&ctx, hash);
+    mbedtls_sha1_free(&ctx);
+
+    for (int i = 0; i < 20; i++)
+        snprintf(out_hex + i * 2, 3, "%02x", hash[i]);
+    out_hex[40] = '\0';
+}
+
+/* ---- Sync state: tracks per-file blob SHAs from the last successful sync
+ *      so we can do a 3-way comparison (saved vs local vs remote) and avoid
+ *      overwriting local edits or creating redundant commits. ---- */
+
+#define MAX_TRACKED_FILES 64
+#define STATE_NAME_MAX 128
+
+typedef struct {
+    char name[STATE_NAME_MAX];
+    char sha[41];
+} sync_state_entry_t;
+
+static sync_state_entry_t *s_sync_state = NULL;
+static int s_sync_state_count = 0;
+
+static void load_sync_state(void)
+{
+    if (s_sync_state) {
+        heap_caps_free(s_sync_state);
+        s_sync_state = NULL;
+    }
+    s_sync_state_count = 0;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%.255s/.git_state", s_cfg.local_path);
+
+    char *data = NULL;
+    size_t len = 0;
+    if (sd_card_read_file(path, &data, &len) != ESP_OK) {
+        /* No state file yet -- first sync */
+        return;
+    }
+
+    s_sync_state = (sync_state_entry_t *)heap_caps_calloc(
+        MAX_TRACKED_FILES, sizeof(sync_state_entry_t), MALLOC_CAP_SPIRAM);
+    if (!s_sync_state) {
+        free(data);
+        return;
+    }
+
+    /* Parse lines: name=sha */
+    const char *p = data;
+    while (*p && s_sync_state_count < MAX_TRACKED_FILES) {
+        const char *line_end = strchr(p, '\n');
+        if (!line_end) line_end = p + strlen(p);
+        int line_len = (int)(line_end - p);
+
+        int trimmed = line_len;
+        if (trimmed > 0 && p[trimmed - 1] == '\r') trimmed--;
+
+        const char *eq = (const char *)memchr(p, '=', trimmed);
+        if (eq) {
+            int name_len = (int)(eq - p);
+            const char *val = eq + 1;
+            int val_len = trimmed - name_len - 1;
+
+            if (name_len > 0 && name_len < STATE_NAME_MAX && val_len == 40) {
+                sync_state_entry_t *e = &s_sync_state[s_sync_state_count++];
+                memcpy(e->name, p, name_len);
+                e->name[name_len] = '\0';
+                memcpy(e->sha, val, 40);
+                e->sha[40] = '\0';
+            }
+        }
+
+        p = (*line_end) ? line_end + 1 : line_end;
+    }
+
+    free(data);
+    ESP_LOGI(TAG, "Loaded sync state: %d file(s)", s_sync_state_count);
+}
+
+static void save_sync_state(void)
+{
+    if (!s_sync_state || s_sync_state_count == 0) return;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%.255s/.git_state", s_cfg.local_path);
+
+    size_t buf_size = (size_t)s_sync_state_count * (STATE_NAME_MAX + 42);
+    char *buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    if (!buf) return;
+
+    size_t offset = 0;
+    for (int i = 0; i < s_sync_state_count; i++) {
+        if (s_sync_state[i].name[0] && s_sync_state[i].sha[0]) {
+            int written = snprintf(buf + offset, buf_size - offset,
+                                   "%s=%s\n",
+                                   s_sync_state[i].name,
+                                   s_sync_state[i].sha);
+            if (written > 0) offset += (size_t)written;
+        }
+    }
+
+    sd_card_write_file(path, buf, offset);
+    heap_caps_free(buf);
+    ESP_LOGI(TAG, "Saved sync state: %d file(s)", s_sync_state_count);
+}
+
+static void free_sync_state(void)
+{
+    if (s_sync_state) {
+        heap_caps_free(s_sync_state);
+        s_sync_state = NULL;
+    }
+    s_sync_state_count = 0;
+}
+
+static const char *get_saved_sha(const char *name)
+{
+    for (int i = 0; i < s_sync_state_count; i++) {
+        if (strcmp(s_sync_state[i].name, name) == 0) {
+            return s_sync_state[i].sha;
+        }
+    }
+    return NULL;
+}
+
+static void set_saved_sha(const char *name, const char *sha)
+{
+    /* Update existing entry */
+    for (int i = 0; i < s_sync_state_count; i++) {
+        if (strcmp(s_sync_state[i].name, name) == 0) {
+            strncpy(s_sync_state[i].sha, sha, 40);
+            s_sync_state[i].sha[40] = '\0';
+            return;
+        }
+    }
+    /* Add new entry */
+    if (!s_sync_state) {
+        s_sync_state = (sync_state_entry_t *)heap_caps_calloc(
+            MAX_TRACKED_FILES, sizeof(sync_state_entry_t), MALLOC_CAP_SPIRAM);
+        if (!s_sync_state) return;
+    }
+    if (s_sync_state_count < MAX_TRACKED_FILES) {
+        sync_state_entry_t *e = &s_sync_state[s_sync_state_count++];
+        strncpy(e->name, name, STATE_NAME_MAX - 1);
+        e->name[STATE_NAME_MAX - 1] = '\0';
+        strncpy(e->sha, sha, 40);
+        e->sha[40] = '\0';
+    }
+}
+
 /* ---- Pull: download remote .md files ---- */
 
 static esp_err_t do_pull(void)
@@ -164,12 +328,14 @@ static esp_err_t do_pull(void)
     /* Ensure local directory exists */
     sd_card_mkdir(s_cfg.local_path);
 
-    int count = 0;
+    int pulled = 0;
+    int skipped = 0;
     cJSON *item;
     cJSON_ArrayForEach(item, root) {
         cJSON *jname = cJSON_GetObjectItem(item, "name");
         cJSON *jtype = cJSON_GetObjectItem(item, "type");
         cJSON *jurl  = cJSON_GetObjectItem(item, "download_url");
+        cJSON *jsha  = cJSON_GetObjectItem(item, "sha");
 
         if (!jname || !jtype || !jurl) continue;
         if (strcmp(jtype->valuestring, "file") != 0) continue;
@@ -177,6 +343,46 @@ static esp_err_t do_pull(void)
         const char *name = jname->valuestring;
         size_t nlen = strlen(name);
         if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) continue;
+
+        const char *remote_sha = (jsha && jsha->valuestring)
+                                 ? jsha->valuestring : NULL;
+
+        /* 3-way check: compare remote SHA with saved (last-synced) SHA.
+         * If they match the file was not changed on the remote side since
+         * our last sync -- no need to download it. */
+        const char *saved = get_saved_sha(name);
+        if (saved && remote_sha && strcmp(remote_sha, saved) == 0) {
+            ESP_LOGD(TAG, "Pull skip (unchanged on remote): %s", name);
+            skipped++;
+            continue;
+        }
+
+        /* Remote was updated (or this is the first sync for this file).
+         * Before overwriting, check whether the local copy was also
+         * modified -- that would be a conflict. */
+        if (saved) {
+            char local_path[512];
+            snprintf(local_path, sizeof(local_path), "%.255s/%.255s",
+                     s_cfg.local_path, name);
+
+            char *local_content = NULL;
+            size_t local_len = 0;
+            if (sd_card_read_file(local_path, &local_content, &local_len)
+                    == ESP_OK) {
+                char local_sha[41];
+                compute_blob_sha(local_content, local_len, local_sha);
+                free(local_content);
+
+                if (strcmp(local_sha, saved) != 0) {
+                    /* Both local and remote changed -- keep local edits. */
+                    ESP_LOGW(TAG,
+                             "Conflict (both modified): %s -- keeping local",
+                             name);
+                    skipped++;
+                    continue;
+                }
+            }
+        }
 
         /* Download file */
         s_resp_len = 0;
@@ -187,12 +393,14 @@ static esp_err_t do_pull(void)
         char local[512];
         snprintf(local, sizeof(local), "%.255s/%.255s", s_cfg.local_path, name);
         sd_card_write_file(local, s_resp_buf, s_resp_len);
-        count++;
+        pulled++;
+
+        if (remote_sha) set_saved_sha(name, remote_sha);
         ESP_LOGI(TAG, "Pulled: %s", name);
     }
 
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Pulled %d files", count);
+    ESP_LOGI(TAG, "Pulled %d file(s), skipped %d", pulled, skipped);
     return ESP_OK;
 }
 
@@ -216,6 +424,19 @@ static esp_err_t push_file(const char *name)
         return ESP_ERR_NO_MEM;
     }
 
+    /* Compute local git blob SHA */
+    char local_sha[41];
+    compute_blob_sha(content, content_len, local_sha);
+
+    /* If the local SHA matches the saved state the file has not been
+     * modified since the last sync -- skip the push entirely. */
+    const char *saved = get_saved_sha(name);
+    if (saved && strcmp(local_sha, saved) == 0) {
+        ESP_LOGI(TAG, "Skipped (not modified locally): %s", name);
+        free(content);
+        return ESP_OK;
+    }
+
     /* Base64 encode */
     size_t b64_len = 0;
     mbedtls_base64_encode(NULL, 0, &b64_len, (const unsigned char *)content, content_len);
@@ -224,6 +445,8 @@ static esp_err_t push_file(const char *name)
     mbedtls_base64_encode((unsigned char *)b64, b64_len + 1, &b64_len,
                           (const unsigned char *)content, content_len);
     b64[b64_len] = '\0';
+
+    free(content);
 
     /* Check if file exists remotely to get its SHA */
     char url[768];
@@ -243,36 +466,13 @@ static esp_err_t push_file(const char *name)
         }
     }
 
-    /* Compute local git blob SHA ("blob <size>\0<content>") and compare
-     * with the remote SHA.  If they match the content is identical and
-     * there is no need to create another commit. */
-    if (sha[0]) {
-        unsigned char hash[20];
-        char header[32];
-        int hlen = snprintf(header, sizeof(header), "blob %zu", content_len);
-
-        mbedtls_sha1_context ctx;
-        mbedtls_sha1_init(&ctx);
-        mbedtls_sha1_starts(&ctx);
-        mbedtls_sha1_update(&ctx, (const unsigned char *)header, hlen + 1);
-        mbedtls_sha1_update(&ctx, (const unsigned char *)content, content_len);
-        mbedtls_sha1_finish(&ctx, hash);
-        mbedtls_sha1_free(&ctx);
-
-        char local_sha[41];
-        for (int i = 0; i < 20; i++)
-            snprintf(local_sha + i * 2, 3, "%02x", hash[i]);
-        local_sha[40] = '\0';
-
-        if (strcmp(local_sha, sha) == 0) {
-            ESP_LOGI(TAG, "Skipped (unchanged): %s", name);
-            free(content);
-            heap_caps_free(b64);
-            return ESP_OK;
-        }
+    /* If local SHA matches remote SHA the content is already in sync. */
+    if (sha[0] && strcmp(local_sha, sha) == 0) {
+        ESP_LOGI(TAG, "Skipped (unchanged): %s", name);
+        set_saved_sha(name, local_sha);
+        heap_caps_free(b64);
+        return ESP_OK;
     }
-
-    free(content);
 
     /* Build PUT body */
     cJSON *body = cJSON_CreateObject();
@@ -297,6 +497,7 @@ static esp_err_t push_file(const char *name)
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Pushed: %s", name);
+        set_saved_sha(name, local_sha);
     } else {
         ESP_LOGE(TAG, "Failed to push: %s (HTTP %d)", name, status);
     }
@@ -354,6 +555,9 @@ static void sync_task(void *arg)
         return;
     }
 
+    /* Load last-synced per-file SHAs for 3-way comparison. */
+    load_sync_state();
+
     esp_err_t pull_ret = ESP_OK;
     esp_err_t push_ret = ESP_OK;
 
@@ -393,6 +597,10 @@ done:
             }
         }
     }
+
+    /* Persist sync state so the next sync can diff properly. */
+    save_sync_state();
+    free_sync_state();
 
     /* Free the HTTP response buffer to reclaim memory */
     if (s_resp_buf) {
