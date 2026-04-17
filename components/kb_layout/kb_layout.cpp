@@ -239,7 +239,7 @@ static const char *FR_ALTGR[] = {
  * q->j  w->ts  e->u  r->k  t->e  y->n  u->g  i->sh  o->shch  p->z
  * a->f  s->i   d->v  f->a  g->p  h->r  j->o  k->l   l->d
  * z->ya x->ch  c->s  v->m  b->y  n->t  [->kh ]->yi   ;->zh    '->ye
- * `->ghe
+ * `->apostrophe  \->ghe
  */
 
 /* Lowercase Ukrainian letters as UTF-8 hex escapes.
@@ -292,7 +292,7 @@ static const char *UA_NORMAL[] = {
     /* 32   */ NULL,
     /* 33 ; */ "\xD0\xB6",   /* zh */
     /* 34 ' */ "\xD1\x94",   /* ye (Ukrainian) */
-    /* 35 ` */ "\xD2\x91",   /* ghe with upturn (lowercase) */
+    /* 35 ` */ "'",           /* apostrophe (used in Ukrainian orthography) */
     /* 36 , */ "\xD0\xB1",   /* b (Ukrainian) */
     /* 37 . */ "\xD1\x8E",   /* yu */
     /* 38 / */ ".",
@@ -326,7 +326,10 @@ static const char *UA_SHIFT[] = {
     /* 1B X */ "\xD0\xA7",   /* Ch */
     /* 1C Y */ "\xD0\x9D",   /* N */
     /* 1D Z */ "\xD0\xAF",   /* Ya */
-    /* 1E-27 */ "!","\"","#","$","%","^","&","*","(",")",
+    /* 1E-27 */ "!","\"",
+                "\xE2\x84\x96",          /* Shift+3: numero sign (U+2116) */
+                ";","%",":",             /* Shift+4: ;  Shift+5: %  Shift+6: : */
+                "?","*","(",")",         /* Shift+7: ? */
     /* 28-2C */ NULL, NULL, NULL, NULL, " ",
     /* 2D */ "_",
     /* 2E */ "+",
@@ -336,7 +339,7 @@ static const char *UA_SHIFT[] = {
     /* 32 */ NULL,
     /* 33 */ "\xD0\x96",     /* Zh */
     /* 34 */ "\xD0\x84",     /* Ye (upper, Ukrainian) */
-    /* 35 */ "\xD2\x90",     /* Ghe with upturn (upper) */
+    /* 35 */ "\xE2\x82\xB4", /* hryvnia sign (U+20B4) */
     /* 36 */ "\xD0\x91",     /* B (Ukrainian, upper) */
     /* 37 */ "\xD0\xAE",     /* Yu (upper) */
     /* 38 */ ",",

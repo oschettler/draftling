@@ -19,6 +19,11 @@
  * coverage, so a single set of fonts serves every layout
  * (US, UA, DE, FR).
  *
+ * NOTE: The Ukrainian layout uses numero sign (U+2116) and
+ * hryvnia sign (U+20B4) which are outside the current font
+ * ranges. Regenerate fonts with those codepoints added to
+ * display them correctly on screen.
+ *
  * License: MIT
  * https://github.com/flowchartsman/greybeard
  */
