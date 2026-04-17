@@ -127,6 +127,8 @@ static void recalc_layout(void)
     s_visible_lines = EDITOR_H / s_line_h;
 }
 
+/* Return the index into FONT_SIZE_OPTIONS for the given pixel size.
+ * Falls back to 0 (11 px) when the size is not recognized. */
 static int find_font_size_option(int sz)
 {
     for (int i = 0; i < FONT_SIZE_COUNT; i++) {
