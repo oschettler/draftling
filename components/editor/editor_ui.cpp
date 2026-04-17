@@ -1203,7 +1203,7 @@ static void handle_editor_key(const kb_event_t *ev)
                 wifi_connect_async();
             } else {
                 wifi_manager_disconnect();
-                editor_ui_set_status("WiFi: disconnected");
+                editor_ui_set_status("WiFi: disconnecting...");
             }
             break;
         case 'l':
