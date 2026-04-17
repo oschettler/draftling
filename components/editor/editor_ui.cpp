@@ -1202,7 +1202,8 @@ static void handle_editor_key(const kb_event_t *ev)
                 editor_ui_set_status("WiFi: connecting...");
                 wifi_connect_async();
             } else {
-                editor_ui_set_status("WiFi: already connected");
+                wifi_manager_disconnect();
+                editor_ui_set_status("WiFi: disconnected");
             }
             break;
         case 'l':
@@ -1695,6 +1696,13 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     }
     case GIT_SYNC_SUCCESS:
         editor_ui_set_status("Git: sync complete");
+        /* If a file is currently open in the editor, reload it from disk
+         * so the user sees any changes that were pulled from the remote. */
+        if (editor_get_mode() == EDITOR_MODE_EDITING && editor_get_file_path()) {
+            const char *path = editor_get_file_path();
+            editor_open_file(path);
+            editor_ui_refresh();
+        }
         break;
     case GIT_SYNC_ERROR:
     {
