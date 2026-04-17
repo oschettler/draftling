@@ -111,7 +111,13 @@ static esp_err_t api_request(const char *url, esp_http_client_method_t method,
     if (status_out) *status_out = status;
     if (err != ESP_OK) return err;
     if (status < 200 || status >= 300) {
-        ESP_LOGE(TAG, "HTTP %d for %s", status, url);
+        /* 404 is expected when checking whether a file exists before
+         * creating it; log at WARN level so it does not look like a
+         * real failure.  Other non-2xx codes are genuine errors. */
+        if (status == 404)
+            ESP_LOGW(TAG, "HTTP 404 (not found) for %s", url);
+        else
+            ESP_LOGE(TAG, "HTTP %d for %s", status, url);
         return ESP_FAIL;
     }
     return ESP_OK;

@@ -1324,10 +1324,38 @@ static void handle_editor_key(const kb_event_t *ev)
 
 static void handle_browser_key(const kb_event_t *ev)
 {
+    bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+
     /* F1 opens the menu from browser too */
     if (ev->keycode == KB_KEY_F1) {
         show_menu();
         return;
+    }
+
+    /* Ctrl+G triggers git sync from the file browser as well */
+    if (ctrl) {
+        char ck = 0;
+        if (ev->keycode >= 0x04 && ev->keycode <= 0x1D) {
+            ck = 'a' + (ev->keycode - 0x04);
+        }
+        if (ck == 'g') {
+            if (git_sync_is_configured() && wifi_manager_is_connected()) {
+                if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
+                    editor_ui_set_status("Git: syncing...");
+                } else {
+                    char sbuf[128];
+                    const char *err = git_sync_get_last_error();
+                    snprintf(sbuf, sizeof(sbuf), "Git: %s",
+                             (err && err[0]) ? err : "failed to start sync");
+                    editor_ui_set_status(sbuf);
+                }
+            } else if (!wifi_manager_is_connected()) {
+                editor_ui_set_status("Git: connect WiFi first (F1)");
+            } else {
+                editor_ui_set_status("Git: not configured");
+            }
+            return;
+        }
     }
 
     /* Translate keycode to character for letter-key checks.
@@ -1817,7 +1845,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_br_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_br_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_br_status, lv_color_black(), 0);
-    lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
+    lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
 
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
