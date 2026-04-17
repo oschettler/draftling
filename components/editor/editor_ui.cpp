@@ -31,15 +31,16 @@
  *
  * The body font is selected at runtime via the base font size
  * user setting (11, 14, or 16 px).  Heading fonts are scaled
- * relative to the body size, using the 22 px font for large
- * headings.  Status bars always use FONT_11 regardless of the
- * body font setting.
+ * relative to the body size, using the 26 px font for the
+ * largest headings.  Status bars always use FONT_11 regardless
+ * of the body font setting.
  */
 #define FONT_11 (&greybeard_11)
 #define FONT_14 (&greybeard_14)
 #define FONT_16 (&greybeard_16)
 #define FONT_18 (&greybeard_18)
 #define FONT_22 (&greybeard_22)
+#define FONT_26 (&greybeard_26)
 
 static const char *TAG = "EditorUI";
 
@@ -96,11 +97,12 @@ static const lv_font_t *body_font(void)
 /* Return heading fonts (h1/h2/h3) scaled relative to the body size.
  *   body 11 -> h3 14, h2 16, h1 18
  *   body 14 -> h3 16, h2 18, h1 22
- *   body 16 -> h3 18, h2 22, h1 22
+ *   body 16 -> h3 18, h2 22, h1 26
  */
 static const lv_font_t *h1_font(void)
 {
-    if (s_font_size >= 14) return FONT_22;
+    if (s_font_size == 16) return FONT_26;
+    if (s_font_size == 14) return FONT_22;
     return FONT_18;
 }
 

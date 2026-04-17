@@ -5,6 +5,7 @@ idf_component_register(
         "greybeard_16.c"
         "greybeard_18.c"
         "greybeard_22.c"
+        "greybeard_26.c"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES lvgl__lvgl
 )
