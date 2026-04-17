@@ -9,6 +9,7 @@
 #include <esp_heap_caps.h>
 #include <cJSON.h>
 #include <mbedtls/base64.h>
+#include <mbedtls/sha1.h>
 
 #include "git_sync.h"
 #include "sd_card.h"
@@ -223,7 +224,6 @@ static esp_err_t push_file(const char *name)
     mbedtls_base64_encode((unsigned char *)b64, b64_len + 1, &b64_len,
                           (const unsigned char *)content, content_len);
     b64[b64_len] = '\0';
-    free(content);
 
     /* Check if file exists remotely to get its SHA */
     char url[768];
@@ -242,6 +242,37 @@ static esp_err_t push_file(const char *name)
             cJSON_Delete(r);
         }
     }
+
+    /* Compute local git blob SHA ("blob <size>\0<content>") and compare
+     * with the remote SHA.  If they match the content is identical and
+     * there is no need to create another commit. */
+    if (sha[0]) {
+        unsigned char hash[20];
+        char header[32];
+        int hlen = snprintf(header, sizeof(header), "blob %zu", content_len);
+
+        mbedtls_sha1_context ctx;
+        mbedtls_sha1_init(&ctx);
+        mbedtls_sha1_starts(&ctx);
+        mbedtls_sha1_update(&ctx, (const unsigned char *)header, hlen + 1);
+        mbedtls_sha1_update(&ctx, (const unsigned char *)content, content_len);
+        mbedtls_sha1_finish(&ctx, hash);
+        mbedtls_sha1_free(&ctx);
+
+        char local_sha[41];
+        for (int i = 0; i < 20; i++)
+            snprintf(local_sha + i * 2, 3, "%02x", hash[i]);
+        local_sha[40] = '\0';
+
+        if (strcmp(local_sha, sha) == 0) {
+            ESP_LOGI(TAG, "Skipped (unchanged): %s", name);
+            free(content);
+            heap_caps_free(b64);
+            return ESP_OK;
+        }
+    }
+
+    free(content);
 
     /* Build PUT body */
     cJSON *body = cJSON_CreateObject();

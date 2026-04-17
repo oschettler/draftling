@@ -885,6 +885,10 @@ static void menu_activate_item(int idx)
         close_menu();
         break;
     case 4: /* Git sync */
+        /* Auto-save unsaved edits so the sync task pushes the latest content. */
+        if (editor_is_modified() && editor_get_file_path()) {
+            editor_save_file();
+        }
         if (git_sync_is_configured() && wifi_manager_is_connected()) {
             close_menu();
             if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
@@ -1172,6 +1176,11 @@ static void handle_editor_key(const kb_event_t *ev)
             editor_ui_refresh();
             return;
         case 'g':
+            /* Auto-save the current file so the sync task picks up
+             * the latest edits (it reads from disk). */
+            if (editor_is_modified() && editor_get_file_path()) {
+                editor_save_file();
+            }
             if (git_sync_is_configured() && wifi_manager_is_connected()) {
                 if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
                     editor_ui_set_status("Git: syncing...");
