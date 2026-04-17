@@ -353,6 +353,7 @@ static lv_style_t *style_for_type(md_line_type_t type)
  * font data, divided by 16 (LVGL stores advances in 1/16-px units). */
 static int char_width_for_font(const lv_font_t *font)
 {
+    if (font == FONT_26) return 13;   /* adv_w 208 / 16 = 13 */
     if (font == FONT_22) return 11;   /* adv_w 176 / 16 = 11 */
     if (font == FONT_18) return 9;    /* adv_w 144 / 16 = 9 */
     if (font == FONT_16) return 8;    /* adv_w 128 / 16 = 8 */
