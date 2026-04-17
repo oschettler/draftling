@@ -248,9 +248,15 @@ static esp_err_t do_push(void)
 {
     notify(GIT_SYNC_IN_PROGRESS, "Pushing local files...");
 
-    sd_card_file_entry_t entries[64];
-    int count = sd_card_list_dir(s_cfg.local_path, entries, 64);
-    if (count < 0) { set_error("Cannot list local files"); return ESP_FAIL; }
+    /* Allocate from SPIRAM -- the array is ~17 KB which is too large
+     * for the task stack when BLE + WiFi are active. */
+    static const int MAX_ENTRIES = 64;
+    sd_card_file_entry_t *entries = (sd_card_file_entry_t *)heap_caps_malloc(
+        MAX_ENTRIES * sizeof(sd_card_file_entry_t), MALLOC_CAP_SPIRAM);
+    if (!entries) { set_error("Out of memory"); return ESP_ERR_NO_MEM; }
+
+    int count = sd_card_list_dir(s_cfg.local_path, entries, MAX_ENTRIES);
+    if (count < 0) { heap_caps_free(entries); set_error("Cannot list local files"); return ESP_FAIL; }
 
     int pushed = 0;
     for (int i = 0; i < count; i++) {
@@ -262,6 +268,7 @@ static esp_err_t do_push(void)
         if (push_file(name) == ESP_OK) pushed++;
     }
 
+    heap_caps_free(entries);
     ESP_LOGI(TAG, "Pushed %d files", pushed);
     return ESP_OK;
 }
@@ -401,7 +408,7 @@ extern "C" esp_err_t git_sync_start(git_sync_direction_t direction)
 
     s_state = GIT_SYNC_IN_PROGRESS;
 
-    BaseType_t rc = xTaskCreatePinnedToCore(sync_task, "git_sync", 32 * 1024,
+    BaseType_t rc = xTaskCreatePinnedToCore(sync_task, "git_sync", 8 * 1024,
                                             (void *)(intptr_t)direction, 3, NULL, 0);
     if (rc != pdPASS) {
         set_error("Failed to start sync task");
