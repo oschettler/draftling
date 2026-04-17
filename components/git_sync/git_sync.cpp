@@ -357,21 +357,21 @@ static void sync_task(void *arg)
     esp_err_t pull_ret = ESP_OK;
     esp_err_t push_ret = ESP_OK;
 
-    if (dir == GIT_SYNC_PULL || dir == GIT_SYNC_BOTH) {
-        pull_ret = do_pull();
-        if (pull_ret != ESP_OK && dir == GIT_SYNC_PULL) goto done;
-        /* For GIT_SYNC_BOTH a pull failure is non-fatal: the remote
-         * directory may not exist yet and will be created by push. */
-    }
-
+    /* Push before pull so that local edits are uploaded to the remote
+     * before pull overwrites local files with the remote versions. */
     if (dir == GIT_SYNC_PUSH || dir == GIT_SYNC_BOTH) {
         push_ret = do_push();
+        if (push_ret != ESP_OK && dir == GIT_SYNC_PUSH) goto done;
+    }
+
+    if (dir == GIT_SYNC_PULL || dir == GIT_SYNC_BOTH) {
+        pull_ret = do_pull();
     }
 
 done:
     {
-        /* Determine overall result.  For BOTH: pull failure alone is
-         * tolerable (empty remote), but push failure is always fatal. */
+        /* Determine overall result.  For BOTH: push failure is always
+         * fatal, pull failure alone is tolerable (empty remote). */
         bool ok = false;
         if (dir == GIT_SYNC_PULL) {
             ok = (pull_ret == ESP_OK);
