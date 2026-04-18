@@ -1,10 +1,14 @@
 /*******************************************************************************
  * Size: 22 px
  * Bpp: 1
- * Opts: --font Greybeard-22px.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF,0x20B4,0x2116 --size 22 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_22 -o greybeard_22.c
+ * Opts: --font Greybeard-22px.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF,0x20AC,0x20B4,0x2116 --size 22 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_22 -o greybeard_22.c
  ******************************************************************************/
 
+#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
 
 #ifndef GREYBEARD_22
 #define GREYBEARD_22 1
@@ -1896,6 +1900,10 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     0xc3, 0x66, 0x24, 0x34, 0xff, 0x1c, 0x2c, 0x44,
     0x42, 0xc3,
 
+    /* U+20AC "€" */
+    0xf, 0x86, 0x33, 0x0, 0xc0, 0xff, 0xc, 0x3,
+    0x3, 0xf8, 0x30, 0xc, 0x1, 0x8c, 0x3e,
+
     /* U+20B4 "₴" */
     0x7c, 0xc6, 0x3, 0x2, 0x6, 0xff, 0x18, 0xff,
     0x60, 0xc0, 0x41, 0x22, 0x3e,
@@ -2358,8 +2366,9 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 6153, .adv_w = 176, .box_w = 8, .box_h = 14, .ofs_x = 2, .ofs_y = -4},
     {.bitmap_index = 6167, .adv_w = 176, .box_w = 8, .box_h = 13, .ofs_x = 2, .ofs_y = 0},
     {.bitmap_index = 6180, .adv_w = 176, .box_w = 8, .box_h = 10, .ofs_x = 2, .ofs_y = 0},
-    {.bitmap_index = 6190, .adv_w = 176, .box_w = 8, .box_h = 13, .ofs_x = 2, .ofs_y = 0},
-    {.bitmap_index = 6203, .adv_w = 176, .box_w = 10, .box_h = 13, .ofs_x = 1, .ofs_y = 0}
+    {.bitmap_index = 6190, .adv_w = 176, .box_w = 10, .box_h = 12, .ofs_x = 1, .ofs_y = 0},
+    {.bitmap_index = 6205, .adv_w = 176, .box_w = 8, .box_h = 13, .ofs_x = 2, .ofs_y = 0},
+    {.bitmap_index = 6218, .adv_w = 176, .box_w = 10, .box_h = 13, .ofs_x = 1, .ofs_y = 0}
 };
 
 /*---------------------
@@ -2367,7 +2376,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
  *--------------------*/
 
 static const uint16_t unicode_list_4[] = {
-    0x0, 0x62
+    0x0, 0x8, 0x6a
 };
 
 /*Collect the unicode lists and glyph_id offsets*/
@@ -2390,8 +2399,8 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 8372, .range_length = 99, .glyph_id_start = 446,
-        .unicode_list = unicode_list_4, .glyph_id_ofs_list = NULL, .list_length = 2, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
+        .range_start = 8364, .range_length = 107, .glyph_id_start = 446,
+        .unicode_list = unicode_list_4, .glyph_id_ofs_list = NULL, .list_length = 3, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
     }
 };
 

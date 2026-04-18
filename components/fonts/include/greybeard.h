@@ -4,7 +4,8 @@
  * Greybeard fonts for LVGL.
  * Generated from Greybeard TTF v1.0.0 via lv_font_conv.
  * Unicode ranges: 0x0020-0x007F, 0x00A0-0x00FF, 0x0400-0x04FF,
- *                 0x20B4 (hryvnia sign), 0x2116 (numero sign).
+ *                 0x20AC (euro sign), 0x20B4 (hryvnia sign),
+ *                 0x2116 (numero sign).
  *
  * Greybeard is a monospaced bitmap font (vector port of UW ttyp0).
  * Each TTF file is designed for a single native pixel size, so
@@ -19,8 +20,8 @@
  *   26 px: adv_w 208 -> char width 13, line_height 25  (scaled from 22 px TTF)
  *
  * All sizes include Latin, Latin-1 Supplement, Cyrillic,
- * numero sign, and hryvnia sign coverage, so a single set
- * of fonts serves every layout (US, UA, DE, FR).
+ * euro sign, numero sign, and hryvnia sign coverage, so a
+ * single set of fonts serves every layout (US, UA, DE, FR).
  *
  * License: MIT
  * https://github.com/flowchartsman/greybeard

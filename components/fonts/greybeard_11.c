@@ -1,10 +1,14 @@
 /*******************************************************************************
  * Size: 11 px
  * Bpp: 1
- * Opts: --font Greybeard-11px.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF,0x20B4,0x2116 --size 11 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_11 -o greybeard_11.c
+ * Opts: --font Greybeard-11px.ttf -r 0x20-0x7F,0xA0-0xFF,0x400-0x4FF,0x20AC,0x20B4,0x2116 --size 11 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_11 -o greybeard_11.c
  ******************************************************************************/
 
+#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
 
 #ifndef GREYBEARD_11
 #define GREYBEARD_11 1
@@ -1353,6 +1357,9 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
     /* U+04FF "ӿ" */
     0x96, 0xf6, 0x99,
 
+    /* U+20AC "€" */
+    0x3a, 0x3c, 0x8f, 0x20, 0xe0,
+
     /* U+20B4 "₴" */
     0x69, 0x1f, 0xf8, 0x96,
 
@@ -1812,8 +1819,9 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 2003, .adv_w = 96, .box_w = 4, .box_h = 8, .ofs_x = 1, .ofs_y = -2},
     {.bitmap_index = 2007, .adv_w = 96, .box_w = 4, .box_h = 8, .ofs_x = 1, .ofs_y = 0},
     {.bitmap_index = 2011, .adv_w = 96, .box_w = 4, .box_h = 6, .ofs_x = 1, .ofs_y = 0},
-    {.bitmap_index = 2014, .adv_w = 96, .box_w = 4, .box_h = 8, .ofs_x = 1, .ofs_y = 0},
-    {.bitmap_index = 2018, .adv_w = 96, .box_w = 5, .box_h = 8, .ofs_x = 1, .ofs_y = 0}
+    {.bitmap_index = 2014, .adv_w = 96, .box_w = 5, .box_h = 7, .ofs_x = 1, .ofs_y = 0},
+    {.bitmap_index = 2019, .adv_w = 96, .box_w = 4, .box_h = 8, .ofs_x = 1, .ofs_y = 0},
+    {.bitmap_index = 2023, .adv_w = 96, .box_w = 5, .box_h = 8, .ofs_x = 1, .ofs_y = 0}
 };
 
 /*---------------------
@@ -1821,7 +1829,7 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
  *--------------------*/
 
 static const uint16_t unicode_list_4[] = {
-    0x0, 0x62
+    0x0, 0x8, 0x6a
 };
 
 /*Collect the unicode lists and glyph_id offsets*/
@@ -1844,8 +1852,8 @@ static const lv_font_fmt_txt_cmap_t cmaps[] =
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 8372, .range_length = 99, .glyph_id_start = 446,
-        .unicode_list = unicode_list_4, .glyph_id_ofs_list = NULL, .list_length = 2, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
+        .range_start = 8364, .range_length = 107, .glyph_id_start = 446,
+        .unicode_list = unicode_list_4, .glyph_id_ofs_list = NULL, .list_length = 3, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
     }
 };
 
