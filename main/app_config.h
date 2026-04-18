@@ -30,6 +30,9 @@
 #define I2C_SDA_PIN     13
 #define I2C_SCL_PIN     14
 
+/* Battery voltage ADC (GPIO4, ADC1_CH3, 3:1 divider) */
+#define BATT_ADC_PIN    4
+
 /* Deep-sleep wakeup on GPIO18 (EXT0, active-low) */
 #define WAKEUP_GPIO_NUM 18
 

@@ -20,6 +20,7 @@
 #include "lvgl_port.h"
 #include "standby.h"
 #include "greybeard.h"
+#include "battery.h"
 #include "freertos/task.h"
 
 /*
@@ -217,6 +218,14 @@ static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byt
  * changes and a second Esc will discard + close. */
 static bool s_esc_pending = false;
 
+/* ---- Device battery display (Waveshare RLCD42) ---- */
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
+static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
+static lv_timer_t *s_batt_timer     = NULL;
+#define BATT_POLL_MS 30000  /* refresh battery every 30 s */
+#endif
+
 /* ---- Key-event input queue ----
  * The BLE callback runs on the HID host task and must not block on the
  * LVGL mutex.  Key events are enqueued here from the BLE context (ISR-
@@ -310,6 +319,36 @@ static void cursor_blink_cb(lv_timer_t *timer)
         else lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
     }
 }
+
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+/* Build an ASCII battery level string such as "[====]100%"
+ * or "[=   ] 25%" for the status bar. */
+static void format_batt_str(char *buf, size_t len)
+{
+    int pct = battery_read_percent();
+    if (pct < 0) {
+        snprintf(buf, len, "[----]");
+        return;
+    }
+
+    /* Four-segment bar: each segment = 25 %% */
+    int segs = (pct >= 100) ? 4 : (pct >= 75) ? 3 : (pct >= 50) ? 2 : (pct >= 25) ? 1 : 0;
+    char bar[5];
+    for (int i = 0; i < 4; ++i) bar[i] = (i < segs) ? '=' : ' ';
+    bar[4] = '\0';
+
+    snprintf(buf, len, "[%s]%d%%", bar, pct);
+}
+
+static void batt_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    char batt[20];
+    format_batt_str(batt, sizeof(batt));
+    if (s_lbl_dev_batt)    lv_label_set_text(s_lbl_dev_batt, batt);
+    if (s_lbl_br_dev_batt) lv_label_set_text(s_lbl_br_dev_batt, batt);
+}
+#endif
 
 static void update_title_bar(void)
 {
@@ -1950,6 +1989,17 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_status,
         "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
 
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+    /* Device battery label (right-aligned in editor status bar) */
+    s_lbl_dev_batt = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
+    lv_obj_set_style_text_color(s_lbl_dev_batt, lv_color_black(), 0);
+    lv_obj_set_style_text_align(s_lbl_dev_batt, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_lbl_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
+    lv_obj_set_width(s_lbl_dev_batt, 78);
+    lv_label_set_text(s_lbl_dev_batt, "");
+#endif
+
     /* Cursor blink timer */
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);
 
@@ -1992,6 +2042,21 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_font(s_lbl_br_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_br_status, lv_color_black(), 0);
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
+
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+    /* Device battery label (right-aligned in browser status bar) */
+    s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
+    lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);
+    lv_obj_set_style_text_color(s_lbl_br_dev_batt, lv_color_black(), 0);
+    lv_obj_set_style_text_align(s_lbl_br_dev_batt, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_lbl_br_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
+    lv_obj_set_width(s_lbl_br_dev_batt, 78);
+    lv_label_set_text(s_lbl_br_dev_batt, "");
+
+    /* Battery poll timer + first reading */
+    s_batt_timer = lv_timer_create(batt_timer_cb, BATT_POLL_MS, NULL);
+    batt_timer_cb(NULL);  /* show initial value immediately */
+#endif
 
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);

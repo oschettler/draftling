@@ -15,6 +15,7 @@
 #include "wifi_manager.h"
 #include "git_sync.h"
 #include "standby.h"
+#include "battery.h"
 
 static const char *TAG = "Draftling";
 
@@ -64,6 +65,12 @@ extern "C" void app_main(void)
     /* Initialize Bluetooth keyboard */
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
+
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+    /* Initialize battery voltage monitor (GPIO4 ADC) */
+    ESP_LOGI(TAG, "Initializing battery monitor...");
+    battery_init(BATT_ADC_PIN);
+#endif
 
     /* Initialize WiFi manager (doesn't connect yet) */
     ESP_LOGI(TAG, "Initializing WiFi manager...");
