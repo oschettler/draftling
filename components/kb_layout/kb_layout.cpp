@@ -146,7 +146,10 @@ static const char *DE_ALTGR[] = {
 /* ------------------------------------------------------------------ */
 /* French (AZERTY) layout                                             */
 /* ------------------------------------------------------------------ */
-/* French remaps many keys: A<->Q, Z<->W, M moves, numbers are shifted.
+/* French remaps many keys: A<->Q, Z<->W, M moves.
+ * Unlike a standard OS-level AZERTY where symbols are unshifted on the
+ * number row, here digits are unshifted and AZERTY symbols are shifted,
+ * keeping number entry fast on this embedded device.
  * Accented chars use UTF-8:
  *   e-grave = \xC3\xA8,  E-grave = \xC3\x88
  *   e-acute = \xC3\xA9
@@ -159,23 +162,14 @@ static const char *FR_NORMAL[] = {
     "q","b","c","d","e","f","g","h","i","j","k","l",  /* 04-0F: a->q */
     ",","n","o","p","a","r","s","t","u","v","z","x",  /* 10-1B: m->,q->a,w->z */
     "y","w",                                          /* 1C-1D: z->w (AZERTY) */
-    "&",                                              /* 1E: 1 -> & */
-    "\xC3\xA9",                                       /* 1F: 2 -> e-acute */
-    "\x22",                                           /* 20: 3 -> " */
-    "'",                                              /* 21: 4 -> ' */
-    "(",                                              /* 22: 5 -> ( */
-    "-",                                              /* 23: 6 -> - */
-    "\xC3\xA8",                                       /* 24: 7 -> e-grave */
-    "_",                                              /* 25: 8 -> _ */
-    "\xC3\xA7",                                       /* 26: 9 -> c-cedilla */
-    "\xC3\xA0",                                       /* 27: 0 -> a-grave */
+    "1","2","3","4","5","6","7","8","9","0",           /* 1E-27: digits */
     NULL,NULL,NULL,NULL," ",                           /* 28-2C */
     ")",                                              /* 2D -> ) */
     "=",                                              /* 2E -> = */
     "^",                                              /* 2F */
     "$",                                              /* 30 */
     "*",                                              /* 31 */
-    NULL,                                             /* 32 */
+    "<",                                              /* 32: non-US key */
     "m",                                              /* 33: semicolon -> m */
     "\xC3\xB9",                                       /* 34: quote -> u-grave */
     "\xC2\xB2",                                       /* 35: grave -> superscript 2 */
@@ -187,14 +181,23 @@ static const char *FR_SHIFT[] = {
     "Q","B","C","D","E","F","G","H","I","J","K","L",
     "?","N","O","P","A","R","S","T","U","V","Z","X",
     "Y","W",
-    "1","2","3","4","5","6","7","8","9","0",
+    "&",                                              /* 1E: Shift+1 -> & */
+    "\xC3\xA9",                                       /* 1F: Shift+2 -> e-acute */
+    "\x22",                                           /* 20: Shift+3 -> " */
+    "'",                                              /* 21: Shift+4 -> ' */
+    "(",                                              /* 22: Shift+5 -> ( */
+    "-",                                              /* 23: Shift+6 -> - */
+    "\xC3\xA8",                                       /* 24: Shift+7 -> e-grave */
+    "_",                                              /* 25: Shift+8 -> _ */
+    "\xC3\xA7",                                       /* 26: Shift+9 -> c-cedilla */
+    "\xC3\xA0",                                       /* 27: Shift+0 -> a-grave */
     NULL,NULL,NULL,NULL," ",
     "\xC2\xB0",                                       /* 2D: ) shifted -> degree */
     "+",                                              /* 2E */
     "\xC2\xA8",                                       /* 2F: diaeresis */
     "\xC2\xA3",                                       /* 30: pound sign */
     "\xC2\xB5",                                       /* 31: micro sign */
-    NULL,
+    ">",                                              /* 32: non-US key shifted */
     "M",                                              /* 33 */
     "%",                                              /* 34 */
     NULL,                                             /* 35 */
@@ -223,7 +226,11 @@ static const char *FR_ALTGR[] = {
     NULL,NULL,NULL,NULL,NULL,                          /* 28-2C */
     "]",                                              /* 2D -> ] */
     "}",                                              /* 2E -> } */
-    NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL, /* 2F-38 */
+    NULL,                                             /* 2F */
+    "\xC2\xA4",                                       /* 30 ($) -> currency sign */
+    NULL,                                             /* 31 */
+    NULL,                                             /* 32 */
+    NULL,NULL,NULL,NULL,NULL,NULL,                     /* 33-38 */
 };
 #endif /* CONFIG_KB_LAYOUT_ENABLE_FR */
 
