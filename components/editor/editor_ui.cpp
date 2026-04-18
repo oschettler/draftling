@@ -332,7 +332,12 @@ static void format_batt_str(char *buf, size_t len)
     }
 
     /* Four-segment bar: each segment = 25 %% */
-    int segs = (pct >= 100) ? 4 : (pct >= 75) ? 3 : (pct >= 50) ? 2 : (pct >= 25) ? 1 : 0;
+    int segs;
+    if (pct >= 100)     segs = 4;
+    else if (pct >= 75) segs = 3;
+    else if (pct >= 50) segs = 2;
+    else if (pct >= 25) segs = 1;
+    else                segs = 0;
     char bar[5];
     for (int i = 0; i < 4; ++i) bar[i] = (i < segs) ? '=' : ' ';
     bar[4] = '\0';

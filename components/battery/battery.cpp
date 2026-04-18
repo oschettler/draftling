@@ -26,8 +26,8 @@ static bool                      s_initialized = false;
 #define SMOOTH_SAMPLES 8
 static uint32_t s_smooth_acc = 0;   /* accumulated mV * SMOOTH_SAMPLES */
 
-/* Voltage divider ratio on the board (200 K + 100 K -> 3:1) */
-#define DIVIDER_RATIO  3
+/* Approximate max voltage (mV) at the ADC pin with 12 dB attenuation */
+#define ADC_VREF_MV 3100
 
 /* ---- voltage-to-percent look-up ----
  * Based on community LiPo discharge measurements for the board.
@@ -51,6 +51,9 @@ static int mv_to_percent(int mv)
     return 0;
 }
 
+/* Voltage divider ratio on the board (200 K + 100 K -> 3:1) */
+#define DIVIDER_RATIO  3
+
 /* Map GPIO number to ADC1 channel.  Only a handful of pins
  * are wired to ADC1 on the ESP32-S3; we support the ones
  * that Waveshare could plausibly use. */
@@ -67,7 +70,9 @@ static adc_channel_t gpio_to_channel(int gpio)
     case 8:  return ADC_CHANNEL_7;
     case 9:  return ADC_CHANNEL_8;
     case 10: return ADC_CHANNEL_9;
-    default: return ADC_CHANNEL_3;   /* fall back to GPIO4 */
+    default:
+        ESP_LOGW(TAG, "Unsupported battery GPIO%d, falling back to CH3 (GPIO4)", gpio);
+        return ADC_CHANNEL_3;
     }
 }
 
@@ -121,7 +126,7 @@ extern "C" int battery_init(int gpio_num)
     if (s_cali_handle) {
         adc_cali_raw_to_voltage(s_cali_handle, raw, &pin_mv);
     } else {
-        pin_mv = (raw * 3100) / 4095;
+        pin_mv = (raw * ADC_VREF_MV) / 4095;
     }
     int bat_mv = pin_mv * DIVIDER_RATIO;
     s_smooth_acc = (uint32_t)bat_mv * SMOOTH_SAMPLES;
@@ -144,7 +149,7 @@ extern "C" int battery_read_mv(void)
     if (s_cali_handle) {
         adc_cali_raw_to_voltage(s_cali_handle, raw, &pin_mv);
     } else {
-        pin_mv = (raw * 3100) / 4095;
+        pin_mv = (raw * ADC_VREF_MV) / 4095;
     }
 
     int bat_mv = pin_mv * DIVIDER_RATIO;
