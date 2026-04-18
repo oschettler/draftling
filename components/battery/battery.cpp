@@ -31,8 +31,8 @@ static uint32_t s_smooth_acc = 0;   /* accumulated mV * SMOOTH_SAMPLES */
 
 /* ---- voltage-to-percent look-up ----
  * Based on community LiPo discharge measurements for the board.
- * The table is scanned from high to low; first entry whose mV
- * threshold is met gives the percentage. */
+ * The table defines key-points; mv_to_percent() linearly interpolates
+ * between adjacent entries for a smooth percentage value. */
 struct batt_step { int mv; int pct; };
 static const batt_step BATT_TABLE[] = {
     { 4100, 100 },
@@ -42,11 +42,23 @@ static const batt_step BATT_TABLE[] = {
     {    0,   0 },
 };
 
+static const int BATT_TABLE_N = sizeof(BATT_TABLE) / sizeof(BATT_TABLE[0]);
+
 static int mv_to_percent(int mv)
 {
-    for (int i = 0; BATT_TABLE[i].mv > 0; ++i) {
-        if (mv >= BATT_TABLE[i].mv)
-            return BATT_TABLE[i].pct;
+    /* Above the highest entry -> cap at 100 % */
+    if (mv >= BATT_TABLE[0].mv)
+        return BATT_TABLE[0].pct;
+
+    /* Walk the table and linearly interpolate between adjacent entries */
+    for (int i = 0; i < BATT_TABLE_N - 1; ++i) {
+        int mv_lo  = BATT_TABLE[i + 1].mv;
+        if (mv >= mv_lo) {
+            int mv_hi  = BATT_TABLE[i].mv;
+            int pct_hi = BATT_TABLE[i].pct;
+            int pct_lo = BATT_TABLE[i + 1].pct;
+            return pct_lo + (pct_hi - pct_lo) * (mv - mv_lo) / (mv_hi - mv_lo);
+        }
     }
     return 0;
 }
