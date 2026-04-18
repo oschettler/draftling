@@ -321,28 +321,15 @@ static void cursor_blink_cb(lv_timer_t *timer)
 }
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-/* Build an ASCII battery level string such as "[====]100%"
- * or "[=   ] 25%" for the status bar. */
+/* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
 {
     int pct = battery_read_percent();
     if (pct < 0) {
-        snprintf(buf, len, "[----]");
+        snprintf(buf, len, "----");
         return;
     }
-
-    /* Four-segment bar: each segment = 25 %% */
-    int segs;
-    if (pct >= 100)     segs = 4;
-    else if (pct >= 75) segs = 3;
-    else if (pct >= 50) segs = 2;
-    else if (pct >= 25) segs = 1;
-    else                segs = 0;
-    char bar[5];
-    for (int i = 0; i < 4; ++i) bar[i] = (i < segs) ? '=' : ' ';
-    bar[4] = '\0';
-
-    snprintf(buf, len, "[%s]%d%%", bar, pct);
+    snprintf(buf, len, "%d%%", pct);
 }
 
 static void batt_timer_cb(lv_timer_t *timer)
