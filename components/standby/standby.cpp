@@ -38,6 +38,7 @@ static const char *TAG = "Standby";
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
 static esp_timer_handle_t s_timer = NULL;
+static standby_pre_sleep_cb_t s_pre_sleep_cb = NULL;
 
 /* ---- timer callback ---- */
 
@@ -124,9 +125,18 @@ extern "C" void standby_set_timeout(uint32_t seconds)
     ESP_LOGI(TAG, "Timeout set to %" PRIu32 " s", seconds);
 }
 
+extern "C" void standby_set_pre_sleep_cb(standby_pre_sleep_cb_t cb)
+{
+    s_pre_sleep_cb = cb;
+}
+
 extern "C" void standby_enter_sleep(void)
 {
     stop_timer();
+
+    if (s_pre_sleep_cb) {
+        s_pre_sleep_cb();
+    }
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
     /* Configure GPIO18 as EXT0 wake-up source (wake on low level) */

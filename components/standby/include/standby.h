@@ -30,9 +30,17 @@ uint32_t standby_get_timeout(void);
 void     standby_set_timeout(uint32_t seconds);
 
 /*
+ * Register a callback invoked just before entering deep sleep.
+ * Use this to auto-save editor state or perform other cleanup.
+ * Only one callback is supported; a later call replaces the previous one.
+ */
+typedef void (*standby_pre_sleep_cb_t)(void);
+void standby_set_pre_sleep_cb(standby_pre_sleep_cb_t cb);
+
+/*
  * Enter deep sleep immediately.
  * On Waveshare RLCD: wakes on GPIO18 low.
- * The editor should save any unsaved work before calling this.
+ * If a pre-sleep callback is registered it is invoked first.
  */
 void standby_enter_sleep(void);
 

@@ -19,6 +19,18 @@
 
 static const char *TAG = "Draftling";
 
+/* Called by standby just before entering deep sleep */
+static void pre_sleep_autosave(void)
+{
+    if (editor_is_modified() && editor_get_file_path()) {
+        ESP_LOGI(TAG, "Auto-saving before deep sleep...");
+        esp_err_t err = editor_save_file();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Auto-save failed: %s", esp_err_to_name(err));
+        }
+    }
+}
+
 extern "C" void app_main(void)
 {
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
@@ -83,6 +95,7 @@ extern "C" void app_main(void)
     /* Initialize standby manager (deep sleep on inactivity) */
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
+    standby_set_pre_sleep_cb(pre_sleep_autosave);
 
     ESP_LOGI(TAG, "Draftling ready. Waiting for Bluetooth keyboard...");
 }
