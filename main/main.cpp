@@ -56,6 +56,13 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing LVGL...");
     lvgl_port_init(DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_ROTATE);
 
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+    /* Initialize battery voltage monitor (GPIO4 ADC) before the UI so the
+     * editor status bar can show the battery level immediately. */
+    ESP_LOGI(TAG, "Initializing battery monitor...");
+    battery_init(BATT_ADC_PIN);
+#endif
+
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");
     if (lvgl_port_lock(-1)) {
@@ -77,12 +84,6 @@ extern "C" void app_main(void)
     /* Initialize Bluetooth keyboard */
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
-
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-    /* Initialize battery voltage monitor (GPIO4 ADC) */
-    ESP_LOGI(TAG, "Initializing battery monitor...");
-    battery_init(BATT_ADC_PIN);
-#endif
 
     /* Initialize WiFi manager (doesn't connect yet) */
     ESP_LOGI(TAG, "Initializing WiFi manager...");
