@@ -3,11 +3,14 @@
 A distraction-free Markdown text editor for ESP32-S3-based development boards
 with reflective displays.
 
+
 ### Supported hardware
 
 | Board | Display |
 |-------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
+
+A demo video with the [Waveshare ESP32-S3-RLCD-4.2](https://www.youtube.com/watch?v=PgSaroeM3CE). Also, the fragile screen broke during the tests, so this device really needs a protective glass.
 
 ### Hardware selection
 
