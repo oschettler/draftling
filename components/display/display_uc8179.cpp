@@ -24,14 +24,20 @@
  *     MSB = leftmost pixel, packed row-major.
  *   - White pixel = bit set (1), black pixel = bit clear (0).
  *
- * Refresh strategy: this initial implementation uses the full-update
- * waveform on every flush. Refresh latency is ~3-5 seconds, which is
- * acceptable for a distraction-free Markdown editor between explicit
- * "page" actions but quite slow for character-by-character input. A
- * later patch can add partial refresh.
+ * Refresh strategy: each call to display_flush() compares the new
+ * framebuffer against the last frame actually shown and:
+ *   - skips the panel cycle entirely if nothing changed;
+ *   - performs a partial refresh (~300 ms) over the byte-aligned
+ *     bounding box of the diff for small or local changes;
+ *   - performs a full refresh (~3 s) every
+ *     CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL partials, or
+ *     immediately when the dirty region covers most of the screen.
+ * display_full_refresh() is exposed so callers can force a clean,
+ * ghost-free repaint on demand (e.g. after opening a new file).
  */
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -70,15 +76,24 @@ static const char *TAG = "DisplayEPD";
 #define UC8179_CMD_TCON       0x60  /* TCON Setting */
 #define UC8179_CMD_TRES       0x61  /* Resolution Setting */
 #define UC8179_CMD_VDCS       0x82  /* VCM_DC Setting */
+#define UC8179_CMD_PTL        0x90  /* Partial Window */
+#define UC8179_CMD_PTIN       0x91  /* Partial In */
+#define UC8179_CMD_PTOUT      0x92  /* Partial Out */
 
 static esp_lcd_panel_io_handle_t s_io_handle = NULL;
-static uint8_t *s_disp_buf = NULL;
+static uint8_t *s_disp_buf = NULL;       /* current frame composed by caller */
+static uint8_t *s_prev_buf = NULL;       /* last frame actually shown on panel */
 static int s_disp_len = 0;
 static int s_width  = 0;
 static int s_height = 0;
 static int s_rst_pin  = -1;
 static int s_busy_pin = -1;
 static int s_stride   = 0;     /* bytes per row */
+
+/* How many partial refreshes we have done since the last full refresh.
+ * When this hits CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL we force a
+ * full refresh to clear residual ghosting. */
+static int s_partial_count = 0;
 
 /* ---- low-level helpers ---- */
 
@@ -175,11 +190,16 @@ extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
     in_cfg.pull_up_en   = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&in_cfg));
 
-    /* Allocate framebuffer in PSRAM (one bit per pixel) */
+    /* Allocate framebuffer in PSRAM (one bit per pixel). We keep two
+     * buffers: s_disp_buf is the frame being composed by the LVGL flush
+     * callback, s_prev_buf is the frame currently displayed on the
+     * panel. The diff between them drives partial-refresh decisions. */
     s_disp_len = s_stride * height;
     s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
-    assert(s_disp_buf);
+    s_prev_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
+    assert(s_disp_buf && s_prev_buf);
     memset(s_disp_buf, 0xFF, s_disp_len);  /* white */
+    memset(s_prev_buf, 0xFF, s_disp_len);  /* white */
 
     /* Hardware reset and UC8179 init sequence (B/W mode, full update) */
     hw_reset();
@@ -216,7 +236,7 @@ extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
     send_data(0x06);                       /* 50 Hz */
 
     /* Push the white framebuffer once so the panel is in a known state */
-    display_flush();
+    display_full_refresh();
 
     ESP_LOGI(TAG, "UC8179 e-paper %dx%d initialized", width, height);
 }
@@ -240,21 +260,172 @@ extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
     }
 }
 
-extern "C" void display_flush(void)
-{
-    /* Old data buffer (DTM1) -- send same content so the controller has a
-     * valid "previous frame" reference when generating the waveform. */
-    send_command(UC8179_CMD_DTM1);
-    send_buffer(s_disp_buf, s_disp_len);
+/* ---- refresh helpers ---- */
 
-    /* New data buffer (DTM2) -- the actual frame to display. */
+/* Send the entire framebuffer using the full-update waveform.
+ * Always called from display_full_refresh() and as a fallback when the
+ * partial-refresh interval expires or every byte of the frame changed. */
+static void epd_full_refresh(void)
+{
+    /* Old data buffer (DTM1) -- the previous frame so the controller
+     * has a valid reference when generating the full waveform. */
+    send_command(UC8179_CMD_DTM1);
+    send_buffer(s_prev_buf, s_disp_len);
+
+    /* New data buffer (DTM2) -- the frame to display. */
     send_command(UC8179_CMD_DTM2);
     send_buffer(s_disp_buf, s_disp_len);
 
     send_command(UC8179_CMD_DRF);
-    /* Refresh can take several seconds; wait generously. */
+    /* Full refresh takes several seconds; wait generously. */
     vTaskDelay(pdMS_TO_TICKS(100));
     wait_busy(30000);
+
+    memcpy(s_prev_buf, s_disp_buf, s_disp_len);
+    s_partial_count = 0;
+}
+
+/* Crop bytes [byte_x0, byte_x1] (inclusive) from rows [y0, y1] (inclusive)
+ * of the source buffer into a freshly allocated tightly-packed window
+ * buffer. The caller must free the returned pointer. */
+static uint8_t *crop_window(const uint8_t *src,
+                            int byte_x0, int byte_x1,
+                            int y0, int y1)
+{
+    int row_bytes = byte_x1 - byte_x0 + 1;
+    int rows      = y1 - y0 + 1;
+    size_t len    = (size_t)row_bytes * rows;
+    uint8_t *out  = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!out) return NULL;
+    for (int y = 0; y < rows; y++) {
+        memcpy(out + (size_t)y * row_bytes,
+               src + (size_t)(y + y0) * s_stride + byte_x0,
+               row_bytes);
+    }
+    return out;
+}
+
+/* Perform a UC8179 partial refresh covering pixel columns
+ * [px_x0, px_x1] and rows [y0, y1]. px_x0 must be a multiple of 8 and
+ * px_x1 must be of the form 8k+7 (byte-aligned window, as required by
+ * the UC8179 PTL command). */
+static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
+{
+    int byte_x0 = px_x0 >> 3;
+    int byte_x1 = px_x1 >> 3;
+    int row_bytes = byte_x1 - byte_x0 + 1;
+    int rows      = y1 - y0 + 1;
+    size_t win_len = (size_t)row_bytes * rows;
+
+    uint8_t *old_win = crop_window(s_prev_buf, byte_x0, byte_x1, y0, y1);
+    uint8_t *new_win = crop_window(s_disp_buf, byte_x0, byte_x1, y0, y1);
+    if (!old_win || !new_win) {
+        ESP_LOGW(TAG, "Partial window allocation failed, falling back to full refresh");
+        free(old_win);
+        free(new_win);
+        epd_full_refresh();
+        return;
+    }
+
+    send_command(UC8179_CMD_PTIN);
+
+    /* Set partial window. PTL takes 9 bytes for the 800x480 panel:
+     *   x_start_HI, x_start_LO, x_end_HI, x_end_LO,
+     *   y_start_HI, y_start_LO, y_end_HI, y_end_LO,
+     *   PT_SCAN. */
+    send_command(UC8179_CMD_PTL);
+    send_data((px_x0 >> 8) & 0xFF);
+    send_data(px_x0 & 0xFF);
+    send_data((px_x1 >> 8) & 0xFF);
+    send_data(px_x1 & 0xFF);
+    send_data((y0 >> 8) & 0xFF);
+    send_data(y0 & 0xFF);
+    send_data((y1 >> 8) & 0xFF);
+    send_data(y1 & 0xFF);
+    send_data(0x01);                       /* PT_SCAN: scan inside region */
+
+    /* Old data for the window -- needed by the partial waveform so the
+     * controller can compute the per-pixel transition. */
+    send_command(UC8179_CMD_DTM1);
+    send_buffer(old_win, win_len);
+
+    /* New data for the window. */
+    send_command(UC8179_CMD_DTM2);
+    send_buffer(new_win, win_len);
+
+    send_command(UC8179_CMD_DRF);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    wait_busy(5000);
+
+    send_command(UC8179_CMD_PTOUT);
+
+    free(old_win);
+    free(new_win);
+
+    /* Mirror the change into the previous-frame buffer so the next diff
+     * is computed against what the panel is actually showing. */
+    for (int y = y0; y <= y1; y++) {
+        memcpy(s_prev_buf + (size_t)y * s_stride + byte_x0,
+               s_disp_buf + (size_t)y * s_stride + byte_x0,
+               row_bytes);
+    }
+    s_partial_count++;
+}
+
+extern "C" void display_flush(void)
+{
+    /* Compute the bounding box of bytes that changed since the last
+     * frame we actually pushed to the panel. The X bounds are recorded
+     * in *byte* units (8 horizontally adjacent pixels) because the
+     * UC8179 PTL command requires byte-aligned windows. */
+    int byte_stride = s_stride;
+    int min_by = byte_stride;   /* sentinels */
+    int max_by = -1;
+    int min_y  = s_height;
+    int max_y  = -1;
+
+    for (int y = 0; y < s_height; y++) {
+        const uint8_t *a = s_disp_buf + y * byte_stride;
+        const uint8_t *b = s_prev_buf + y * byte_stride;
+        if (memcmp(a, b, byte_stride) == 0) continue;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+        for (int bx = 0; bx < byte_stride; bx++) {
+            if (a[bx] == b[bx]) continue;
+            if (bx < min_by) min_by = bx;
+            if (bx > max_by) max_by = bx;
+        }
+    }
+
+    /* Nothing changed -- skip the panel cycle entirely. */
+    if (max_by < 0) return;
+
+    /* Force a periodic full refresh to clear ghosting that accumulates
+     * after many consecutive partial updates. */
+#ifdef CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL
+    int full_interval = CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL;
+#else
+    int full_interval = 50;
+#endif
+
+    /* If the change covers the bulk of the screen, the partial refresh
+     * costs more SPI traffic than a single full refresh, so just go full. */
+    int total_window_bytes = (max_by - min_by + 1) * (max_y - min_y + 1);
+    bool dirty_is_huge = (total_window_bytes * 4 >= s_disp_len * 3);
+
+    if (s_partial_count >= full_interval || dirty_is_huge) {
+        epd_full_refresh();
+        return;
+    }
+
+    int px_x0 = min_by * 8;
+    int px_x1 = max_by * 8 + 7;
+    epd_partial_refresh(px_x0, px_x1, min_y, max_y);
+}
+
+extern "C" void display_full_refresh(void)
+{
+    epd_full_refresh();
 }
 
 extern "C" uint8_t *display_get_buffer(void)

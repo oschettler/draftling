@@ -130,11 +130,12 @@ Found at the top-level **DRAFTLING Configuration** menu.
 | -- Seeed Studio reTerminal E1001 | | | 7.5" e-paper, UC8179, 800x480 |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
 
-> **Note about the e-paper model:** the reTerminal E1001 driver currently
-> uses the UC8179 full-update waveform on every refresh, which takes a
-> few seconds per repaint. The board is therefore best suited for
-> reading and editing in short bursts (open file, type, save) rather
-> than continuous typing. A future patch can add partial refresh.
+> **Note about the e-paper model:** the reTerminal E1001 driver uses
+> partial refresh by default. Small changes (typing, cursor blink,
+> status-bar updates) take roughly 300 ms; a full refresh (3-5 s) is
+> performed automatically every
+> `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (default 50) to clear
+> residual ghosting. Tune the interval in `idf.py menuconfig`.
 
 ### DRAFTLING Keyboard Layouts
 

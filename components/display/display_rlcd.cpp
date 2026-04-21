@@ -182,6 +182,13 @@ extern "C" void display_flush(void)
     send_buffer(s_disp_buf, s_disp_len);
 }
 
+extern "C" void display_full_refresh(void)
+{
+    /* The RLCD has no ghosting and no separate partial mode, so a full
+     * refresh is just a normal flush. */
+    display_flush();
+}
+
 extern "C" uint8_t *display_get_buffer(void)
 {
     return s_disp_buf;
