@@ -219,7 +219,7 @@ static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byt
 static bool s_esc_pending = false;
 
 /* ---- Device battery display (Waveshare RLCD42) ---- */
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
 static lv_timer_t *s_batt_timer     = NULL;
@@ -320,7 +320,7 @@ static void cursor_blink_cb(lv_timer_t *timer)
     }
 }
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
 /* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
 {
@@ -1981,7 +1981,7 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_status,
         "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
@@ -2035,7 +2035,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_color(s_lbl_br_status, lv_color_black(), 0);
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
     lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);

@@ -8,7 +8,23 @@ extern "C" {
 #include <stddef.h>
 #include <stdbool.h>
 
+/* Initialize the SD card on a 1-bit SDMMC slot. */
 esp_err_t sd_card_init(int clk_pin, int cmd_pin, int d0_pin, const char *mount_point);
+
+/*
+ * Initialize the SD card on an SPI bus.
+ *
+ *   spi_host  -- ESP-IDF SPI host id (e.g. SPI2_HOST). The bus may be
+ *                shared with other devices; if it has not been initialized
+ *                yet, this function will initialize it for you.
+ *   miso/mosi/sck -- bus pins (set sck/mosi to -1 if the bus is already
+ *                    initialized by another driver, e.g. the e-paper).
+ *   cs        -- chip-select GPIO for the SD card.
+ *   enable_gpio -- optional power-enable GPIO (driven HIGH), or -1.
+ *   mount_point -- VFS mount point, e.g. "/sdcard".
+ */
+esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
+                           int cs, int enable_gpio, const char *mount_point);
 esp_err_t sd_card_deinit(void);
 bool sd_card_is_ready(void);
 const char *sd_card_get_mount_point(void);

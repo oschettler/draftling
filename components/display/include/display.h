@@ -11,7 +11,10 @@ extern "C" {
  *
  * Parameter mapping depends on the selected hardware model:
  *
- *  Waveshare RLCD:   mosi, sck, dc, cs, rst, width, height
+ *  Waveshare RLCD:           mosi, sck, dc, cs, rst, width, height
+ *  Seeed reTerminal E1001:   mosi, sck, dc, cs, rst, width, height
+ *                            (BUSY pin is fixed by the board and read
+ *                             internally by the UC8179 driver)
  */
 void display_init(int pin_a, int pin_b, int pin_c, int pin_d,
                   int pin_e, int width, int height);

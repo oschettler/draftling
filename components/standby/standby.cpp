@@ -6,6 +6,9 @@
  *
  *  - Waveshare ESP32-S3-RLCD-4.2: wakes via EXT0 on GPIO18 (active-low).
  *    The RLCD is reflective, so screen content is retained visually.
+ *  - Seeed reTerminal E1001: wakes via EXT0 on GPIO3 (KEY0, the right
+ *    green button, active-low).  The e-paper retains its image while
+ *    powered down.
  *
  * The editor state lives in PSRAM/heap so it is lost on wake;
  * callers should auto-save before sleep.  The timeout value is persisted
@@ -34,6 +37,9 @@ static const char *TAG = "Standby";
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
 /* GPIO used as EXT0 wake-up source (active-low) -- matches app_config.h */
 #define WAKEUP_GPIO    ((gpio_num_t)18)
+#elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+/* KEY0 / right green button (active-low) -- matches app_config.h */
+#define WAKEUP_GPIO    ((gpio_num_t)3)
 #endif
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
@@ -138,8 +144,9 @@ extern "C" void standby_enter_sleep(void)
         s_pre_sleep_cb();
     }
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-    /* Configure GPIO18 as EXT0 wake-up source (wake on low level) */
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+    /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */
     ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);
 #endif

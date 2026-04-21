@@ -6,16 +6,22 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <esp_log.h>
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdmmc_host.h>
+#include <driver/sdspi_host.h>
+#include <driver/spi_common.h>
+#include <driver/gpio.h>
 
 #include "sd_card.h"
 
 static const char *TAG = "SDCard";
 static sdmmc_card_t *s_card = NULL;
 static char s_mount[32] = "";
+static int  s_spi_host  = -1;     /* set when mounted via SPI, otherwise -1 */
+static bool s_spi_bus_owned = false;
 
 extern "C" esp_err_t sd_card_init(int clk_pin, int cmd_pin, int d0_pin, const char *mount_point)
 {
@@ -44,10 +50,91 @@ extern "C" esp_err_t sd_card_init(int clk_pin, int cmd_pin, int d0_pin, const ch
     return ESP_OK;
 }
 
+extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
+                                      int cs, int enable_gpio,
+                                      const char *mount_point)
+{
+    strncpy(s_mount, mount_point, sizeof(s_mount) - 1);
+    s_spi_host = spi_host;
+
+    /* Power-enable GPIO (active-high). The reTerminal E1001 needs this
+     * driven HIGH to feed VBUS to the MicroSD slot. */
+    if (enable_gpio >= 0) {
+        gpio_config_t en_cfg = {};
+        en_cfg.intr_type    = GPIO_INTR_DISABLE;
+        en_cfg.mode         = GPIO_MODE_OUTPUT;
+        en_cfg.pin_bit_mask = (1ULL << enable_gpio);
+        en_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+        en_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        gpio_config(&en_cfg);
+        gpio_set_level((gpio_num_t)enable_gpio, 1);
+        /* Allow the card a moment to power up before initialization. */
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    /* Initialize the SPI bus only if the caller has not already done so
+     * (e.g. the e-paper driver may share the bus). */
+    if (sck >= 0 && mosi >= 0) {
+        spi_bus_config_t bus_cfg = {};
+        bus_cfg.mosi_io_num     = mosi;
+        bus_cfg.miso_io_num     = miso;
+        bus_cfg.sclk_io_num     = sck;
+        bus_cfg.quadwp_io_num   = -1;
+        bus_cfg.quadhd_io_num   = -1;
+        bus_cfg.max_transfer_sz = 4096;
+        esp_err_t ret = spi_bus_initialize((spi_host_device_t)spi_host,
+                                           &bus_cfg, SPI_DMA_CH_AUTO);
+        if (ret == ESP_OK) {
+            s_spi_bus_owned = true;
+        } else if (ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = spi_host;
+
+    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot.gpio_cs   = (gpio_num_t)cs;
+    slot.host_id   = (spi_host_device_t)spi_host;
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {};
+    mount_cfg.format_if_mount_failed = false;
+    mount_cfg.max_files              = 10;
+    mount_cfg.allocation_unit_size   = 16 * 1024;
+
+    esp_err_t ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
+                                            &mount_cfg, &s_card);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
+        if (s_spi_bus_owned) {
+            spi_bus_free((spi_host_device_t)spi_host);
+            s_spi_bus_owned = false;
+        }
+        s_card = NULL;
+        return ret;
+    }
+    sdmmc_card_print_info(stdout, s_card);
+    ESP_LOGI(TAG, "SD card mounted at %s (SPI host %d, CS=%d)",
+             s_mount, spi_host, cs);
+    return ESP_OK;
+}
+
 extern "C" esp_err_t sd_card_deinit(void)
 {
     if (!s_card) return ESP_ERR_INVALID_STATE;
-    esp_err_t ret = esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+    esp_err_t ret;
+    if (s_spi_host >= 0) {
+        ret = esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+        if (s_spi_bus_owned) {
+            spi_bus_free((spi_host_device_t)s_spi_host);
+            s_spi_bus_owned = false;
+        }
+        s_spi_host = -1;
+    } else {
+        ret = esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+    }
     s_card = NULL;
     return ret;
 }

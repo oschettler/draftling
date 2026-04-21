@@ -13,15 +13,26 @@ config DRAFTLING_MODEL_WAVESHARE_RLCD42
         Waveshare ESP32-S3-RLCD-4.2 board with 400x300 reflective LCD
         and GPIO18 deep-sleep wakeup button.
 
+config DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
+    bool "Seeed Studio reTerminal E1001"
+    depends on IDF_TARGET_ESP32S3
+    help
+        Seeed Studio reTerminal E1001 board with an 800x480 e-paper
+        display driven by a UC8179 controller. The SD card shares the
+        SPI bus with the e-paper. Wakeup from deep sleep is via the
+        right (green) KEY0 button on GPIO3.
+
 endchoice
 
 config DRAFTLING_DISPLAY_WIDTH
     int
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
 
 config DRAFTLING_DISPLAY_HEIGHT
     int
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"

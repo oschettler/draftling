@@ -9,6 +9,7 @@ with reflective displays.
 | Board | Display |
 |-------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
+| [Seeed Studio reTerminal E1001](https://wiki.seeedstudio.com/getting_started_with_reterminal_e1001/) | 7.5" e-paper (UC8179), 800x480 |
 
 A demo video with the [Waveshare ESP32-S3-RLCD-4.2](https://www.youtube.com/watch?v=PgSaroeM3CE). Also, the fragile screen broke during the tests, so this device really needs a protective glass.
 
@@ -19,6 +20,7 @@ Navigate to **DRAFTLING Configuration > Hardware Model** and choose
 the board you are building for:
 
 - **Waveshare ESP32-S3-RLCD-4.2** -- 4.2" reflective LCD (400x300)
+- **Seeed Studio reTerminal E1001** -- 7.5" e-paper, UC8179 (800x480)
 
 The display resolution and driver are configured automatically based
 on the selected model. You can also adjust the **Display rotation
@@ -31,14 +33,14 @@ Git repository via the GitHub REST API.
 
 ## Hardware
 
-| Feature | Waveshare RLCD-4.2 |
-|---------|--------------------|
-| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) |
-| Display | 4.2" reflective LCD, 400x300, SPI |
-| Storage | MicroSD (SDMMC 1-bit) |
-| Input | BLE HID keyboard |
-| Connectivity | WiFi 802.11 b/g/n |
-| Wake from sleep | GPIO18 button |
+| Feature | Waveshare RLCD-4.2 | Seeed reTerminal E1001 |
+|---------|--------------------|------------------------|
+| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (XIAO module, 8 MB PSRAM) |
+| Display | 4.2" reflective LCD, 400x300, SPI | 7.5" e-paper UC8179, 800x480, SPI |
+| Storage | MicroSD (SDMMC 1-bit) | MicroSD (SPI, shared bus with display) |
+| Input | BLE HID keyboard | BLE HID keyboard |
+| Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
+| Wake from sleep | GPIO18 button | KEY0 / right green button (GPIO3) |
 
 ## Features
 
@@ -125,7 +127,14 @@ Found at the top-level **DRAFTLING Configuration** menu.
 |--------|------|---------|-------------|
 | **Hardware Model** | choice | Waveshare ESP32-S3-RLCD-4.2 | Select the target board. Display resolution and driver are set automatically. |
 | -- Waveshare ESP32-S3-RLCD-4.2 | | | 4.2" reflective LCD, 400x300 |
+| -- Seeed Studio reTerminal E1001 | | | 7.5" e-paper, UC8179, 800x480 |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
+
+> **Note about the e-paper model:** the reTerminal E1001 driver currently
+> uses the UC8179 full-update waveform on every refresh, which takes a
+> few seconds per repaint. The board is therefore best suited for
+> reading and editing in short bursts (open file, type, save) rather
+> than continuous typing. A future patch can add partial refresh.
 
 ### DRAFTLING Keyboard Layouts
 

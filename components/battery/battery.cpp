@@ -1,15 +1,25 @@
 /*
- * Battery voltage monitor for the Waveshare ESP32-S3-RLCD-4.2.
+ * Battery voltage monitor.
  *
- * GPIO4 is connected to ADC1 channel 3 through a 3:1 resistive divider
- * (200 K + 100 K).  The ESP-IDF ADC oneshot driver with curve-fitting
- * calibration converts the raw ADC reading to millivolts at the pin,
- * and we multiply by 3 to recover the actual cell voltage.
+ * Two boards are currently supported:
+ *
+ *   - Waveshare ESP32-S3-RLCD-4.2: GPIO4 (ADC1_CH3) with a 3:1 resistive
+ *     divider (200 K + 100 K), no enable pin.
+ *   - Seeed reTerminal E1001: GPIO1 (ADC1_CH0) with a 2:1 resistive divider,
+ *     gated by an enable transistor on GPIO21 (driven HIGH to power the
+ *     divider, then released LOW to save current between samples).
+ *
+ * The ESP-IDF ADC oneshot driver with curve-fitting calibration converts
+ * the raw ADC reading to millivolts at the pin, and the divider ratio
+ * recovers the actual cell voltage.
  */
 
 #include "battery.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <esp_log.h>
+#include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -20,6 +30,8 @@ static const char *TAG = "Battery";
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t         s_cali_handle = NULL;
 static adc_channel_t             s_channel = ADC_CHANNEL_3;
+static int                       s_enable_gpio = -1;
+static int                       s_divider = 3;
 static bool                      s_initialized = false;
 
 /* Exponential moving average state */
@@ -63,12 +75,12 @@ static int mv_to_percent(int mv)
     return 0;
 }
 
-/* Voltage divider ratio on the board (200 K + 100 K -> 3:1) */
-#define DIVIDER_RATIO  3
+/* Voltage divider ratio default (overridden in battery_init) */
+#define DIVIDER_RATIO_DEFAULT  3
 
 /* Map GPIO number to ADC1 channel.  Only a handful of pins
  * are wired to ADC1 on the ESP32-S3; we support the ones
- * that Waveshare could plausibly use. */
+ * commonly used by the supported boards. */
 static adc_channel_t gpio_to_channel(int gpio)
 {
     switch (gpio) {
@@ -88,13 +100,48 @@ static adc_channel_t gpio_to_channel(int gpio)
     }
 }
 
+/* Pulse the enable GPIO on (if any), let the divider settle, return whether
+ * we actually toggled it (so the caller can turn it off afterwards). */
+static bool enable_divider(void)
+{
+    if (s_enable_gpio < 0) return false;
+    gpio_set_level((gpio_num_t)s_enable_gpio, 1);
+    /* The reTerminal divider needs a few ms to settle once powered. */
+    vTaskDelay(pdMS_TO_TICKS(5));
+    return true;
+}
+
+static void disable_divider(bool was_enabled)
+{
+    if (was_enabled && s_enable_gpio >= 0) {
+        gpio_set_level((gpio_num_t)s_enable_gpio, 0);
+    }
+}
+
 /* ---- public API ---- */
 
-extern "C" int battery_init(int gpio_num)
+extern "C" int battery_init(int gpio_num, int enable_gpio, int divider)
 {
     if (s_initialized) return 0;
 
-    s_channel = gpio_to_channel(gpio_num);
+    s_channel     = gpio_to_channel(gpio_num);
+    s_enable_gpio = enable_gpio;
+    s_divider     = (divider > 0) ? divider : DIVIDER_RATIO_DEFAULT;
+
+    /* Configure the optional enable GPIO as an output and leave it driven
+     * HIGH so the very first reading after init is valid. */
+    if (s_enable_gpio >= 0) {
+        gpio_config_t en_cfg = {};
+        en_cfg.intr_type    = GPIO_INTR_DISABLE;
+        en_cfg.mode         = GPIO_MODE_OUTPUT;
+        en_cfg.pin_bit_mask = (1ULL << s_enable_gpio);
+        en_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+        en_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        if (gpio_config(&en_cfg) != ESP_OK) {
+            ESP_LOGW(TAG, "Battery enable GPIO%d config failed", s_enable_gpio);
+        }
+        gpio_set_level((gpio_num_t)s_enable_gpio, 1);
+    }
 
     /* Create oneshot ADC unit */
     adc_oneshot_unit_init_cfg_t unit_cfg = {};
@@ -132,20 +179,24 @@ extern "C" int battery_init(int gpio_num)
     }
 
     /* Seed the smoother with the first real reading */
+    bool en = enable_divider();
     int raw = 0;
     adc_oneshot_read(s_adc_handle, s_channel, &raw);
+    disable_divider(en);
+
     int pin_mv = 0;
     if (s_cali_handle) {
         adc_cali_raw_to_voltage(s_cali_handle, raw, &pin_mv);
     } else {
         pin_mv = (raw * ADC_VREF_MV) / 4095;
     }
-    int bat_mv = pin_mv * DIVIDER_RATIO;
+    int bat_mv = pin_mv * s_divider;
     s_smooth_acc = (uint32_t)bat_mv * SMOOTH_SAMPLES;
 
     s_initialized = true;
-    ESP_LOGI(TAG, "Battery monitor initialized on GPIO%d (ch%d), "
-             "initial %d mV", gpio_num, (int)s_channel, bat_mv);
+    ESP_LOGI(TAG, "Battery monitor initialized on GPIO%d (ch%d, div=%d, en=%d), "
+             "initial %d mV", gpio_num, (int)s_channel, s_divider,
+             s_enable_gpio, bat_mv);
     return 0;
 }
 
@@ -153,8 +204,10 @@ extern "C" int battery_read_mv(void)
 {
     if (!s_initialized) return 0;
 
+    bool en = enable_divider();
     int raw = 0;
     esp_err_t err = adc_oneshot_read(s_adc_handle, s_channel, &raw);
+    disable_divider(en);
     if (err != ESP_OK) return 0;
 
     int pin_mv = 0;
@@ -164,7 +217,7 @@ extern "C" int battery_read_mv(void)
         pin_mv = (raw * ADC_VREF_MV) / 4095;
     }
 
-    int bat_mv = pin_mv * DIVIDER_RATIO;
+    int bat_mv = pin_mv * s_divider;
 
     /* Update exponential moving average */
     s_smooth_acc = s_smooth_acc - (s_smooth_acc / SMOOTH_SAMPLES) + (uint32_t)bat_mv;

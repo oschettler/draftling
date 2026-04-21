@@ -24,9 +24,14 @@ extern "C" {
 /*
  * Initialize the ADC for battery voltage measurement.
  * Must be called once before any other battery_* function.
+ *
+ *   gpio_num     -- ADC1 GPIO connected to the divider output
+ *   enable_gpio  -- GPIO that powers the divider, or -1 if always on
+ *   divider      -- voltage divider ratio (e.g. 2 for 1:1, 3 for 2:1 to GND)
+ *
  * Returns 0 on success, non-zero on failure.
  */
-int battery_init(int gpio_num);
+int battery_init(int gpio_num, int enable_gpio, int divider);
 
 /*
  * Read the current battery voltage in millivolts.

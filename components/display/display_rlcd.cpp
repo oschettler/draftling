@@ -1,3 +1,6 @@
+#include "sdkconfig.h"
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+
 #include <cstdio>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -188,3 +191,5 @@ extern "C" int display_get_buffer_size(void)
 {
     return s_disp_len;
 }
+
+#endif /* CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42 */
