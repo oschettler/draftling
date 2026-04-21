@@ -101,7 +101,9 @@
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
 
-/* Deep-sleep wakeup (active-low). Default GPIO0 = BOOT button. */
+/* Deep-sleep wakeup pin (active-low). User-configurable via the
+ * CONFIG_DRAFTLING_HAT_WAKEUP_GPIO option (default GPIO0, the BOOT
+ * button on most ESP32-S3 dev kits). */
 #define WAKEUP_GPIO_NUM CONFIG_DRAFTLING_HAT_WAKEUP_GPIO
 
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
