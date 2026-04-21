@@ -304,9 +304,12 @@ SOC_BLE_SUPPORTED`):
 - **DRAFTLING_MODEL_WAVESHARE_EPD_HAT** -- Waveshare E-Paper Driver
   HAT (UC8179) on any BLE-capable ESP32 host (ESP32, ESP32-S3,
   ESP32-C2/C3/C6, ESP32-H2 - i.e. anything except the BLE-less
-  ESP32-S2). Resolution and every SPI/control pin are user-editable;
-  defaults match the ESP32-S3-DevKitC-1 wiring used by Waveshare's
-  example projects.
+  ESP32-S2). **Also requires PSRAM** (`SOC_SPIRAM_SUPPORTED && SPIRAM`)
+  -- the editor gap buffer, framebuffers, and LVGL buffers all live in
+  external SPI RAM, so the option is hidden until PSRAM is enabled
+  under "Component config -> ESP PSRAM". Resolution and every
+  SPI/control pin are user-editable; defaults match the
+  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
   library, on-board MicroSD on SPI3, GPIO21 (power button) wakeup.

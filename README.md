@@ -26,6 +26,9 @@ the board you are building for:
 - **Waveshare E-Paper Driver HAT** -- UC8179 SPI HAT on any
   BLE-capable ESP32 host (ESP32, ESP32-S3, ESP32-C2/C3/C6, ESP32-H2;
   the ESP32-S2 is not supported because it has no BLE radio).
+  **PSRAM is required** -- enable "ESP PSRAM" in menuconfig before
+  selecting this model, since the editor buffer, framebuffers, and
+  LVGL display buffers all live in external SPI RAM.
   Display resolution and every SPI/control pin are user-editable in
   the same menu (see the **Waveshare E-Paper Driver HAT pinout**
   sub-menu); defaults match the ESP32-S3-DevKitC-1 wiring used by
