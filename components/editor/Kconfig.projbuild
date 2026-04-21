@@ -1,0 +1,13 @@
+menu "DRAFTLING Editor"
+
+config DRAFTLING_KEY_QUEUE_LEN
+    int "Key event queue length"
+    range 4 256
+    default 32
+    help
+        Size of the FreeRTOS queue that buffers key events from the BLE
+        HID host task before they are drained by the LVGL GUI task.
+        Larger values absorb bursts of keystrokes at the cost of a bit
+        more RAM (each slot is a kb_event_t).
+
+endmenu
