@@ -20,6 +20,9 @@ with a remote Git repository via the GitHub REST API.
 | Board | Display |
 |-------|---------|
 | Waveshare ESP32-S3-RLCD-4.2 | 4.2-inch reflective LCD, 400x300 |
+| Seeed Studio reTerminal E1001 | 7.5-inch e-paper (UC8179), 800x480 |
+| Waveshare E-Paper Driver HAT (on a generic ESP32-S3, default ESP32-S3-DevKitC-1) | UC8179 e-paper, configurable resolution (default 800x480) |
+| M5Stack PaperS3 | 4.7-inch e-paper (ED047TC1), 540x960 |
 
 ## Repository Layout
 
@@ -59,15 +62,25 @@ document before entering deep sleep.
 
 `app_config.h` maps Kconfig hardware model selections to concrete GPIO pin
 numbers and display dimensions. Each supported board has its own `#if`
-block defining SPI pins (MOSI, SCK, DC, CS, RST, TE), SD card pins (CLK,
-CMD, D0), I2C pins, the battery ADC pin, and the deep-sleep wakeup GPIO.
+block defining SPI pins (MOSI, SCK, DC, CS, RST, TE/BUSY), SD card pins
+(CLK, CMD, D0 for SDMMC, or MOSI/MISO/SCK/CS for SPI), I2C pins, the
+battery ADC pin, and the deep-sleep wakeup GPIO. The Waveshare E-Paper
+Driver HAT block resolves all of its pin macros from `CONFIG_DRAFTLING_HAT_*`
+Kconfig values so users can adapt the HAT to a different ESP32-S3 host
+board without editing source. The M5Stack PaperS3 block omits the panel
+data-bus and control-line pins because the `m5stack/M5GFX` library
+configures them internally based on the board id.
 
 ### components/battery/
 
-Reads battery voltage through a 3:1 resistive divider on GPIO4 using the
-ESP32 ADC. Applies exponential moving average smoothing over 8 samples.
-Maps voltage to a percentage: >=4.10V is 100%, >=3.95V is 75%, >=3.80V
-is 50%, >=3.60V is 25%, below 3.60V is 0%.
+Reads battery voltage through a resistive divider on a configurable
+ADC pin using the ESP32 ADC. Applies exponential moving average
+smoothing over 8 samples. Maps voltage to a percentage: >=4.10V is
+100%, >=3.95V is 75%, >=3.80V is 50%, >=3.60V is 25%, below 3.60V
+is 0%. Boards with no on-board battery monitor (the bare Waveshare
+EPD HAT and the M5Stack PaperS3) pass `BATT_ADC_PIN = -1`, which
+makes `battery_init()` a no-op and causes `battery_read_percent()`
+to return -1; the editor UI hides the battery icon in that case.
 
 Public API: `battery_init()`, `battery_read_mv()`, `battery_read_percent()`.
 
@@ -84,14 +97,32 @@ several other callback registration functions.
 
 ### components/display/
 
-Two-file driver. `display.cpp` talks directly to the Waveshare RLCD
-hardware over SPI (pins configured in `app_config.h`). `lvgl_port.cpp`
-creates the LVGL display object, sets up a flush callback, and runs the
-LVGL tick/task timer. Thread safety is provided by a mutex exposed as
-`lvgl_port_lock()` / `lvgl_port_unlock()`.
+Per-board display backends behind a single C API:
 
-Public API: `display_init()`, `display_clear()`, `display_flush()`,
-`lvgl_port_init()`, `lvgl_port_lock()`, `lvgl_port_unlock()`.
+- **display_rlcd.cpp** -- Waveshare ESP32-S3-RLCD-4.2 reflective LCD
+  over SPI.
+- **display_uc8179.cpp** -- UC8179 e-paper over SPI. Shared by the
+  Seeed reTerminal E1001 and the Waveshare E-Paper Driver HAT;
+  resolution and pinout (including BUSY) are passed in at init.
+- **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
+  `m5stack/M5GFX` managed component. v1 keeps a 1-bpp framebuffer
+  and pushes it to the panel as a single full refresh per flush;
+  partial refresh and grayscale are TODO.
+- **lvgl_port.cpp** -- creates the LVGL display object, sets up a
+  flush callback that converts LVGL's RGB565 output to the
+  backend's 1-bpp / 8-bpp pixel format, and runs the LVGL
+  tick/task timer. Thread safety is provided by a mutex exposed as
+  `lvgl_port_lock()` / `lvgl_port_unlock()`.
+
+The component's `idf_component.yml` declares the `m5stack/m5gfx`
+dependency required by the PaperS3 backend. (It is downloaded for
+every build; the source itself is gated by `#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)`
+so non-PaperS3 builds do not link it into the final image.)
+
+Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
+`display_flush()`, `display_full_refresh()`, `display_get_buffer()`,
+`display_get_buffer_size()`, `lvgl_port_init()`, `lvgl_port_lock()`,
+`lvgl_port_unlock()`.
 
 ### components/editor/
 
@@ -259,22 +290,57 @@ options:
 
 #### Hardware Model (DRAFTLING_HARDWARE_MODEL)
 
-A `choice` that selects the target board. Currently the only option is:
+A `choice` that selects the target board. All options depend on
+`IDF_TARGET_ESP32S3`:
 
 - **DRAFTLING_MODEL_WAVESHARE_RLCD42** -- Waveshare ESP32-S3-RLCD-4.2
   with a 400x300 reflective LCD and GPIO18 deep-sleep wakeup button.
-  This option depends on `IDF_TARGET_ESP32S3`.
+- **DRAFTLING_MODEL_SEEED_RETERMINAL_E1001** -- Seeed reTerminal E1001
+  with a 7.5" 800x480 UC8179 e-paper, SD card on the same SPI bus,
+  GPIO3 (KEY0) deep-sleep wakeup.
+- **DRAFTLING_MODEL_WAVESHARE_EPD_HAT** -- Waveshare E-Paper Driver
+  HAT (UC8179) on a generic ESP32-S3 host. Resolution and every
+  SPI/control pin are user-editable; defaults match the
+  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
+- **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
+  4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
+  library, on-board MicroSD on SPI3, GPIO21 (power button) wakeup.
 
-The hardware model selection drives two hidden `int` symbols that other
-code reads at compile time:
+The hardware model selection drives two `int` symbols consumed in
+`main/app_config.h` as `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`:
 
-- **DRAFTLING_DISPLAY_WIDTH** -- display width in pixels (400 for the
-  Waveshare RLCD).
-- **DRAFTLING_DISPLAY_HEIGHT** -- display height in pixels (300 for the
-  Waveshare RLCD).
+- **DRAFTLING_DISPLAY_WIDTH** -- 400 (RLCD), 800 (reTerminal),
+  800 (HAT default, user-editable), 540 (PaperS3).
+- **DRAFTLING_DISPLAY_HEIGHT** -- 300 (RLCD), 480 (reTerminal),
+  480 (HAT default, user-editable), 960 (PaperS3).
 
-These values are consumed in `main/app_config.h` as `DISPLAY_WIDTH` and
-`DISPLAY_HEIGHT` macros.
+When the HAT model is selected the symbols are visible as
+`int "Display width (px)"` / `int "Display height (px)"` so the
+user can match a different Waveshare panel; for all other boards
+they remain hidden with their fixed defaults.
+
+#### Waveshare E-Paper Driver HAT pinout (DRAFTLING_HAT_*)
+
+A sub-menu that is visible only when `DRAFTLING_MODEL_WAVESHARE_EPD_HAT`
+is selected. Each option is an `int` GPIO number with a sensible default
+for the ESP32-S3-DevKitC-1:
+
+| Symbol | Default | Use |
+|--------|---------|-----|
+| `DRAFTLING_HAT_EPD_MOSI_PIN` | 11 | SPI MOSI / DIN |
+| `DRAFTLING_HAT_EPD_SCK_PIN`  | 12 | SPI clock |
+| `DRAFTLING_HAT_EPD_DC_PIN`   | 13 | Data/command |
+| `DRAFTLING_HAT_EPD_CS_PIN`   | 10 | Chip select |
+| `DRAFTLING_HAT_EPD_RST_PIN`  | 14 | Reset |
+| `DRAFTLING_HAT_EPD_BUSY_PIN` | 9  | BUSY input |
+| `DRAFTLING_HAT_WAKEUP_GPIO`  | 0  | EXT0 deep-sleep wakeup pin |
+| `DRAFTLING_HAT_HAS_SD`       | n  | Opt in to an SD card on SPI3 |
+| `DRAFTLING_HAT_SD_MOSI/MISO/SCK/CS_PIN` | 35 / 37 / 36 / 34 | Visible only when SD support is on |
+
+#### E-paper full-refresh interval (DRAFTLING_EPD_FULL_REFRESH_INTERVAL)
+
+`int` shared by the reTerminal E1001 and HAT models (UC8179 backend).
+Number of partial refreshes between full refreshes; default 50.
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 

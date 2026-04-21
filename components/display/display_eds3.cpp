@@ -53,16 +53,6 @@ static int       s_height   = 0;
 static int       s_stride   = 0;
 static bool      s_dirty    = false;
 
-/* ---- helpers ---- */
-
-static inline bool pixel_is_white(int x, int y)
-{
-    if (x < 0 || x >= s_width || y < 0 || y >= s_height) return true;
-    int idx = y * s_stride + (x >> 3);
-    uint8_t mask = (uint8_t)(0x80 >> (x & 7));
-    return (s_disp_buf[idx] & mask) != 0;
-}
-
 /* ---- public API ---- */
 
 extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
@@ -124,29 +114,25 @@ extern "C" void display_flush(void)
 {
     if (!s_disp_buf || !s_dirty) return;
 
-    /* Push the 1-bpp framebuffer to M5GFX. We unpack into a row-sized
-     * uint8_t buffer (one byte per pixel, 0x00 = black, 0xFF = white)
-     * and use pushImage<uint8_t>() per row, which M5GFX maps onto the
-     * appropriate grayscale level for the e-paper. */
-    uint8_t *row = (uint8_t *)heap_caps_malloc(s_width, MALLOC_CAP_DMA);
-    if (!row) {
-        ESP_LOGE(TAG, "display_flush: out of memory for row buffer");
-        return;
-    }
-
+    /* Push the 1-bpp framebuffer to M5GFX. We iterate every pixel and
+     * call drawPixel() inside a startWrite/endWrite batch. drawPixel
+     * has per-call overhead but it is unambiguously available across
+     * every M5GFX/LovyanGFX version, and the e-paper refresh itself
+     * (3-5 s) dominates the overall flush time. A future optimization
+     * is to switch to setAddrWindow + pushPixels with a packed
+     * grayscale row buffer. */
     s_gfx.startWrite();
     for (int y = 0; y < s_height; y++) {
         const uint8_t *src = s_disp_buf + y * s_stride;
         for (int x = 0; x < s_width; x++) {
             uint8_t mask = (uint8_t)(0x80 >> (x & 7));
-            row[x] = (src[x >> 3] & mask) ? 0xFF : 0x00;
+            uint32_t color = (src[x >> 3] & mask) ? TFT_WHITE : TFT_BLACK;
+            s_gfx.drawPixel(x, y, color);
         }
-        s_gfx.pushImage(0, y, s_width, 1, row);
     }
     s_gfx.endWrite();
     s_gfx.display();
 
-    free(row);
     s_dirty = false;
 }
 
@@ -167,9 +153,5 @@ extern "C" int display_get_buffer_size(void)
 {
     return s_disp_len;
 }
-
-/* Suppress unused-static-function warning if the helper is not
- * referenced by the simplified flush path. */
-static inline void _eds3_unused(void) { (void)pixel_is_white; }
 
 #endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
