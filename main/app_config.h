@@ -70,6 +70,99 @@
 /* Deep-sleep wakeup on GPIO3 (KEY0 / right green button, active-low) */
 #define WAKEUP_GPIO_NUM 3
 
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+/* ----- Waveshare E-Paper Driver HAT (generic ESP32-S3) -----
+ *
+ * The HAT itself is a passive SPI breakout for UC8179-class panels and
+ * carries no MCU. Defaults below match the ESP32-S3-DevKitC-1 wiring
+ * used in Waveshare's example projects, but every pin is overridable
+ * via Kconfig (see "Waveshare E-Paper Driver HAT pinout" menu).
+ */
+
+#define EPD_MOSI_PIN    CONFIG_DRAFTLING_HAT_EPD_MOSI_PIN
+#define EPD_SCK_PIN     CONFIG_DRAFTLING_HAT_EPD_SCK_PIN
+#define EPD_DC_PIN      CONFIG_DRAFTLING_HAT_EPD_DC_PIN
+#define EPD_CS_PIN      CONFIG_DRAFTLING_HAT_EPD_CS_PIN
+#define EPD_RST_PIN     CONFIG_DRAFTLING_HAT_EPD_RST_PIN
+#define EPD_BUSY_PIN    CONFIG_DRAFTLING_HAT_EPD_BUSY_PIN
+
+/* Optional SD card on its own SPI host (SPI3). Only consulted when
+ * CONFIG_DRAFTLING_HAT_HAS_SD is selected. */
+#ifdef CONFIG_DRAFTLING_HAT_HAS_SD
+#define SD_SPI_MOSI_PIN CONFIG_DRAFTLING_HAT_SD_MOSI_PIN
+#define SD_SPI_MISO_PIN CONFIG_DRAFTLING_HAT_SD_MISO_PIN
+#define SD_SPI_SCK_PIN  CONFIG_DRAFTLING_HAT_SD_SCK_PIN
+#define SD_SPI_CS_PIN   CONFIG_DRAFTLING_HAT_SD_CS_PIN
+#define SD_EN_PIN       -1
+#endif
+
+/* No on-board battery on a bare HAT */
+#define BATT_ADC_PIN    -1
+#define BATT_EN_PIN     -1
+#define BATT_DIVIDER    1
+
+/* Deep-sleep wakeup (active-low). Default GPIO0 = BOOT button. */
+#define WAKEUP_GPIO_NUM CONFIG_DRAFTLING_HAT_WAKEUP_GPIO
+
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+/* ----- M5Stack PaperS3 -----
+ *
+ * The PaperS3 drives a 540x960 ED047TC1 e-paper panel via the ESP32-S3
+ * LCD/I80 16-bit parallel peripheral. Pin assignments below follow the
+ * M5Stack hardware reference (see https://docs.m5stack.com/en/core/papers3).
+ */
+
+/* 16-bit data bus D0..D15 (LCD_CAM I80 data lanes) */
+#define EPD_D0_PIN      6
+#define EPD_D1_PIN      14
+#define EPD_D2_PIN      7
+#define EPD_D3_PIN      12
+#define EPD_D4_PIN      9
+#define EPD_D5_PIN      11
+#define EPD_D6_PIN      8
+#define EPD_D7_PIN      10
+#define EPD_D8_PIN      -1
+#define EPD_D9_PIN      -1
+#define EPD_D10_PIN     -1
+#define EPD_D11_PIN     -1
+#define EPD_D12_PIN     -1
+#define EPD_D13_PIN     -1
+#define EPD_D14_PIN     -1
+#define EPD_D15_PIN     -1
+
+/* Control lines */
+#define EPD_CKV_PIN     38
+#define EPD_STH_PIN     40
+#define EPD_STV_PIN     41
+#define EPD_OE_PIN      45
+#define EPD_LE_PIN      39
+#define EPD_GMODE_PIN   42
+#define EPD_SPV_PIN     17
+#define EPD_SPH_PIN     -1   /* PSH/SPH driven via shift-register on PaperS3 */
+
+/* Power-rail enable (drive HIGH to power the panel HV rails) */
+#define EPD_POWER_EN_PIN 44
+
+/* Onboard MicroSD on dedicated SPI host (SPI2) */
+#define SD_SPI_MOSI_PIN 35
+#define SD_SPI_MISO_PIN 36
+#define SD_SPI_SCK_PIN  37
+#define SD_SPI_CS_PIN   47
+#define SD_EN_PIN       -1
+
+/* I2C bus (BM8563 RTC, fuel gauge) */
+#define I2C_SDA_PIN     41
+#define I2C_SCL_PIN     42
+
+/* No ADC battery divider; battery state would come from the I2C fuel
+ * gauge in a future revision (see components/battery). */
+#define BATT_ADC_PIN    -1
+#define BATT_EN_PIN     -1
+#define BATT_DIVIDER    1
+
+/* Deep-sleep wakeup on GPIO21 (power button, active-low) */
+#define WAKEUP_GPIO_NUM 21
+
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."
 #endif

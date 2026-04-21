@@ -22,17 +22,51 @@ config DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
         SPI bus with the e-paper. Wakeup from deep sleep is via the
         right (green) KEY0 button on GPIO3.
 
+config DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    bool "Waveshare E-Paper Driver HAT (generic ESP32-S3)"
+    depends on IDF_TARGET_ESP32S3
+    help
+        Waveshare E-Paper Driver HAT (UC8179 controller) connected to a
+        generic ESP32-S3 development board (defaults match the
+        ESP32-S3-DevKitC-1). Display resolution and SPI/control pins
+        are configurable via the options below to support different
+        Waveshare panels (4.2" 400x300, 5.83" 600x448, 7.5" 800x480,
+        7.5" V2 BW 800x480, etc.).
+
+config DRAFTLING_MODEL_M5STACK_PAPERS3
+    bool "M5Stack PaperS3"
+    depends on IDF_TARGET_ESP32S3
+    help
+        M5Stack PaperS3 board with a 540x960 e-paper panel (ED047TC1
+        family) driven by the ESP32-S3 LCD/I80 parallel peripheral.
+        v1 uses a 1-bit black/white waveform with full-screen refresh
+        only; partial refresh and grayscale are TODO.
+
 endchoice
 
 config DRAFTLING_DISPLAY_WIDTH
-    int
+    int "Display width (px)" if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    range 64 1024
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
+    default 800 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    help
+        Display width in pixels. Editable for the Waveshare E-Paper
+        Driver HAT to support different panels; fixed for the other
+        boards. Must be a multiple of 8 for e-paper backends.
 
 config DRAFTLING_DISPLAY_HEIGHT
-    int
+    int "Display height (px)" if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    range 64 1024
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
+    default 480 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    help
+        Display height in pixels. Editable for the Waveshare E-Paper
+        Driver HAT to support different panels; fixed for the other
+        boards.
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
@@ -63,7 +97,7 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
-    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
+    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT
     range 1 1000
     default 50
     help
@@ -73,5 +107,85 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
         full refreshes; higher values keep the UI snappy but let
         ghosting accumulate. The default of 50 is a reasonable balance
         for a Markdown editor.
+
+menu "Waveshare E-Paper Driver HAT pinout"
+    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+
+config DRAFTLING_HAT_EPD_MOSI_PIN
+    int "EPD MOSI / DIN pin (GPIO)"
+    range 0 48
+    default 11
+    help
+        SPI MOSI (DIN on the HAT header) GPIO. Default matches the
+        ESP32-S3-DevKitC-1 wiring used by Waveshare's example.
+
+config DRAFTLING_HAT_EPD_SCK_PIN
+    int "EPD SCK / CLK pin (GPIO)"
+    range 0 48
+    default 12
+
+config DRAFTLING_HAT_EPD_DC_PIN
+    int "EPD DC pin (GPIO)"
+    range 0 48
+    default 13
+
+config DRAFTLING_HAT_EPD_CS_PIN
+    int "EPD CS pin (GPIO)"
+    range 0 48
+    default 10
+
+config DRAFTLING_HAT_EPD_RST_PIN
+    int "EPD RST pin (GPIO)"
+    range 0 48
+    default 14
+
+config DRAFTLING_HAT_EPD_BUSY_PIN
+    int "EPD BUSY pin (GPIO)"
+    range 0 48
+    default 9
+
+config DRAFTLING_HAT_WAKEUP_GPIO
+    int "Deep-sleep wakeup GPIO (active-low)"
+    range 0 48
+    default 0
+    help
+        GPIO pin used as the EXT0 wakeup source when the board enters
+        deep sleep. Default is GPIO0 (BOOT button on most ESP32-S3 dev
+        kits).
+
+config DRAFTLING_HAT_HAS_SD
+    bool "Enable SD card on a separate SPI bus"
+    default n
+    help
+        When enabled, the HAT model also initializes a MicroSD card on
+        a second SPI host (SPI3). When disabled, the editor runs
+        without persistent storage (the editor UI displays an
+        SD-not-ready status and Git sync is unavailable).
+
+config DRAFTLING_HAT_SD_MOSI_PIN
+    int "SD MOSI pin (GPIO)"
+    depends on DRAFTLING_HAT_HAS_SD
+    range 0 48
+    default 35
+
+config DRAFTLING_HAT_SD_MISO_PIN
+    int "SD MISO pin (GPIO)"
+    depends on DRAFTLING_HAT_HAS_SD
+    range 0 48
+    default 37
+
+config DRAFTLING_HAT_SD_SCK_PIN
+    int "SD SCK pin (GPIO)"
+    depends on DRAFTLING_HAT_HAS_SD
+    range 0 48
+    default 36
+
+config DRAFTLING_HAT_SD_CS_PIN
+    int "SD CS pin (GPIO)"
+    depends on DRAFTLING_HAT_HAS_SD
+    range 0 48
+    default 34
+
+endmenu
 
 endmenu
