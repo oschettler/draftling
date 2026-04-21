@@ -10,4 +10,14 @@ config DRAFTLING_KEY_QUEUE_LEN
         Larger values absorb bursts of keystrokes at the cost of a bit
         more RAM (each slot is a kb_event_t).
 
+config DRAFTLING_KEY_DRAIN_PERIOD_MS
+    int "Key event drain period (ms)"
+    range 1 1000
+    default 20
+    help
+        Period of the LVGL timer that drains the BLE key event queue on
+        the GUI task. The default of 20 ms gives a 50 Hz poll rate.
+        Lower values reduce input latency at the cost of more CPU
+        wakeups; higher values save power but feel less responsive.
+
 endmenu

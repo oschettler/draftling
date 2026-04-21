@@ -231,7 +231,7 @@ static lv_timer_t *s_batt_timer     = NULL;
  * LVGL mutex.  Key events are enqueued here from the BLE context (ISR-
  * safe) and drained by an LVGL timer running on the GUI task. */
 #define KEY_QUEUE_LEN       CONFIG_DRAFTLING_KEY_QUEUE_LEN
-#define KEY_DRAIN_PERIOD_MS 20   /* 50 Hz poll rate for the drain timer */
+#define KEY_DRAIN_PERIOD_MS CONFIG_DRAFTLING_KEY_DRAIN_PERIOD_MS
 static QueueHandle_t s_key_queue = NULL;
 static lv_timer_t   *s_key_drain_timer = NULL;
 
