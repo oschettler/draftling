@@ -27,7 +27,11 @@ extern "C" {
  *
  *   gpio_num     -- ADC1 GPIO connected to the divider output
  *   enable_gpio  -- GPIO that powers the divider, or -1 if always on
- *   divider      -- voltage divider ratio (e.g. 2 for 1:1, 3 for 2:1 to GND)
+ *   divider      -- multiplier from measured pin voltage back to the
+ *                   battery voltage. Use 2 for a balanced 1:1 divider
+ *                   (R_top == R_bottom, V_pin = V_bat / 2) and 3 for
+ *                   a 2:1 divider where R_top is twice R_bottom
+ *                   (V_pin = V_bat / 3).
  *
  * Returns 0 on success, non-zero on failure.
  */
