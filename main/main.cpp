@@ -38,6 +38,11 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-RLCD-4.2");
 #elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     ESP_LOGI(TAG, "Draftling - Seeed Studio reTerminal E1001");
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+    ESP_LOGI(TAG, "Draftling - Waveshare E-Paper Driver HAT (%dx%d)",
+             DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    ESP_LOGI(TAG, "Draftling - M5Stack PaperS3");
 #endif
 
     /* Initialize NVS - required for WiFi and BT */
@@ -52,23 +57,30 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing display...");
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
-                 RLCD_CS_PIN, RLCD_RST_PIN, DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+                 RLCD_CS_PIN, RLCD_RST_PIN, -1,
+                 DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+      defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
     display_init(EPD_MOSI_PIN, EPD_SCK_PIN, EPD_DC_PIN,
-                 EPD_CS_PIN, EPD_RST_PIN, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+                 EPD_CS_PIN, EPD_RST_PIN, EPD_BUSY_PIN,
+                 DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* The PaperS3 driver is a thin shim over M5GFX which configures
+     * all panel GPIOs internally based on the M5PaperS3 board id. We
+     * still call display_init for API parity; pin parameters are
+     * ignored by the M5GFX backend. */
+    display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #endif
 
     /* Initialize LVGL */
     ESP_LOGI(TAG, "Initializing LVGL...");
     lvgl_port_init(DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_ROTATE);
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     /* Initialize battery voltage monitor before the UI so the editor
-     * status bar can show the battery level immediately. */
+     * status bar can show the battery level immediately. battery_init
+     * is a no-op when BATT_ADC_PIN is < 0 (HAT and PaperS3 cases). */
     ESP_LOGI(TAG, "Initializing battery monitor...");
     battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
-#endif
 
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");
@@ -79,16 +91,35 @@ extern "C" void app_main(void)
 
     /* Initialize SD card */
     ESP_LOGI(TAG, "Initializing SD card...");
+    esp_err_t sd_ret = ESP_FAIL;
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-    esp_err_t sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
+    sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
 #elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     /* The e-paper driver has already initialized the SPI2 bus, so we
      * pass -1 for sck/mosi and just attach the SD card as a second
      * device on that bus. */
-    esp_err_t sd_ret = sd_card_init_spi(SPI2_HOST,
-                                        SD_SPI_MISO_PIN, -1, -1,
-                                        SD_SPI_CS_PIN, SD_EN_PIN,
-                                        SD_MOUNT_POINT);
+    sd_ret = sd_card_init_spi(SPI2_HOST,
+                              SD_SPI_MISO_PIN, -1, -1,
+                              SD_SPI_CS_PIN, SD_EN_PIN,
+                              SD_MOUNT_POINT);
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+#  ifdef CONFIG_DRAFTLING_HAT_HAS_SD
+    /* HAT has no on-board SD; user opted in to a separate SD on SPI3
+     * with its own dedicated pinout. */
+    sd_ret = sd_card_init_spi(SPI3_HOST,
+                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
+                              SD_SPI_CS_PIN, SD_EN_PIN,
+                              SD_MOUNT_POINT);
+#  else
+    ESP_LOGW(TAG, "HAT model built without SD support (CONFIG_DRAFTLING_HAT_HAS_SD=n)");
+    sd_ret = ESP_ERR_NOT_SUPPORTED;
+#  endif
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* PaperS3 has an on-board MicroSD on its own SPI3 bus. */
+    sd_ret = sd_card_init_spi(SPI3_HOST,
+                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
+                              SD_SPI_CS_PIN, SD_EN_PIN,
+                              SD_MOUNT_POINT);
 #endif
     if (sd_ret != ESP_OK) {
         ESP_LOGE(TAG, "SD card init failed: %s", esp_err_to_name(sd_ret));

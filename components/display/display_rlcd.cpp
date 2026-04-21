@@ -21,6 +21,8 @@ static int s_disp_len = 0;
 static int s_width = 0;
 static int s_height = 0;
 static int s_rst_pin = -1;
+/* RLCD has no BUSY signal; the parameter is accepted for API
+ * compatibility with the e-paper drivers and ignored. */
 
 /* Landscape LUT: for each (x,y) store the byte index and bit mask */
 static uint16_t *s_pixel_index_lut = NULL;  /* width * height entries */
@@ -70,8 +72,10 @@ static void hw_reset(void)
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
-extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst, int width, int height)
+extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
+                             int busy, int width, int height)
 {
+    (void)busy;  /* RLCD has no BUSY signal */
     s_width = width;
     s_height = height;
     s_rst_pin = rst;

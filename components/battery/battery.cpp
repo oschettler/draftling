@@ -124,6 +124,16 @@ extern "C" int battery_init(int gpio_num, int enable_gpio, int divider)
 {
     if (s_initialized) return 0;
 
+    /* Boards with no on-board battery monitor pass gpio_num < 0 (e.g. the
+     * bare Waveshare E-Paper Driver HAT and the M5Stack PaperS3, whose
+     * battery state lives on a fuel-gauge IC over I2C). Skip ADC setup
+     * entirely; battery_read_mv()/battery_read_percent() will then return
+     * 0 / -1 and the editor UI will hide the icon. */
+    if (gpio_num < 0) {
+        ESP_LOGI(TAG, "Battery monitor disabled (no ADC pin configured)");
+        return 0;
+    }
+
     s_channel     = gpio_to_channel(gpio_num);
     s_enable_gpio = enable_gpio;
     s_divider     = (divider > 0) ? divider : DIVIDER_RATIO_DEFAULT;

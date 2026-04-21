@@ -108,59 +108,35 @@
 /* ----- M5Stack PaperS3 -----
  *
  * The PaperS3 drives a 540x960 ED047TC1 e-paper panel via the ESP32-S3
- * LCD/I80 16-bit parallel peripheral. Pin assignments below follow the
- * M5Stack hardware reference (see https://docs.m5stack.com/en/core/papers3).
+ * LCD/I80 parallel peripheral. The panel data bus, control lines and
+ * power-rail enable are configured by the m5stack/M5GFX library
+ * internally (board id "M5PaperS3"); we do not redefine those GPIOs
+ * here. See the M5Stack hardware reference for the full pin list:
+ * https://docs.m5stack.com/en/core/papers3
+ *
+ * Pins listed below are the ones Draftling itself touches outside of
+ * the display driver (SD card, wakeup, optional I2C).
  */
 
-/* 16-bit data bus D0..D15 (LCD_CAM I80 data lanes) */
-#define EPD_D0_PIN      6
-#define EPD_D1_PIN      14
-#define EPD_D2_PIN      7
-#define EPD_D3_PIN      12
-#define EPD_D4_PIN      9
-#define EPD_D5_PIN      11
-#define EPD_D6_PIN      8
-#define EPD_D7_PIN      10
-#define EPD_D8_PIN      -1
-#define EPD_D9_PIN      -1
-#define EPD_D10_PIN     -1
-#define EPD_D11_PIN     -1
-#define EPD_D12_PIN     -1
-#define EPD_D13_PIN     -1
-#define EPD_D14_PIN     -1
-#define EPD_D15_PIN     -1
-
-/* Control lines */
-#define EPD_CKV_PIN     38
-#define EPD_STH_PIN     40
-#define EPD_STV_PIN     41
-#define EPD_OE_PIN      45
-#define EPD_LE_PIN      39
-#define EPD_GMODE_PIN   42
-#define EPD_SPV_PIN     17
-#define EPD_SPH_PIN     -1   /* PSH/SPH driven via shift-register on PaperS3 */
-
-/* Power-rail enable (drive HIGH to power the panel HV rails) */
-#define EPD_POWER_EN_PIN 44
-
-/* Onboard MicroSD on dedicated SPI host (SPI2) */
-#define SD_SPI_MOSI_PIN 35
-#define SD_SPI_MISO_PIN 36
-#define SD_SPI_SCK_PIN  37
+/* Onboard MicroSD on a dedicated SPI host (SPI3 - SPI2 is used by the
+ * LCD peripheral on the PaperS3). */
+#define SD_SPI_MOSI_PIN 6
+#define SD_SPI_MISO_PIN 8
+#define SD_SPI_SCK_PIN  7
 #define SD_SPI_CS_PIN   47
 #define SD_EN_PIN       -1
 
-/* I2C bus (BM8563 RTC, fuel gauge) */
+/* I2C bus (BM8563 RTC and BMI270 IMU on the PaperS3) */
 #define I2C_SDA_PIN     41
 #define I2C_SCL_PIN     42
 
-/* No ADC battery divider; battery state would come from the I2C fuel
- * gauge in a future revision (see components/battery). */
+/* No ADC battery divider; battery state would come from the on-board
+ * fuel gauge over I2C in a future revision (see components/battery). */
 #define BATT_ADC_PIN    -1
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
 
-/* Deep-sleep wakeup on GPIO21 (power button, active-low) */
+/* Deep-sleep wakeup on the PaperS3 power button (GPIO21, active-low) */
 #define WAKEUP_GPIO_NUM 21
 
 #else

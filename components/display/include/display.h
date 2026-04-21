@@ -11,13 +11,21 @@ extern "C" {
  *
  * Parameter mapping depends on the selected hardware model:
  *
- *  Waveshare RLCD:           mosi, sck, dc, cs, rst, width, height
- *  Seeed reTerminal E1001:   mosi, sck, dc, cs, rst, width, height
- *                            (BUSY pin is fixed by the board and read
- *                             internally by the UC8179 driver)
+ *  Waveshare RLCD (display_rlcd.cpp):
+ *      mosi, sck, dc, cs, rst, busy=-1, width, height
+ *
+ *  UC8179 e-paper (display_uc8179.cpp) - covers both the Seeed
+ *  reTerminal E1001 and the Waveshare E-Paper Driver HAT:
+ *      mosi, sck, dc, cs, rst, busy, width, height
+ *
+ *  M5Stack PaperS3 (display_eds3.cpp):
+ *      all pin parameters are ignored - the m5stack/M5GFX library
+ *      configures the parallel-bus and control GPIOs internally
+ *      based on the M5PaperS3 board id. Width/height must still
+ *      match the panel (540 x 960).
  */
 void display_init(int pin_a, int pin_b, int pin_c, int pin_d,
-                  int pin_e, int width, int height);
+                  int pin_e, int pin_f, int width, int height);
 
 void display_clear(uint8_t color);
 void display_set_pixel(uint16_t x, uint16_t y, uint8_t color);

@@ -1,23 +1,27 @@
 #include "sdkconfig.h"
-#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
 
 /*
- * UC8179 e-paper display driver for the Seeed reTerminal E1001
- * (800 x 480, 1 bit per pixel, full-screen refresh).
+ * UC8179 e-paper display driver. Used by both:
+ *   - Seeed reTerminal E1001 (800 x 480, fixed pinout)
+ *   - Waveshare E-Paper Driver HAT on a generic ESP32-S3 host
+ *     (resolution and every SPI/control pin configurable via Kconfig)
+ *
+ * 1 bit per pixel, partial-region refresh with periodic full refresh.
  *
  * The driver implements the same public API as the Waveshare RLCD
  * driver so that the LVGL port (lvgl_port.cpp) can stay generic:
  *
- *   display_init(mosi, sck, dc, cs, rst, width, height)
+ *   display_init(mosi, sck, dc, cs, rst, busy, width, height)
  *   display_clear(color)
  *   display_set_pixel(x, y, color)
  *   display_flush()
  *
- * Two parameters are not present in the public signature but are
- * still required for the e-paper: BUSY (input) and the SPI host id.
- * The reTerminal E1001 wires BUSY to GPIO13 and shares the SPI bus
- * with the SD card (HSPI / SPI2), so we pin them as compile-time
- * constants here.
+ * The SPI host id is fixed (SPI2 / HSPI). The BUSY input is now
+ * accepted as an init-time parameter so each board can supply its
+ * own pin (the reTerminal E1001 wires it to GPIO13; the HAT default
+ * is GPIO9, overridable via menuconfig).
  *
  * Frame buffer layout (UC8179 in B/W mode):
  *   - 1 bit per pixel, 8 horizontally adjacent pixels per byte,
@@ -34,6 +38,12 @@
  *     immediately when the dirty region covers most of the screen.
  * display_full_refresh() is exposed so callers can force a clean,
  * ghost-free repaint on demand (e.g. after opening a new file).
+ *
+ * Note: the PWR/CDI/PLL constants below are tuned for the Waveshare
+ * 7.5" V2 BW panel used by the reTerminal E1001 and the default HAT
+ * panel. Smaller panels (4.2", 5.83") may need different values; if
+ * you see washed-out or noisy output on those panels, refer to their
+ * datasheet and override the constants here.
  */
 
 #include <cstdio>
@@ -53,13 +63,13 @@ static const char *TAG = "DisplayEPD";
 
 /* The reTerminal E1001 shares the SPI bus between the e-paper and the
  * SD card. We use HSPI (SPI2) so SPI3 is left free for any future
- * peripheral (and to mirror the upstream Seeed_GFX setup). */
+ * peripheral (and to mirror the upstream Seeed_GFX setup). The HAT
+ * model uses the same host id; if a host board needs SPI3 instead
+ * for the e-paper, override here. */
 #define EPD_SPI_HOST    SPI2_HOST
 
-/* BUSY input from the panel (active-low). Hard-coded for the only board
- * that currently uses this driver; if a future board reuses the UC8179
- * with different wiring, promote this to an init-time parameter. */
-#define EPD_BUSY_PIN    13
+/* BUSY input from the panel (active-low). Now provided as an init-time
+ * parameter so each board can supply its own pin. */
 
 /* UC8179 commands used in this driver */
 #define UC8179_CMD_PSR        0x00  /* Panel Setting */
@@ -141,13 +151,13 @@ static void wait_busy(int timeout_ms)
 /* ---- public API ---- */
 
 extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
-                             int width, int height)
+                             int busy, int width, int height)
 {
     s_width   = width;
     s_height  = height;
     s_stride  = (width + 7) / 8;
     s_rst_pin = rst;
-    s_busy_pin = EPD_BUSY_PIN;
+    s_busy_pin = busy;
 
     /* Initialize the SPI bus (HSPI). The SD card driver may attach to
      * the same bus afterwards as a second device. */

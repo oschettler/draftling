@@ -9,6 +9,13 @@
  *  - Seeed reTerminal E1001: wakes via EXT0 on GPIO3 (KEY0, the right
  *    green button, active-low).  The e-paper retains its image while
  *    powered down.
+ *  - Waveshare E-Paper Driver HAT: wakes via EXT0 on the GPIO selected
+ *    by CONFIG_DRAFTLING_HAT_WAKEUP_GPIO (default GPIO0 / BOOT button).
+ *  - M5Stack PaperS3: wakes via EXT0 on GPIO21 (the on-board power
+ *    button, active-low).
+ *
+ * The wake-up GPIO comes from app_config.h's WAKEUP_GPIO_NUM macro,
+ * which is set per board (and may be Kconfig-driven for the HAT).
  *
  * The editor state lives in PSRAM/heap so it is lost on wake;
  * callers should auto-save before sleep.  The timeout value is persisted
@@ -40,6 +47,12 @@ static const char *TAG = "Standby";
 #elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
 /* KEY0 / right green button (active-low) -- matches app_config.h */
 #define WAKEUP_GPIO    ((gpio_num_t)3)
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+/* HAT model: pin selected by Kconfig (default GPIO0 / BOOT button) */
+#define WAKEUP_GPIO    ((gpio_num_t)CONFIG_DRAFTLING_HAT_WAKEUP_GPIO)
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+/* PaperS3 power button (active-low) -- matches app_config.h */
+#define WAKEUP_GPIO    ((gpio_num_t)21)
 #endif
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
@@ -145,7 +158,9 @@ extern "C" void standby_enter_sleep(void)
     }
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */
     ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
     ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);
