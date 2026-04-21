@@ -5,7 +5,7 @@
 /*
  * UC8179 e-paper display driver. Used by both:
  *   - Seeed reTerminal E1001 (800 x 480, fixed pinout)
- *   - Waveshare E-Paper Driver HAT on a generic ESP32-S3 host
+ *   - Waveshare E-Paper Driver HAT on any BLE-capable ESP32 host
  *     (resolution and every SPI/control pin configurable via Kconfig)
  *
  * 1 bit per pixel, partial-region refresh with periodic full refresh.

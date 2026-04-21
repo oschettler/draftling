@@ -71,12 +71,15 @@
 #define WAKEUP_GPIO_NUM 3
 
 #elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
-/* ----- Waveshare E-Paper Driver HAT (generic ESP32-S3) -----
+/* ----- Waveshare E-Paper Driver HAT (generic ESP32 host) -----
  *
- * The HAT itself is a passive SPI breakout for UC8179-class panels and
- * carries no MCU. Defaults below match the ESP32-S3-DevKitC-1 wiring
- * used in Waveshare's example projects, but every pin is overridable
- * via Kconfig (see "Waveshare E-Paper Driver HAT pinout" menu).
+ * Selectable on any BLE-capable ESP-IDF target (ESP32, S3, C2, C3,
+ * C6, H2). The HAT itself is a passive SPI breakout for UC8179-class
+ * panels and carries no MCU. Defaults below match the
+ * ESP32-S3-DevKitC-1 wiring used in Waveshare's example projects,
+ * but every pin is overridable via Kconfig (see "Waveshare E-Paper
+ * Driver HAT pinout" menu) so the same model works on, e.g., a
+ * classic ESP32-DevKitC or an ESP32-C6-DevKitM-1.
  */
 
 #define EPD_MOSI_PIN    CONFIG_DRAFTLING_HAT_EPD_MOSI_PIN

@@ -10,7 +10,7 @@ with reflective displays.
 |-------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
 | [Seeed Studio reTerminal E1001](https://wiki.seeedstudio.com/getting_started_with_reterminal_e1001/) | 7.5" e-paper (UC8179), 800x480 |
-| [Waveshare E-Paper Driver HAT](https://www.waveshare.com/wiki/E-Paper_Driver_HAT) on a generic ESP32-S3 (e.g. ESP32-S3-DevKitC-1) | Configurable, default 7.5" V2 BW (UC8179), 800x480 |
+| [Waveshare E-Paper Driver HAT](https://www.waveshare.com/wiki/E-Paper_Driver_HAT) on a generic ESP32 host (any BLE-capable target: ESP32, S3, C2, C3, C6, H2) | Configurable, default 7.5" V2 BW (UC8179), 800x480 |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
 
 A demo video with the [Waveshare ESP32-S3-RLCD-4.2](https://www.youtube.com/watch?v=PgSaroeM3CE). Also, the fragile screen broke during the tests, so this device really needs a protective glass.
@@ -23,11 +23,13 @@ the board you are building for:
 
 - **Waveshare ESP32-S3-RLCD-4.2** -- 4.2" reflective LCD (400x300)
 - **Seeed Studio reTerminal E1001** -- 7.5" e-paper, UC8179 (800x480)
-- **Waveshare E-Paper Driver HAT** -- UC8179 SPI HAT on a generic
-  ESP32-S3 dev board. Display resolution and every SPI/control pin are
-  user-editable in the same menu (see the **Waveshare E-Paper Driver
-  HAT pinout** sub-menu); defaults match the ESP32-S3-DevKitC-1
-  wiring used by Waveshare's example projects.
+- **Waveshare E-Paper Driver HAT** -- UC8179 SPI HAT on any
+  BLE-capable ESP32 host (ESP32, ESP32-S3, ESP32-C2/C3/C6, ESP32-H2;
+  the ESP32-S2 is not supported because it has no BLE radio).
+  Display resolution and every SPI/control pin are user-editable in
+  the same menu (see the **Waveshare E-Paper Driver HAT pinout**
+  sub-menu); defaults match the ESP32-S3-DevKitC-1 wiring used by
+  Waveshare's example projects.
 - **M5Stack PaperS3** -- 4.7" e-paper (ED047TC1, 540x960). Driver is
   a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
   component; partial refresh and grayscale are not implemented yet.
@@ -140,7 +142,7 @@ Found at the top-level **DRAFTLING Configuration** menu.
 | **Hardware Model** | choice | Waveshare ESP32-S3-RLCD-4.2 | Select the target board. Display resolution and driver are set automatically. |
 | -- Waveshare ESP32-S3-RLCD-4.2 | | | 4.2" reflective LCD, 400x300 |
 | -- Seeed Studio reTerminal E1001 | | | 7.5" e-paper, UC8179, 800x480 |
-| -- Waveshare E-Paper Driver HAT | | | UC8179 SPI HAT on a generic ESP32-S3 host (resolution and pinout configurable) |
+| -- Waveshare E-Paper Driver HAT | | | UC8179 SPI HAT on any BLE-capable ESP32 host (resolution and pinout configurable; not available on ESP32-S2) |
 | -- M5Stack PaperS3 | | | 4.7" e-paper, ED047TC1, 540x960 (driver via m5stack/M5GFX) |
 | **Display width / height (px)** | int | depends on model | Editable for the HAT model only; fixed for all other boards. |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |

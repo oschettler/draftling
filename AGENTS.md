@@ -21,7 +21,7 @@ with a remote Git repository via the GitHub REST API.
 |-------|---------|
 | Waveshare ESP32-S3-RLCD-4.2 | 4.2-inch reflective LCD, 400x300 |
 | Seeed Studio reTerminal E1001 | 7.5-inch e-paper (UC8179), 800x480 |
-| Waveshare E-Paper Driver HAT (on a generic ESP32-S3, default ESP32-S3-DevKitC-1) | UC8179 e-paper, configurable resolution (default 800x480) |
+| Waveshare E-Paper Driver HAT (on any BLE-capable ESP32 host, default ESP32-S3-DevKitC-1 wiring) | UC8179 e-paper, configurable resolution (default 800x480) |
 | M5Stack PaperS3 | 4.7-inch e-paper (ED047TC1), 540x960 |
 
 ## Repository Layout
@@ -290,21 +290,27 @@ options:
 
 #### Hardware Model (DRAFTLING_HARDWARE_MODEL)
 
-A `choice` that selects the target board. All options depend on
-`IDF_TARGET_ESP32S3`:
+A `choice` that selects the target board. The first three options are
+ESP32-S3-only (`depends on IDF_TARGET_ESP32S3`); the Waveshare HAT is
+selectable on any ESP-IDF target with a BLE radio (`depends on
+SOC_BLE_SUPPORTED`):
 
 - **DRAFTLING_MODEL_WAVESHARE_RLCD42** -- Waveshare ESP32-S3-RLCD-4.2
   with a 400x300 reflective LCD and GPIO18 deep-sleep wakeup button.
+  *Requires ESP32-S3.*
 - **DRAFTLING_MODEL_SEEED_RETERMINAL_E1001** -- Seeed reTerminal E1001
   with a 7.5" 800x480 UC8179 e-paper, SD card on the same SPI bus,
-  GPIO3 (KEY0) deep-sleep wakeup.
+  GPIO3 (KEY0) deep-sleep wakeup. *Requires ESP32-S3.*
 - **DRAFTLING_MODEL_WAVESHARE_EPD_HAT** -- Waveshare E-Paper Driver
-  HAT (UC8179) on a generic ESP32-S3 host. Resolution and every
-  SPI/control pin are user-editable; defaults match the
-  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
+  HAT (UC8179) on any BLE-capable ESP32 host (ESP32, ESP32-S3,
+  ESP32-C2/C3/C6, ESP32-H2 - i.e. anything except the BLE-less
+  ESP32-S2). Resolution and every SPI/control pin are user-editable;
+  defaults match the ESP32-S3-DevKitC-1 wiring used by Waveshare's
+  example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
   library, on-board MicroSD on SPI3, GPIO21 (power button) wakeup.
+  *Requires ESP32-S3.*
 
 The hardware model selection drives two `int` symbols consumed in
 `main/app_config.h` as `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`:
