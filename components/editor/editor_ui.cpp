@@ -183,6 +183,11 @@ static lv_obj_t *s_scr_menu     = NULL;
 static lv_obj_t *s_menu_list    = NULL;
 static lv_obj_t *s_lbl_menu_hdr = NULL;
 static int       s_menu_sel     = 0;
+/* Previously highlighted menu item, so update_list_highlight() can
+ * clear just the old selection on Up/Down navigation instead of
+ * re-styling every item (which would invalidate the entire menu list
+ * and trigger a full e-paper refresh on the PaperS3 backend). */
+static int       s_menu_sel_prev = -1;
 static bool      s_menu_open    = false;
 
 /* Number of menu items */
@@ -195,6 +200,8 @@ static lv_timer_t *s_blink_timer = NULL;
 #endif
 static bool s_cursor_visible = true;
 static int  s_browser_sel    = 0;
+/* See s_menu_sel_prev. */
+static int  s_browser_sel_prev = -1;
 static int  s_browser_count  = 0;
 static sd_card_file_entry_t s_browser_entries[64];
 
@@ -202,6 +209,8 @@ static sd_card_file_entry_t s_browser_entries[64];
 static lv_obj_t *s_scr_settings  = NULL;
 static lv_obj_t *s_settings_list = NULL;
 static int       s_settings_sel  = 0;
+/* See s_menu_sel_prev above. */
+static int       s_settings_sel_prev = -1;
 static bool      s_settings_open = false;
 static bool      s_factory_reset_confirm = false; /* awaiting second Enter */
 
@@ -269,6 +278,42 @@ static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
 /* Selection highlight rectangle pool (one per visible line) */
 static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
 
+/* Per-slot render cache.  The editor body is by far the largest part
+ * of the screen, and on every keystroke editor_ui_refresh() is called
+ * which previously rewrote the text and style of every visible line.
+ * Each lv_label_set_text / lv_obj_remove_style_all / lv_obj_set_pos
+ * invalidates the corresponding LVGL area, so the union of dirty
+ * rectangles ended up covering nearly the whole editor area.  On the
+ * M5Stack PaperS3 backend that crosses the >75% "huge area" threshold
+ * in display_eds3.cpp and triggers a slow full-screen e-paper refresh
+ * on every keystroke (and on every menu navigation step, which used a
+ * similar full-rebuild pattern).
+ *
+ * The cache below records what we last drew into each slot so we can
+ * skip the LVGL mutations whenever the visible content is unchanged.
+ * The fast-path covers the common case of typing or moving the cursor
+ * with no active selection: only the slot whose text actually changed
+ * (and the cursor bar / title bar) gets invalidated, so M5GFX can run
+ * a fast partial-region waveform instead of a full refresh. */
+static char s_prev_line_text[MAX_LINE_LABELS][256];
+static int  s_prev_line_type[MAX_LINE_LABELS];     /* md_line_type_t, -1 if cache empty */
+static int  s_prev_line_y[MAX_LINE_LABELS];        /* y_pos last used for this slot, -1 if cache empty */
+static int  s_prev_line_h[MAX_LINE_LABELS];        /* rendered_h last computed */
+static bool s_prev_line_visible[MAX_LINE_LABELS];  /* slot was visible (not hidden) */
+static bool s_prev_line_was_selected[MAX_LINE_LABELS]; /* line intersected the selection */
+
+static void invalidate_render_cache(void)
+{
+    for (int i = 0; i < MAX_LINE_LABELS; i++) {
+        s_prev_line_text[i][0]      = '\0';
+        s_prev_line_type[i]         = -1;
+        s_prev_line_y[i]            = -1;
+        s_prev_line_h[i]            = 0;
+        s_prev_line_visible[i]      = false;
+        s_prev_line_was_selected[i] = false;
+    }
+}
+
 /* Styles */
 static lv_style_t s_style_body;
 static lv_style_t s_style_h1;
@@ -312,6 +357,9 @@ static void init_styles(void)
     lv_style_set_pad_left(&s_style_quote, 8);
 
     recalc_layout();
+
+    /* Styles changed -> all cached label content is now stale. */
+    invalidate_render_cache();
 }
 
 #if !(defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
@@ -493,8 +541,20 @@ extern "C" void editor_ui_refresh(void)
         for (int i = 0; i < MAX_LINE_LABELS; i++) {
             int line_idx = scroll + i;
             if (line_idx >= total || y_pos >= EDITOR_H) {
-                if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
-                if (s_sel_rects[i]) lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+                /* Only invalidate the slot when its visible state
+                 * actually changes; otherwise lv_obj_add_flag()
+                 * dirties the previous label rectangle on every
+                 * refresh and the union of all those rectangles
+                 * fills most of the editor area, defeating the
+                 * partial-update path on e-paper backends. */
+                if (s_line_labels[i] && s_prev_line_visible[i]) {
+                    lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+                    s_prev_line_visible[i] = false;
+                }
+                if (s_sel_rects[i] && s_prev_line_was_selected[i]) {
+                    lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+                    s_prev_line_was_selected[i] = false;
+                }
                 continue;
             }
 
@@ -529,38 +589,93 @@ extern "C" void editor_ui_refresh(void)
                 disp_len = 1;
             }
 
-            /* Create or reuse label */
-            if (!s_line_labels[i]) {
-                s_line_labels[i] = lv_label_create(s_cont_edit);
-                lv_obj_set_width(s_line_labels[i], SCR_W - 4);
-                lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
-            }
-            lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_remove_style_all(s_line_labels[i]);
-            lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
-            /* Re-apply width after style reset (remove_style_all clears it)
-             * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
-            lv_obj_set_width(s_line_labels[i], SCR_W - 4);
-            lv_label_set_text_static(s_line_labels[i], "");
-
-            /* Copy text to a persistent buffer (label needs it) */
-            /* Use lv_label_set_text which copies internally */
+            /* Build the final display string up-front so we can compare
+             * against the cached previous content before touching any
+             * LVGL state. */
             char tmp[256];
             size_t clen = disp_len < sizeof(tmp) - 1 ? disp_len : sizeof(tmp) - 1;
             memcpy(tmp, disp_text, clen);
             tmp[clen] = '\0';
-            lv_label_set_text(s_line_labels[i], tmp);
-            lv_obj_set_pos(s_line_labels[i], 2, y_pos);
 
-            /* Get the font for this line to compute correct line height */
-            const lv_font_t *line_font = lv_obj_get_style_text_font(
-                                            s_line_labels[i], LV_PART_MAIN);
-            int line_h = lv_font_get_line_height(line_font ? line_font : body_font());
+            /* Determine whether this line intersects the active
+             * selection (used both for the highlight branches below
+             * and to disable the fast-path cache when selection is
+             * involved -- the inversion / overlay rendering needs
+             * full re-evaluation). */
+            bool line_intersects_sel = false;
+            if (has_sel) {
+                size_t loff = (size_t)(lt - flat_text);
+                size_t leoff = loff + ll;
+                if (sel_start < leoff && sel_end > loff) {
+                    line_intersects_sel = true;
+                } else if (leoff < text_len &&
+                           flat_text[leoff] == '\n' &&
+                           sel_start < leoff + 1 && sel_end > loff) {
+                    line_intersects_sel = true;
+                }
+            }
 
-            /* Determine actual rendered height (may be taller if text wraps) */
-            lv_obj_update_layout(s_line_labels[i]);
-            int rendered_h = lv_obj_get_height(s_line_labels[i]);
-            if (rendered_h < line_h) rendered_h = line_h;
+            /* Fast path: when the visible text, markdown style, and y
+             * position for this slot all match the previous refresh
+             * AND no selection touches this line (now or last time),
+             * we can leave the LVGL label untouched -- which means no
+             * dirty rectangle for this slot and the e-paper backend
+             * issues a tight partial refresh covering only the line
+             * that actually changed. */
+            bool can_skip = s_line_labels[i] != NULL &&
+                            s_prev_line_visible[i] &&
+                            !line_intersects_sel &&
+                            !s_prev_line_was_selected[i] &&
+                            s_prev_line_type[i] == (int)mi.type &&
+                            s_prev_line_y[i] == y_pos &&
+                            strcmp(s_prev_line_text[i], tmp) == 0;
+
+            int line_h;
+            int rendered_h;
+            if (can_skip) {
+                /* Reuse cached layout metrics; the label still holds
+                 * the same text/font/width so its rendered geometry
+                 * is unchanged. lv_label_get_letter_pos() (used for
+                 * the cursor below) is non-mutating and works on the
+                 * existing label state. */
+                rendered_h = s_prev_line_h[i];
+                const lv_font_t *line_font = lv_obj_get_style_text_font(
+                                                s_line_labels[i], LV_PART_MAIN);
+                line_h = lv_font_get_line_height(line_font ? line_font : body_font());
+            } else {
+                /* Create or reuse label */
+                if (!s_line_labels[i]) {
+                    s_line_labels[i] = lv_label_create(s_cont_edit);
+                    lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+                    lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
+                }
+                lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_remove_style_all(s_line_labels[i]);
+                lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
+                /* Re-apply width after style reset (remove_style_all clears it)
+                 * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
+                lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+                lv_label_set_text_static(s_line_labels[i], "");
+                lv_label_set_text(s_line_labels[i], tmp);
+                lv_obj_set_pos(s_line_labels[i], 2, y_pos);
+
+                /* Get the font for this line to compute correct line height */
+                const lv_font_t *line_font = lv_obj_get_style_text_font(
+                                                s_line_labels[i], LV_PART_MAIN);
+                line_h = lv_font_get_line_height(line_font ? line_font : body_font());
+
+                /* Determine actual rendered height (may be taller if text wraps) */
+                lv_obj_update_layout(s_line_labels[i]);
+                rendered_h = lv_obj_get_height(s_line_labels[i]);
+                if (rendered_h < line_h) rendered_h = line_h;
+
+                /* Update cache with what we just drew. */
+                memcpy(s_prev_line_text[i], tmp, clen + 1);
+                s_prev_line_type[i]    = (int)mi.type;
+                s_prev_line_y[i]       = y_pos;
+                s_prev_line_h[i]       = rendered_h;
+                s_prev_line_visible[i] = true;
+            }
 
             /* Selection highlight.  Fully-selected lines and multi-row
              * partial selections use color inversion on the label
@@ -668,6 +783,12 @@ extern "C" void editor_ui_refresh(void)
                     lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
             }
 
+            /* Remember whether this slot is currently rendering a
+             * selected line so the next refresh can decide whether
+             * to invoke the full re-render path that clears the
+             * inversion / overlay. */
+            s_prev_line_was_selected[i] = line_intersects_sel;
+
             /* If this is the cursor line, compute its pixel position.
              * For headings, md_parse_line strips the "# " prefix from content,
              * so the cursor column (which counts from the raw line start) needs
@@ -765,6 +886,10 @@ static void refresh_file_list(void)
         }
     }
     s_browser_sel = 0;
+    /* List was rebuilt -- no item carries a highlight yet, so the
+     * next update_list_highlight() call should not try to "clear"
+     * a stale previous selection. */
+    s_browser_sel_prev = -1;
 }
 
 extern "C" void editor_ui_show_file_browser(void)
@@ -801,6 +926,46 @@ extern "C" void editor_ui_set_status(const char *msg)
 }
 
 /* ---- Menu system ---- */
+
+/* Apply the "selected" styling to item `sel` and the "unselected"
+ * styling to every other item.  Used after a full list rebuild. */
+static void apply_list_selection_styles(lv_obj_t *list, int sel)
+{
+    uint32_t count = lv_obj_get_child_count(list);
+    for (uint32_t i = 0; i < count; i++) {
+        lv_obj_t *child = lv_obj_get_child(list, i);
+        if ((int)i == sel) {
+            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(child, lv_color_white(), 0);
+        } else {
+            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_text_color(child, lv_color_black(), 0);
+        }
+    }
+}
+
+/* Move the highlight from `prev_sel` to `sel` by restyling only those
+ * two items.  This keeps the LVGL dirty rectangle limited to a couple
+ * of menu rows instead of the whole list, so e-paper backends can
+ * issue a partial refresh of just the affected area on Up/Down
+ * navigation. */
+static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel)
+{
+    if (prev_sel == sel) return;
+    uint32_t count = lv_obj_get_child_count(list);
+    if (prev_sel >= 0 && (uint32_t)prev_sel < count) {
+        lv_obj_t *prev = lv_obj_get_child(list, prev_sel);
+        lv_obj_set_style_bg_opa(prev, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(prev, lv_color_black(), 0);
+    }
+    if (sel >= 0 && (uint32_t)sel < count) {
+        lv_obj_t *cur = lv_obj_get_child(list, sel);
+        lv_obj_set_style_bg_color(cur, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(cur, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(cur, lv_color_white(), 0);
+    }
+}
 
 static void refresh_menu_items(void)
 {
@@ -847,18 +1012,15 @@ static void refresh_menu_items(void)
     lv_list_add_btn(s_menu_list, NULL, "Close menu (Esc / F1)");
 
     /* Highlight selection */
-    uint32_t count = lv_obj_get_child_count(s_menu_list);
-    for (uint32_t i = 0; i < count; i++) {
-        lv_obj_t *child = lv_obj_get_child(s_menu_list, i);
-        if ((int)i == s_menu_sel) {
-            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
-            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(child, lv_color_white(), 0);
-        } else {
-            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_text_color(child, lv_color_black(), 0);
-        }
-    }
+    apply_list_selection_styles(s_menu_list, s_menu_sel);
+    s_menu_sel_prev = s_menu_sel;
+}
+
+/* Move only the highlight bar without rebuilding the list. */
+static void update_menu_highlight(void)
+{
+    update_list_highlight(s_menu_list, s_menu_sel, s_menu_sel_prev);
+    s_menu_sel_prev = s_menu_sel;
 }
 
 static void show_menu(void)
@@ -926,18 +1088,15 @@ static void refresh_settings_items(void)
     lv_list_add_btn(s_settings_list, NULL, "Back (Esc)");
 
     /* Highlight selection */
-    uint32_t count = lv_obj_get_child_count(s_settings_list);
-    for (uint32_t i = 0; i < count; i++) {
-        lv_obj_t *child = lv_obj_get_child(s_settings_list, i);
-        if ((int)i == s_settings_sel) {
-            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
-            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(child, lv_color_white(), 0);
-        } else {
-            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_text_color(child, lv_color_black(), 0);
-        }
-    }
+    apply_list_selection_styles(s_settings_list, s_settings_sel);
+    s_settings_sel_prev = s_settings_sel;
+}
+
+/* Move only the highlight bar without rebuilding the list. */
+static void update_settings_highlight(void)
+{
+    update_list_highlight(s_settings_list, s_settings_sel, s_settings_sel_prev);
+    s_settings_sel_prev = s_settings_sel;
 }
 
 static void show_settings(void)
@@ -1018,13 +1177,23 @@ static void handle_settings_key(const kb_event_t *ev)
     switch (ev->keycode) {
     case KB_KEY_UP:
         if (s_settings_sel > 0) s_settings_sel--;
-        s_factory_reset_confirm = false;
-        refresh_settings_items();
+        if (s_factory_reset_confirm) {
+            /* Cancelling confirmation changes the item label, so we
+             * need a full rebuild; otherwise just move the highlight. */
+            s_factory_reset_confirm = false;
+            refresh_settings_items();
+        } else {
+            update_settings_highlight();
+        }
         break;
     case KB_KEY_DOWN:
         if (s_settings_sel < SETTINGS_ITEM_COUNT - 1) s_settings_sel++;
-        s_factory_reset_confirm = false;
-        refresh_settings_items();
+        if (s_factory_reset_confirm) {
+            s_factory_reset_confirm = false;
+            refresh_settings_items();
+        } else {
+            update_settings_highlight();
+        }
         break;
     case KB_KEY_ENTER:
         settings_activate_item(s_settings_sel);
@@ -1105,11 +1274,11 @@ static void handle_menu_key(const kb_event_t *ev)
     switch (ev->keycode) {
     case KB_KEY_UP:
         if (s_menu_sel > 0) s_menu_sel--;
-        refresh_menu_items();
+        update_menu_highlight();
         break;
     case KB_KEY_DOWN:
         if (s_menu_sel < MENU_ITEM_COUNT - 1) s_menu_sel++;
-        refresh_menu_items();
+        update_menu_highlight();
         break;
     case KB_KEY_ENTER:
         menu_activate_item(s_menu_sel);
@@ -1596,18 +1765,11 @@ static void handle_browser_key(const kb_event_t *ev)
         break;
     }
 
-    /* Highlight selected item */
-    for (uint32_t i = 0; i < child_count; i++) {
-        lv_obj_t *child = lv_obj_get_child(s_list_files, i);
-        if ((int)i == s_browser_sel) {
-            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
-            lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(child, lv_color_white(), 0);
-        } else {
-            lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_text_color(child, lv_color_black(), 0);
-        }
-    }
+    /* Highlight selected item -- restyle only the items whose state
+     * changed (previous and current selection) so the LVGL dirty
+     * region stays small enough for a partial e-paper refresh. */
+    update_list_highlight(s_list_files, s_browser_sel, s_browser_sel_prev);
+    s_browser_sel_prev = s_browser_sel;
 }
 
 /* Process a single key event (must be called with LVGL lock held). */
