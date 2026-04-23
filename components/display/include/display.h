@@ -68,6 +68,28 @@ int display_get_buffer_size(void);
  */
 bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
 
+/*
+ * Optional: clip the next display_flush()'s panel refresh region.
+ *
+ * After this call, the *next* display_flush() refreshes only pixels
+ * inside the intersection of its accumulated dirty bounding box and
+ * the rectangle (x, y, w, h). The clip is one-shot: it is consumed
+ * (and reset) by the next display_flush(), regardless of whether the
+ * intersection was empty.
+ *
+ * The caller must guarantee that no pixels outside the clip rectangle
+ * actually changed since the previous flush -- otherwise stale
+ * content remains visible on the e-paper. The framebuffer pushed via
+ * display_push_rgb565()/display_set_pixel() is always written in
+ * full; only the panel refresh is narrowed.
+ *
+ * Pass w <= 0 or h <= 0 to clear any pending clip.
+ *
+ * Implemented by the M5Stack PaperS3 backend (display_eds3.cpp). On
+ * other backends this is a no-op (the full dirty bbox is refreshed).
+ */
+void display_set_partial_clip(int x, int y, int w, int h);
+
 #ifdef __cplusplus
 }
 #endif

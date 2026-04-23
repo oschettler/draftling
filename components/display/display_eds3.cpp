@@ -30,15 +30,36 @@
  * etc.). We accumulate those rectangles into a dirty bounding box
  * and, on display_flush(), call M5GFX's region-scoped
  *   s_gfx.display(x, y, w, h)
- * with the fast `epd_text` waveform. That repaints only the changed
- * pixels in ~150-300 ms instead of running the full grayscale
- * waveform over all 540x960 pixels (~700-900 ms) on every keystroke.
+ * with the single-pulse `epd_fast` waveform. That repaints only the
+ * changed pixels in ~80-150 ms with one visible flash instead of the
+ * two-pass `epd_text` flicker (~150-300 ms) we used previously, and
+ * is much cheaper than the full grayscale waveform over all 540x960
+ * pixels (~700-900 ms).
+ *
+ * Two further optimizations cut typing latency:
+ *
+ *  - Flush debounce. When display_flush() is called less than
+ *    EDS3_DEBOUNCE_MS (120 ms) after the previous panel refresh we
+ *    schedule a deferred flush via esp_timer instead of driving the
+ *    panel right away. Subsequent pushes within the window fold into
+ *    the dirty bbox and the deferred flush picks them up in one go.
+ *    A burst of fast keystrokes now yields one panel refresh instead
+ *    of one per character.
+ *
+ *  - One-shot panel-refresh clip via display_set_partial_clip().
+ *    The editor uses this to narrow the next refresh to the area
+ *    around the typed character (cursor + edited columns) when it
+ *    knows the rest of the LVGL-pushed line pixels are unchanged.
+ *    The framebuffer is still updated over the full LVGL dirty bbox
+ *    -- only the e-paper refresh region is clipped.
  *
  * E-paper partial refreshes accumulate ghosting, so every
  * CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL partial updates we
  * promote the next refresh to a full-screen `epd_quality` pass to
  * reset the panel to a clean baseline. display_clear() and
- * display_full_refresh() also trigger a full quality refresh.
+ * display_full_refresh() also trigger a full quality refresh and
+ * bypass the debounce so user-visible "clear screen" actions remain
+ * instantaneous.
  */
 
 #include <cstdio>
@@ -49,10 +70,12 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #include <M5GFX.h>
 
 #include "display.h"
+#include "lvgl_port.h"
 
 static const char *TAG = "DisplayEDS3";
 
@@ -68,6 +91,36 @@ static bool s_force_full = true;
  * reaches CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL we force a full
  * refresh to clear residual ghosting. */
 static int  s_partial_count = 0;
+
+/* One-shot panel refresh clip set by display_set_partial_clip(). The
+ * caller (typically the editor) uses it to narrow the next flush to
+ * the area where pixels actually changed (e.g. a single typed glyph
+ * plus the cursor) when the LVGL framebuffer was repainted over a
+ * larger region whose extra pixels are unchanged from what's already
+ * on the panel. Consumed (cleared) by display_flush(). */
+static int  s_clip_x0 = 0, s_clip_y0 = 0, s_clip_x1 = -1, s_clip_y1 = -1;
+static bool s_clip_set = false;
+
+/* ---- Flush debounce ----
+ * On fast typing each keystroke triggers an editor_ui_refresh() and an
+ * LVGL flush. If we drove the panel for every one of them the user
+ * would see a stutter of 1-pulse epd_fast updates that obscures the
+ * cursor and slows perceived input by ~80-120 ms each. Coalesce
+ * flushes that arrive close together: when display_flush() runs less
+ * than EDS3_DEBOUNCE_MS after the previous panel refresh, defer it via
+ * an esp_timer. The deferred timer reacquires the LVGL mutex (held by
+ * the LVGL task during a normal flush_cb) before calling back into
+ * display_flush(), so M5GFX is never accessed concurrently. Subsequent
+ * pushes that arrive while the deferral is pending simply accumulate
+ * into the dirty bbox and the deferred flush picks them all up in one
+ * shot. */
+#define EDS3_DEBOUNCE_MS 120
+static int64_t            s_last_flush_us = 0;     /* monotonic, microseconds */
+static esp_timer_handle_t s_deferred_timer = nullptr;
+static bool               s_deferred_pending = false;
+/* True while the deferred-timer callback is calling back into
+ * display_flush(); used to bypass the debounce check exactly once. */
+static bool               s_in_deferred_flush = false;
 
 #ifdef CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL
 #define EDS3_FULL_REFRESH_INTERVAL CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL
@@ -187,10 +240,69 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
     return true;
 }
 
+extern "C" void display_flush(void);
+
+/* esp_timer callback for the debounced deferred flush. Runs on the
+ * esp_timer task, so we must take the LVGL mutex before touching
+ * M5GFX (which is otherwise only accessed from the LVGL task). */
+static void deferred_flush_cb(void *arg)
+{
+    (void)arg;
+    if (!lvgl_port_lock(-1)) return;
+    s_deferred_pending = false;
+    s_in_deferred_flush = true;
+    display_flush();
+    s_in_deferred_flush = false;
+    lvgl_port_unlock();
+}
+
 extern "C" void display_flush(void)
 {
     /* Nothing changed since the last flush -> nothing to do. */
-    if (s_dx1 < s_dx0 || s_dy1 < s_dy0) return;
+    if (s_dx1 < s_dx0 || s_dy1 < s_dy0) {
+        /* If a clip was set but no pixels were ever pushed, drop it
+         * so it doesn't apply to a later, unrelated flush. */
+        s_clip_set = false;
+        return;
+    }
+
+    /* ---- Flush debounce ----
+     * If the previous panel refresh finished less than EDS3_DEBOUNCE_MS
+     * ago, schedule a deferred flush instead of driving the panel
+     * immediately. The deferred timer reacquires the LVGL mutex and
+     * calls back into display_flush() with s_in_deferred_flush=true to
+     * bypass this check. Force-full requests (typically from
+     * display_clear() / display_full_refresh()) skip the debounce so
+     * user-visible "clear screen" actions remain instantaneous. */
+    if (!s_in_deferred_flush && !s_force_full) {
+        int64_t now_us = esp_timer_get_time();
+        int64_t elapsed_ms = (now_us - s_last_flush_us) / 1000;
+        if (elapsed_ms < EDS3_DEBOUNCE_MS) {
+            int64_t remaining_ms = EDS3_DEBOUNCE_MS - elapsed_ms;
+            if (s_deferred_timer == nullptr) {
+                esp_timer_create_args_t targs = {};
+                targs.callback = deferred_flush_cb;
+                targs.name     = "eds3_flush";
+                if (esp_timer_create(&targs, &s_deferred_timer) != ESP_OK) {
+                    s_deferred_timer = nullptr;
+                }
+            }
+            if (s_deferred_timer != nullptr) {
+                if (s_deferred_pending) {
+                    /* Already pending -> let it fire on schedule and
+                     * fold in the new dirty pixels. */
+                } else {
+                    if (esp_timer_start_once(s_deferred_timer,
+                                             remaining_ms * 1000) == ESP_OK) {
+                        s_deferred_pending = true;
+                        return;
+                    }
+                }
+                if (s_deferred_pending) return;
+            }
+            /* Fallback: timer creation failed; flush immediately. */
+        }
+    }
 
     /* Wait for any in-flight panel refresh to finish before queuing a
      * new one. M5GFX's Panel_EPD runs its waveform on a background
@@ -200,6 +312,26 @@ extern "C" void display_flush(void)
     s_gfx.waitDisplay();
 
     int dx0 = s_dx0, dy0 = s_dy0, dx1 = s_dx1, dy1 = s_dy1;
+
+    /* Apply one-shot panel-refresh clip, if set. The framebuffer was
+     * already updated over the full dirty bbox (LVGL pushed all the
+     * pixels), but the caller knows that only pixels inside the clip
+     * actually changed. Refresh just that intersection. */
+    if (s_clip_set) {
+        if (dx0 < s_clip_x0) dx0 = s_clip_x0;
+        if (dy0 < s_clip_y0) dy0 = s_clip_y0;
+        if (dx1 > s_clip_x1) dx1 = s_clip_x1;
+        if (dy1 > s_clip_y1) dy1 = s_clip_y1;
+        s_clip_set = false;
+        if (dx1 < dx0 || dy1 < dy0) {
+            /* Empty intersection -> nothing to refresh on the panel.
+             * Still consume the dirty bbox so the next flush starts
+             * clean. */
+            clear_dirty();
+            return;
+        }
+    }
+
     int dw  = dx1 - dx0 + 1;
     int dh  = dy1 - dy0 + 1;
 
@@ -216,25 +348,67 @@ extern "C" void display_flush(void)
         s_partial_count = 0;
         s_force_full = false;
     } else {
-        /* epd_text is the fastest waveform: a short two-pass update
-         * that only drives the pixels in the supplied rectangle.
-         * Ideal for cursor blinks and single-line text edits. */
-        s_gfx.setEpdMode(epd_mode_t::epd_text);
+        /* epd_fast is a single-pulse waveform: one drive pass per
+         * dirty rectangle, no correction pass. The user sees a
+         * single quick flash instead of the two-pass flicker of
+         * epd_text. Ghosting accumulates a bit faster, which is why
+         * we lowered the default full-refresh interval to compensate
+         * (see Kconfig DRAFTLING_EPD_FULL_REFRESH_INTERVAL). */
+        s_gfx.setEpdMode(epd_mode_t::epd_fast);
         s_gfx.display(dx0, dy0, dw, dh);
         s_partial_count++;
     }
 
     s_gfx.waitDisplay();
     clear_dirty();
+    s_last_flush_us = esp_timer_get_time();
 }
 
 extern "C" void display_full_refresh(void)
 {
     /* Force the next flush to be a full-screen quality refresh, even
-     * if nothing is dirty (caller wants to clean up ghosting). */
+     * if nothing is dirty (caller wants to clean up ghosting). Drop
+     * any pending one-shot clip so the entire screen actually
+     * refreshes. */
+    s_clip_set = false;
     mark_dirty_rect(0, 0, s_width, s_height);
     s_force_full = true;
     display_flush();
+}
+
+extern "C" void display_set_partial_clip(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) {
+        s_clip_set = false;
+        return;
+    }
+    int x0 = x;
+    int y0 = y;
+    int x1 = x + w - 1;
+    int y1 = y + h - 1;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= s_width)  x1 = s_width  - 1;
+    if (y1 >= s_height) y1 = s_height - 1;
+    if (x1 < x0 || y1 < y0) {
+        s_clip_set = false;
+        return;
+    }
+    if (s_clip_set) {
+        /* Union with the existing clip. Multiple key events drained
+         * in one lv_timer_handler() pass each push their own clip
+         * before the single batched flush runs; without this union
+         * only the last event's region would be refreshed and the
+         * earlier ones would stay stale on the panel. */
+        if (x0 < s_clip_x0) s_clip_x0 = x0;
+        if (y0 < s_clip_y0) s_clip_y0 = y0;
+        if (x1 > s_clip_x1) s_clip_x1 = x1;
+        if (y1 > s_clip_y1) s_clip_y1 = y1;
+    } else {
+        s_clip_x0 = x0; s_clip_y0 = y0;
+        s_clip_x1 = x1; s_clip_y1 = y1;
+        s_clip_set = true;
+    }
 }
 
 extern "C" uint8_t *display_get_buffer(void)

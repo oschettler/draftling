@@ -18,6 +18,7 @@
 #include "git_sync.h"
 #include "sd_card.h"
 #include "lvgl_port.h"
+#include "display.h"
 #include "standby.h"
 #include "greybeard.h"
 #include "battery.h"
@@ -1486,10 +1487,174 @@ static void handle_save_prompt_key(const kb_event_t *ev)
 
 /* ---- Keyboard handler (registered as BLE callback) ---- */
 
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+/* Information captured before a key event is processed, used by
+ * try_partial_clip_for_typing() to decide whether the next e-paper
+ * refresh can be narrowed to just the area around the typed
+ * character. */
+struct typing_pre_state_t {
+    bool        valid;        /* false -> skip the fast path */
+    int         line;         /* cursor line before the edit */
+    int         col;          /* cursor column before the edit (UTF-8 chars) */
+    int         cur_x;        /* absolute screen x of cursor before */
+    int         cur_y;        /* absolute screen y of cursor before */
+    int         cur_h;        /* cursor height before */
+    bool        modified;     /* editor_is_modified() before */
+    int         line_chars;   /* UTF-8 char count of the line before */
+    int         char_w;       /* monospace cell width at body font */
+};
+
+/* Capture pre-edit state for the fast partial-clip path. Fills *out
+ * with valid=false when conditions disqualify the edit (selection
+ * active, line is not a plain paragraph, etc.); subsequent
+ * try_partial_clip_for_typing() calls then short-circuit. */
+static void capture_typing_pre_state(typing_pre_state_t *out)
+{
+    out->valid = false;
+    if (s_cursor == NULL) return;
+    if (lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) return;
+    if (editor_selection_active()) return;
+
+    int line, col;
+    editor_get_cursor_pos(&line, &col);
+    (void)col;
+    int total = editor_get_line_count();
+    if (line < 0 || line >= total) return;
+
+    size_t ll = 0;
+    const char *lt = editor_get_line(line, &ll);
+    if (!lt) return;
+
+    /* Single-line classification (no surrounding code-fence context).
+     * We only fast-path lines whose visible glyphs are exactly the
+     * raw text -- i.e. plain paragraphs and empty lines. Any line
+     * inside a fenced code block, a heading/bullet/quote/etc. has a
+     * styled rendering whose pixel layout we can't safely predict
+     * here. */
+    md_line_info_t mi;
+    md_parse_line(lt, ll, &mi, false);
+    if (mi.type != MD_LINE_PARAGRAPH && mi.type != MD_LINE_EMPTY) return;
+
+    int chars = utf8_chars_in_bytes(lt, ll);
+
+    out->valid       = true;
+    out->line        = line;
+    out->col         = col;
+    out->cur_x       = lv_obj_get_x(s_cursor);
+    out->cur_y       = EDITOR_Y + lv_obj_get_y(s_cursor);
+    out->cur_h       = lv_obj_get_height(s_cursor);
+    out->modified    = editor_is_modified();
+    out->line_chars  = chars;
+    out->char_w      = CHAR_W;
+}
+
+/* Compute and apply a one-shot panel-refresh clip rectangle for an
+ * edit that affects only one body line and the cursor.  Returns true
+ * if the clip was set, false if the post-edit state disqualifies the
+ * fast path (caller should leave the dirty bbox un-clipped, which
+ * yields today's full-line refresh behaviour). */
+static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
+{
+    if (!pre->valid) return false;
+    if (s_cursor == NULL) return false;
+    if (lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) return false;
+    if (editor_selection_active()) return false;
+    if (editor_is_modified() != pre->modified) {
+        /* Modified-flag flip -> title-bar text changed -> the title
+         * strip is also dirty and must be refreshed alongside the
+         * line. Fall back to the full bbox. */
+        return false;
+    }
+
+    int line, col;
+    editor_get_cursor_pos(&line, &col);
+    (void)col;
+    if (line != pre->line) return false; /* edit crossed a line boundary */
+
+    int total = editor_get_line_count();
+    if (line < 0 || line >= total) return false;
+
+    size_t ll = 0;
+    const char *lt = editor_get_line(line, &ll);
+    if (!lt) return false;
+
+    md_line_info_t mi;
+    md_parse_line(lt, ll, &mi, false);
+    if (mi.type != MD_LINE_PARAGRAPH && mi.type != MD_LINE_EMPTY) return false;
+
+    int post_chars = utf8_chars_in_bytes(lt, ll);
+    int char_w     = pre->char_w;
+    int pre_w      = pre->line_chars * char_w;
+    int post_w     = post_chars * char_w;
+    int max_w      = pre_w > post_w ? pre_w : post_w;
+    /* Bail if the line text wraps -- rendered_h would exceed line_h
+     * and the dirty area covers multiple visual rows. */
+    if (2 + max_w + 4 > SCR_W) return false;
+
+    int post_cur_x = lv_obj_get_x(s_cursor);
+    int post_cur_y = EDITOR_Y + lv_obj_get_y(s_cursor);
+    int post_cur_h = lv_obj_get_height(s_cursor);
+    /* Cursor moved to a different visual row -> the row geometry
+     * changed (wrap or scroll), refresh the whole dirty bbox. */
+    if (post_cur_y != pre->cur_y || post_cur_h != pre->cur_h) return false;
+
+    /* X-extent of the changed pixels: from the leftmost-touched
+     * column (min of pre/post cursor x) to the rightmost edge of the
+     * line content (max of pre/post text width), plus the cursor's
+     * own 2 px width on the right side. */
+    int x_min = pre->cur_x < post_cur_x ? pre->cur_x : post_cur_x;
+    int x_text_end = 2 + max_w;
+    int x_cur_end  = (pre->cur_x > post_cur_x ? pre->cur_x : post_cur_x) + 2;
+    int x_max = x_text_end > x_cur_end ? x_text_end : x_cur_end;
+
+    /* Pad by a few pixels on each side so antialiased / overhanging
+     * glyph outlines (Greybeard is bitmapped, so this is mostly
+     * paranoia) and the cursor bar's own 2 px width are always
+     * included. */
+    x_min -= 4;
+    x_max += 4;
+    if (x_min < 0) x_min = 0;
+    if (x_max > SCR_W) x_max = SCR_W;
+    if (x_max <= x_min) return false;
+
+    display_set_partial_clip(x_min, pre->cur_y, x_max - x_min, pre->cur_h);
+    return true;
+}
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+/* RAII guard that runs the partial-clip post-processing on every
+ * return path of handle_editor_key (including the F1 / Ctrl+? / Esc
+ * early returns). Without this, a typing event in one drain batch
+ * could leave a narrow clip set when a subsequent navigation event
+ * runs early-return -- the next flush would then refresh only the
+ * old typing region and clip away everything else. */
+struct ClipGuard {
+    typing_pre_state_t pre_state;
+    bool eligible;
+    ClipGuard() : eligible(false) {
+        capture_typing_pre_state(&pre_state);
+    }
+    ~ClipGuard() {
+        bool clipped = false;
+        if (eligible) clipped = try_partial_clip_for_typing(&pre_state);
+        if (!clipped) display_set_partial_clip(0, 0, 0, 0);
+    }
+};
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
+
 static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
     bool shift = (ev->modifier & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* Snapshot before-edit state for the partial-refresh fast path,
+     * and ensure the clip is updated (set or cleared) on every
+     * return path. */
+    ClipGuard clip_guard;
+    bool &fast_path_eligible = clip_guard.eligible;
+#endif
 
     /* Clear the escape-save-prompt on any key other than Esc */
     if (ev->keycode != KB_KEY_ESCAPE && s_esc_pending) {
@@ -1652,12 +1817,20 @@ static void handle_editor_key(const kb_event_t *ev)
         editor_move_page_down(VISIBLE_LINES);
         break;
     case KB_KEY_BACKSPACE:
-        if (!editor_delete_selection())
+        if (!editor_delete_selection()) {
             editor_delete_back();
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+            fast_path_eligible = true;
+#endif
+        }
         break;
     case KB_KEY_DELETE:
-        if (!editor_delete_selection())
+        if (!editor_delete_selection()) {
             editor_delete_forward();
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+            fast_path_eligible = true;
+#endif
+        }
         break;
     case KB_KEY_ENTER:
         editor_delete_selection();
@@ -1688,8 +1861,17 @@ static void handle_editor_key(const kb_event_t *ev)
         /* Use keyboard layout to translate keycode to UTF-8 */
         const char *text = kb_layout_translate(ev->keycode, ev->modifier);
         if (text) {
+            bool had_sel = editor_selection_active();
             editor_delete_selection();
             editor_insert_text(text, strlen(text));
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+            /* The fast-path clip only handles edits that started
+             * without a selection -- replacing a selection
+             * potentially repaints multiple lines. */
+            if (!had_sel) fast_path_eligible = true;
+#else
+            (void)had_sel;
+#endif
         }
         break;
     }
@@ -1697,6 +1879,8 @@ static void handle_editor_key(const kb_event_t *ev)
 
     ensure_cursor_visible();
     editor_ui_refresh();
+    /* Partial-refresh clip is set/cleared by ClipGuard's destructor
+     * on the M5Stack PaperS3 backend. */
 }
 
 static void handle_browser_key(const kb_event_t *ev)

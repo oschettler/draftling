@@ -112,14 +112,17 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
     range 1 1000
-    default 50
+    default 30
     help
         How many partial refreshes the e-paper driver performs before it
         forces a full refresh to clear residual ghosting. Lower values
         give cleaner pixels at the cost of more frequent slow (3-5 s)
         full refreshes; higher values keep the UI snappy but let
-        ghosting accumulate. The default of 50 is a reasonable balance
-        for a Markdown editor.
+        ghosting accumulate. The default of 30 is a reasonable balance
+        for a Markdown editor; the M5Stack PaperS3 backend uses the
+        single-pulse epd_fast waveform for partial refreshes, which is
+        faster than the older two-pass epd_text but accumulates
+        ghosting slightly more quickly.
 
 menu "Waveshare E-Paper Driver HAT pinout"
     depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT

@@ -211,4 +211,11 @@ extern "C" bool display_push_rgb565(int /*x*/, int /*y*/, int /*w*/, int /*h*/,
     return false;
 }
 
+extern "C" void display_set_partial_clip(int /*x*/, int /*y*/,
+                                         int /*w*/, int /*h*/)
+{
+    /* RLCD always pushes the entire framebuffer; no partial-refresh
+     * region to clip. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42 */

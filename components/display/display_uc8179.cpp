@@ -456,5 +456,13 @@ extern "C" bool display_push_rgb565(int /*x*/, int /*y*/, int /*w*/, int /*h*/,
     return false;
 }
 
+extern "C" void display_set_partial_clip(int /*x*/, int /*y*/,
+                                         int /*w*/, int /*h*/)
+{
+    /* UC8179 already computes its partial-refresh window from the
+     * automatic frame diff in display_flush(); the editor's clip
+     * hint adds nothing on top of that. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 ||
         * CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT */

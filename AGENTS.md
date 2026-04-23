@@ -111,12 +111,19 @@ Per-board display backends behind a single C API:
   pushes RGB565 pixels straight into it through the optional
   `display_push_rgb565()` fast path. The backend accumulates a
   dirty bounding box across pushes and, on `display_flush()`, calls
-  `M5GFX::display(x,y,w,h)` over that rect using the fast `epd_text`
-  waveform; every `CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL`
-  partials (or whenever the dirty area covers most of the screen,
-  or after `display_clear()` / `display_full_refresh()`) the next
-  refresh is promoted to a full-screen `epd_quality` pass to clear
-  ghosting. Grayscale UI is still TODO.
+  `M5GFX::display(x,y,w,h)` over that rect using the single-pulse
+  `epd_fast` waveform (one visible flash, ~80-150 ms);
+  every `CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (or
+  whenever the dirty area covers most of the screen, or after
+  `display_clear()` / `display_full_refresh()`) the next refresh is
+  promoted to a full-screen `epd_quality` pass to clear ghosting.
+  Two extras keep typing snappy: a 120 ms flush debounce coalesces
+  bursts of keystrokes into a single panel refresh (deferred via
+  `esp_timer`, taking `lvgl_port_lock()` for thread safety), and the
+  optional one-shot `display_set_partial_clip(x,y,w,h)` API lets the
+  editor narrow the next refresh to the area around the typed
+  character (cursor + edited columns) when it knows the rest of the
+  LVGL-pushed line pixels are unchanged. Grayscale UI is still TODO.
 - **lvgl_port.cpp** -- creates the LVGL display object, sets up a
   flush callback that first tries `display_push_rgb565()` (used by
   the PaperS3 backend) and otherwise converts LVGL's RGB565 output
@@ -131,7 +138,8 @@ so non-PaperS3 builds do not link it into the final image.)
 
 Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
 `display_flush()`, `display_full_refresh()`, `display_push_rgb565()`,
-`display_get_buffer()`, `display_get_buffer_size()`, `lvgl_port_init()`,
+`display_set_partial_clip()`, `display_get_buffer()`,
+`display_get_buffer_size()`, `lvgl_port_init()`,
 `lvgl_port_lock()`, `lvgl_port_unlock()`.
 
 ### components/editor/
