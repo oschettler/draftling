@@ -72,14 +72,25 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
 
     /* Bring up the M5GFX panel. M5GFX auto-detects the PaperS3 board
      * and configures the LCD/I80 peripheral, control GPIOs and power
-     * rail internally. The PaperS3 panel is registered as 960x540
-     * landscape (offset_rotation=3); with setRotation(0) the GFX
-     * reports width()=960, height()=540. Our framebuffer dimensions
-     * MUST agree, otherwise drawPixel() calls past the panel bounds
-     * are silently clipped and only the top-left fits on screen. */
+     * rail internally.
+     *
+     * The PaperS3 panel is configured by M5GFX with
+     *   panel_width=960, panel_height=540, offset_rotation=3
+     * Per LovyanGFX's Panel_HasBuffer::setRotation, the user-visible
+     * dimensions are computed as:
+     *   internal_rotation = (user_rotation + offset_rotation) & 3
+     *   width = panel_width, height = panel_height
+     *   if (internal_rotation & 1) swap(width, height)
+     * So setRotation(0) gives 540x960 (portrait, "wrong" for the way
+     * the device sits on a desk), and setRotation(1) gives 960x540
+     * (landscape, "horizontal" -- what the user expects). We pick (1).
+     *
+     * The framebuffer dimensions MUST agree with s_gfx.width()/height(),
+     * otherwise drawPixel() calls outside the panel bounds are silently
+     * clipped and only a corner of the screen ever gets refreshed. */
     s_gfx.init();
+    s_gfx.setRotation(1);
     s_gfx.setEpdMode(epd_mode_t::epd_text);
-    s_gfx.setRotation(0);
 
     int gfx_w = s_gfx.width();
     int gfx_h = s_gfx.height();
@@ -91,8 +102,16 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
                  s_width, s_height, gfx_w, gfx_h);
     }
 
+    /* Initial full white refresh. We use epd_quality (slow, full
+     * grayscale waveform) for the very first refresh to fully drive
+     * every pixel to white; otherwise the panel keeps the muddy grey
+     * pattern it powers up with. After that we switch back to the
+     * faster epd_text mode for normal updates. */
+    s_gfx.setEpdMode(epd_mode_t::epd_quality);
     s_gfx.fillScreen(TFT_WHITE);
     s_gfx.display();
+    s_gfx.waitDisplay();
+    s_gfx.setEpdMode(epd_mode_t::epd_text);
 
     ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d, 1 bpp)",
              width, height);
