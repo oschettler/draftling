@@ -73,6 +73,14 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     lv_init();
 
     lv_display_t *disp = lv_display_create(width, height);
+    /* LVGL v9 defaults to LV_COLOR_FORMAT_RGB888 (4 bytes per pixel).
+     * Our flush path (and the PaperS3 fast path that hands the
+     * framebuffer to M5GFX as rgb565_t*) expect RGB565, and
+     * BYTES_PER_PIXEL below is sized for RGB565. Declare it
+     * explicitly before allocating buffers; otherwise LVGL writes
+     * 4-byte pixels into a half-sized buffer and the panel renders
+     * mangled, ~4x-shrunk content. */
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, flush_cb);
 
     /* Apply display rotation */

@@ -1992,8 +1992,20 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_dev_batt, "");
 #endif
 
-    /* Cursor blink timer */
+    /* Cursor blink timer.
+     *
+     * On e-paper backends a 500 ms blink causes a full panel refresh
+     * twice per second, which is both visually distracting and bad
+     * for the panel. Keep the cursor solid (always visible) on EPD
+     * targets; only the reflective LCD blinks. */
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    s_cursor_visible = true;
+    if (s_cursor) lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+#else
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);
+#endif
 
     /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
      * queued keyboard events in a batch.  This decouples BLE input
