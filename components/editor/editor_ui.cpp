@@ -358,18 +358,30 @@ static void update_title_bar(void)
         const char *slash = strrchr(path, '/');
         name = slash ? slash + 1 : path;
     }
-    int line, col;
-    editor_get_cursor_pos(&line, &col);
     char batt_str[24] = "";
     int batt = ble_keyboard_get_battery_level();
     if (batt >= 0) {
         snprintf(batt_str, sizeof(batt_str), " Bat:%d%%", batt);
     }
     char buf[128];
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* On e-paper boards the cursor moves on every keystroke, so
+     * including the line/column counter in the title bar would dirty
+     * the top of the screen on every edit and double the e-paper
+     * refresh time. Skip it. */
+    snprintf(buf, sizeof(buf), "%s%s  [%s]%s",
+             name, editor_is_modified() ? " *" : "",
+             kb_layout_name(kb_layout_get()), batt_str);
+#else
+    int line, col;
+    editor_get_cursor_pos(&line, &col);
     snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d  [%s]%s",
              name, editor_is_modified() ? " *" : "",
              line + 1, col + 1,
              kb_layout_name(kb_layout_get()), batt_str);
+#endif
     lv_label_set_text(s_lbl_title, buf);
 }
 

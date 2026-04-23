@@ -139,7 +139,12 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     s_gfx.waitDisplay();
 
     clear_dirty();
-    s_force_full = false;
+    /* The first LVGL render after init redraws the entire UI from a
+     * blank slate. Force it to be a single full-screen quality
+     * refresh - otherwise it goes through the partial path (which
+     * looks dim and is slow when LVGL slices the screen into many
+     * small chunks). */
+    s_force_full = true;
     s_partial_count = 0;
 
     ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d), "

@@ -32,7 +32,17 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
      * this; RLCD and UC8179 return false and we fall back to the
      * legacy per-pixel path below. */
     if (display_push_rgb565(area->x1, area->y1, w, h, color_map)) {
-        display_flush();
+        /* LVGL may slice a single dirty region into multiple
+         * draw-buffer-sized chunks (in PARTIAL render mode) or invalidate
+         * several disjoint regions in one cycle. Only trigger the panel
+         * refresh on the final chunk so all pushes accumulate into a
+         * single dirty bounding box and produce a single e-paper
+         * refresh - otherwise the user sees the same screen update
+         * twice (once for the cursor and once for the title bar) on
+         * every keystroke. */
+        if (lv_display_flush_is_last(disp)) {
+            display_flush();
+        }
         lv_disp_flush_ready(disp);
         return;
     }
@@ -45,7 +55,9 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
             buf++;
         }
     }
-    display_flush();
+    if (lv_display_flush_is_last(disp)) {
+        display_flush();
+    }
     lv_disp_flush_ready(disp);
 }
 
