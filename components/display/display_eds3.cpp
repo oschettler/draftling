@@ -72,10 +72,25 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
 
     /* Bring up the M5GFX panel. M5GFX auto-detects the PaperS3 board
      * and configures the LCD/I80 peripheral, control GPIOs and power
-     * rail internally. */
+     * rail internally. The PaperS3 panel is registered as 960x540
+     * landscape (offset_rotation=3); with setRotation(0) the GFX
+     * reports width()=960, height()=540. Our framebuffer dimensions
+     * MUST agree, otherwise drawPixel() calls past the panel bounds
+     * are silently clipped and only the top-left fits on screen. */
     s_gfx.init();
     s_gfx.setEpdMode(epd_mode_t::epd_text);
     s_gfx.setRotation(0);
+
+    int gfx_w = s_gfx.width();
+    int gfx_h = s_gfx.height();
+    if (gfx_w != s_width || gfx_h != s_height) {
+        ESP_LOGE(TAG,
+                 "Framebuffer size %dx%d does not match M5GFX panel size %dx%d; "
+                 "pixels outside the panel will be clipped. Adjust "
+                 "CONFIG_DRAFTLING_DISPLAY_WIDTH/HEIGHT to match.",
+                 s_width, s_height, gfx_w, gfx_h);
+    }
+
     s_gfx.fillScreen(TFT_WHITE);
     s_gfx.display();
 

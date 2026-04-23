@@ -112,8 +112,10 @@
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* ----- M5Stack PaperS3 -----
  *
- * The PaperS3 drives a 540x960 ED047TC1 e-paper panel via the ESP32-S3
- * LCD/I80 parallel peripheral. The panel data bus, control lines and
+ * The PaperS3 drives an ED047TC1 e-paper panel (540x960 in portrait,
+ * exposed as 960x540 landscape by M5GFX with offset_rotation=3) via
+ * the ESP32-S3 LCD/I80 parallel peripheral. The panel data bus,
+ * control lines and
  * power-rail enable are configured by the m5stack/M5GFX library
  * internally (board id "M5PaperS3"); we do not redefine those GPIOs
  * here. See the M5Stack hardware reference for the full pin list:

@@ -63,7 +63,7 @@ config DRAFTLING_DISPLAY_WIDTH
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
     default 800 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-    default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
     help
         Display width in pixels. Editable for the Waveshare E-Paper
         Driver HAT to support different panels; fixed for the other
@@ -75,7 +75,7 @@ config DRAFTLING_DISPLAY_HEIGHT
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
     default 480 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-    default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
     help
         Display height in pixels. Editable for the Waveshare E-Paper
         Driver HAT to support different panels; fixed for the other
