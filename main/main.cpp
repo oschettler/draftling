@@ -133,9 +133,12 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
 
-    /* Initialize WiFi manager (doesn't connect yet) */
-    ESP_LOGI(TAG, "Initializing WiFi manager...");
-    wifi_manager_init();
+    /* WiFi is lazy-initialized on first wifi_manager_connect() call.
+     * On boards with a tight internal heap (e.g. M5Stack PaperS3, ~138 KB
+     * free after M5GFX statics) eagerly calling esp_wifi_init() here
+     * fails with ESP_ERR_NO_MEM because the WiFi static RX/TX buffers
+     * (DMA-capable, must live in internal RAM) cannot fit alongside the
+     * Bluedroid stack that ble_keyboard_init() just brought up. */
 
     /* Initialize Git sync */
     ESP_LOGI(TAG, "Initializing Git sync...");

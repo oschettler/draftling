@@ -1231,11 +1231,10 @@ extern "C" void ble_keyboard_init(void)
      * These steps are deliberately performed in the caller's
      * context (not in ble_init_task) so that ble_keyboard_init()
      * does not return until the Bluedroid workqueues and timers
-     * have been allocated.  This guarantees that anything the
-     * caller does next -- in particular esp_wifi_init() in
-     * wifi_manager_init() -- cannot starve Bluedroid of internal
-     * RAM mid-bring-up.  On boards with little internal heap
-     * (e.g. M5Stack PaperS3) the previous fully-async layout
+     * have been allocated.  This guarantees that any subsequent
+     * subsystem the caller brings up cannot starve Bluedroid of
+     * internal RAM mid-bring-up.  On boards with little internal
+     * heap (e.g. M5Stack PaperS3) the previous fully-async layout
      * caused BTU_StartUp to fail allocating its workqueue and the
      * device rebooted in a loop. */
 

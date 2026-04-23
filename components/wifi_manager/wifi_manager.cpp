@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <freertos/semphr.h>
 #include <esp_log.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
@@ -113,20 +114,45 @@ static bool load_from_file(char *ssid, size_t ssid_sz, char *pass, size_t pass_s
 
 extern "C" esp_err_t wifi_manager_init(void)
 {
-    if (s_initialized) return ESP_OK;
+    /* Guard against concurrent first-time initialization from multiple
+     * tasks now that this is also called lazily from wifi_manager_connect_to(). */
+    static SemaphoreHandle_t init_mutex = NULL;
+    static portMUX_TYPE init_spinlock = portMUX_INITIALIZER_UNLOCKED;
+    portENTER_CRITICAL(&init_spinlock);
+    if (init_mutex == NULL) init_mutex = xSemaphoreCreateMutex();
+    portEXIT_CRITICAL(&init_spinlock);
+    if (init_mutex == NULL) return ESP_ERR_NO_MEM;
+    xSemaphoreTake(init_mutex, portMAX_DELAY);
+
+    if (s_initialized) {
+        xSemaphoreGive(init_mutex);
+        return ESP_OK;
+    }
 
     s_event_group = xEventGroupCreate();
 
-    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(init_mutex);
+        return err;
+    }
     /* esp_event_loop_create_default may already be called */
-    esp_err_t err = esp_event_loop_create_default();
+    err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(err);
+        ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(init_mutex);
+        return err;
     }
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+        xSemaphoreGive(init_mutex);
+        return err;
+    }
 
     esp_event_handler_instance_t inst_any, inst_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
@@ -136,6 +162,7 @@ extern "C" esp_err_t wifi_manager_init(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     s_initialized = true;
+    xSemaphoreGive(init_mutex);
     ESP_LOGI(TAG, "WiFi manager initialized");
     return ESP_OK;
 }
@@ -168,7 +195,13 @@ extern "C" esp_err_t wifi_manager_connect(void)
 
 extern "C" esp_err_t wifi_manager_connect_to(const char *ssid, const char *password, bool save)
 {
-    if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    /* Lazy-init: WiFi is only brought up when the user requests a
+     * connection.  This avoids permanently reserving WiFi's internal-RAM
+     * static buffers at boot, which on memory-constrained boards (e.g.
+     * M5Stack PaperS3) causes esp_wifi_init() to fail once Bluedroid
+     * is also running. */
+    esp_err_t init_err = wifi_manager_init();
+    if (init_err != ESP_OK) return init_err;
 
     wifi_config_t wifi_cfg = {};
     strncpy((char *)wifi_cfg.sta.ssid, ssid, sizeof(wifi_cfg.sta.ssid) - 1);
@@ -198,6 +231,10 @@ extern "C" esp_err_t wifi_manager_connect_to(const char *ssid, const char *passw
 
 extern "C" esp_err_t wifi_manager_disconnect(void)
 {
+    if (!s_initialized) {
+        set_state(WIFI_STATE_DISCONNECTED);
+        return ESP_OK;
+    }
     esp_wifi_disconnect();
     esp_wifi_stop();
     s_ip_str[0] = '\0';

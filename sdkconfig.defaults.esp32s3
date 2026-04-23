@@ -9,12 +9,6 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
-# Push WiFi/LwIP allocations into PSRAM where possible so they don't
-# compete with Bluedroid for the limited internal heap.  This is
-# required on the M5Stack PaperS3, which only has ~138 KB of internal
-# heap free at boot (M5GFX/LovyanGFX statics consume the rest); without
-# it esp_wifi_init() fails with ESP_ERR_NO_MEM after Bluedroid is up.
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # Bluetooth (BLE only -- ESP32-S3 has no Classic BT support)
 CONFIG_BT_ENABLED=y
@@ -27,10 +21,5 @@ CONFIG_BT_BLE_SMP_ENABLE=y
 CONFIG_BT_HID_HOST_ENABLED=y
 
 # WiFi
-# Static RX buffers are DMA-capable and must live in internal RAM.
-# 10 (the IDF default) fits comfortably even on the M5Stack PaperS3
-# where only ~138 KB of internal heap remain after M5GFX statics and
-# Bluedroid bring-up; raising this to 16 makes esp_wifi_init() fail
-# with ESP_ERR_NO_MEM on that board.
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
