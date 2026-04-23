@@ -199,6 +199,12 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * small chunks). */
     s_force_full = true;
     s_partial_count = 0;
+    /* Initialize the debounce reference time so the first call to
+     * display_flush() never spuriously enters the deferred-flush
+     * branch even if it happens within 120 ms of boot (the
+     * s_force_full flag would bypass the check anyway, but this
+     * keeps the post-init steady state unambiguous). */
+    s_last_flush_us = esp_timer_get_time();
 
     ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d), "
                   "partial refresh every flush, full refresh every "
