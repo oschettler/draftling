@@ -431,7 +431,7 @@ extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
  * but we still gate on s_in_partial_mode so that a burst of partial
  * refreshes only pays the LUT upload once.
  *
- * Must be called before issuing PTIN/PTL/DTM*/DRF for a partial. */
+ * Must be called before issuing PTIN/PTL/DTM1/DTM2/DRF for a partial. */
 static void epd_enter_partial_mode(void)
 {
     if (s_in_partial_mode) return;
