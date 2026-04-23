@@ -167,6 +167,24 @@ config DRAFTLING_EPD_BLACK_BACKGROUND
         white before deep sleep regardless of this setting, so the
         panel is left in a clean state while the MCU is asleep.
 
+config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
+    int "Deep-sleep timeout when no keyboard connects (s)"
+    range 0 3600
+    default 180
+    help
+        If no Bluetooth keyboard connects within this many seconds
+        after boot, the device enters deep sleep to conserve battery.
+        Useful when the device is powered on accidentally or the
+        previously-paired keyboard is unavailable.
+
+        Set to 0 to disable -- the device will then keep scanning
+        indefinitely. The countdown is cancelled the first time a
+        keyboard connects; after that the regular inactivity timeout
+        (settable from the editor's F1 menu and persisted in NVS)
+        takes over.
+
+        Default is 180 seconds (3 minutes).
+
 menu "Waveshare E-Paper Driver HAT pinout"
     depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
 

@@ -47,6 +47,7 @@
 #include "sdkconfig.h"
 
 #include "standby.h"
+#include "ble_keyboard.h"
 
 static const char *TAG = "Standby";
 
@@ -73,12 +74,34 @@ static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
 static esp_timer_handle_t s_timer = NULL;
 static standby_pre_sleep_cb_t s_pre_sleep_cb = NULL;
 
+/* "No keyboard connected" countdown. Armed in standby_init() from
+ * CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC. When it fires it checks
+ * ble_keyboard_is_connected() and only enters deep sleep if no
+ * keyboard is paired by then. Independent of the regular inactivity
+ * timer above so a long inactivity timeout does not stop us from
+ * sleeping when no keyboard is around at all. We poll the BLE state
+ * (rather than registering a connect callback) because the BLE
+ * connect-callback slot is already used by the editor UI. */
+static esp_timer_handle_t s_kb_wait_timer = NULL;
+
 /* ---- timer callback ---- */
 
 static void inactivity_cb(void *arg)
 {
     (void)arg;
     ESP_LOGI(TAG, "Inactivity timeout reached -- entering deep sleep");
+    standby_enter_sleep();
+}
+
+static void kb_wait_cb(void *arg)
+{
+    (void)arg;
+    if (ble_keyboard_is_connected()) {
+        ESP_LOGI(TAG, "No-keyboard timer fired but a keyboard is connected -- staying awake");
+        return;
+    }
+    ESP_LOGI(TAG, "No keyboard connected within %d s -- entering deep sleep",
+             CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC);
     standby_enter_sleep();
 }
 
@@ -121,6 +144,23 @@ extern "C" void standby_init(void)
     if (s_timeout_sec > 0) {
         start_timer();
     }
+
+    /* Arm the "no keyboard connected" deep-sleep countdown. When the
+     * timer fires kb_wait_cb checks ble_keyboard_is_connected() and
+     * only sleeps if no keyboard is paired by then. A value of 0
+     * disables the feature (keep scanning indefinitely). */
+#if CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC > 0
+    {
+        esp_timer_create_args_t kb_args = {};
+        kb_args.callback = kb_wait_cb;
+        kb_args.name = "standby_kb";
+        ESP_ERROR_CHECK(esp_timer_create(&kb_args, &s_kb_wait_timer));
+        esp_timer_start_once(s_kb_wait_timer,
+            (uint64_t)CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC * 1000000ULL);
+        ESP_LOGI(TAG, "No-keyboard sleep armed (%d s)",
+                 CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC);
+    }
+#endif
 
     ESP_LOGI(TAG, "Standby initialized, timeout=%" PRIu32 " s", s_timeout_sec);
 }
@@ -166,6 +206,9 @@ extern "C" void standby_set_pre_sleep_cb(standby_pre_sleep_cb_t cb)
 extern "C" void standby_enter_sleep(void)
 {
     stop_timer();
+    if (s_kb_wait_timer) {
+        esp_timer_stop(s_kb_wait_timer);
+    }
 
     if (s_pre_sleep_cb) {
         s_pre_sleep_cb();

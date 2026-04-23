@@ -218,6 +218,14 @@ workaround; both woke the device immediately, the latter because
 M5GFX initializes only the e-paper panel (not the touch controller),
 so the GT911 is left uninitialized and holds INT low.
 
+In addition to the inactivity timer, `standby_init()` also arms a
+"no keyboard connected" countdown of `CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC`
+seconds (default 180, 0 = disabled). When the timer fires it polls
+`ble_keyboard_is_connected()` and only enters deep sleep if no
+Bluetooth keyboard has paired by then. This conserves battery when
+the device is powered on accidentally or no paired keyboard is in
+range.
+
 Public API: `standby_init()`, `standby_reset_timer()`,
 `standby_set_timeout()`, `standby_set_pre_sleep_cb()`,
 `standby_enter_sleep()`.
