@@ -914,6 +914,11 @@ static void ensure_cursor_visible(void)
 
 /* ---- File browser ---- */
 
+/* Forward declaration: defined below in the menu system section, but
+ * called from refresh_file_list() so list rows pick up theme colors
+ * and the initial selection highlight. */
+static void apply_list_selection_styles(lv_obj_t *list, int sel);
+
 static void refresh_file_list(void)
 {
     const char *mp = sd_card_get_mount_point();
@@ -985,10 +990,6 @@ extern "C" void editor_ui_set_status(const char *msg)
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
     if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
 }
-
-/* Forward declaration: defined below in the menu system section, but
- * called from refresh_file_list() above. */
-static void apply_list_selection_styles(lv_obj_t *list, int sel);
 
 /* ---- Menu system ---- */
 
