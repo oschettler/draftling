@@ -315,28 +315,19 @@ config DRAFTLING_HAT_SD_SDMMC_CLK_PIN
     int "SD SDMMC CLK pin (GPIO)"
     depends on DRAFTLING_HAT_SD_SDMMC
     range 0 48
-    default 14
-    help
-        SDMMC CLK pin. Default 14 matches the Freenove FNK0083
-        ESP32-S3 example wiring.
+    default 39
 
 config DRAFTLING_HAT_SD_SDMMC_CMD_PIN
     int "SD SDMMC CMD pin (GPIO)"
     depends on DRAFTLING_HAT_SD_SDMMC
     range 0 48
-    default 15
-    help
-        SDMMC CMD pin. Default 15 matches the Freenove FNK0083
-        ESP32-S3 example wiring.
+    default 38
 
 config DRAFTLING_HAT_SD_SDMMC_D0_PIN
     int "SD SDMMC D0 pin (GPIO)"
     depends on DRAFTLING_HAT_SD_SDMMC
     range 0 48
-    default 2
-    help
-        SDMMC D0 (DAT0) pin. Default 2 matches the Freenove FNK0083
-        ESP32-S3 example wiring.
+    default 40
 
 endmenu
 

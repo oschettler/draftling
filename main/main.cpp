@@ -165,8 +165,8 @@ extern "C" void app_main(void)
 #  elif defined(CONFIG_DRAFTLING_HAT_SD_SDMMC)
     /* SDMMC 1-bit (CLK/CMD/D0) on the chip's dedicated SDMMC peripheral.
      * Faster than SPI; available on ESP32 and ESP32-S3 only. Pinout is
-     * user-configurable via the HAT pinout menu and defaults to the
-     * Freenove ESP32-S3 example wiring (CLK=14, CMD=15, D0=2). */
+     * user-configurable via the HAT pinout menu and defaults to
+     * CLK=39, CMD=38, D0=40. */
     sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
 #  else
     ESP_LOGW(TAG, "HAT model built without SD support "
