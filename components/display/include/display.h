@@ -51,6 +51,23 @@ void display_full_refresh(void);
 uint8_t *display_get_buffer(void);
 int display_get_buffer_size(void);
 
+#include <stdbool.h>
+
+/*
+ * Optional fast path: push an LVGL RGB565 framebuffer area directly
+ * to the panel without going through the per-pixel display_set_pixel
+ * conversion. Returns true if the backend handled the push (in which
+ * case the caller still needs to call display_flush() to trigger the
+ * panel refresh), or false to fall back to the legacy per-pixel
+ * path.
+ *
+ * Implemented by the M5GFX-based PaperS3 backend, which can convert
+ * RGB565 -> grayscale internally far more efficiently than our
+ * RGB565 -> 1-bit -> 8-bit grayscale round-trip. Other backends
+ * return false.
+ */
+bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
+
 #ifdef __cplusplus
 }
 #endif

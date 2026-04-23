@@ -203,4 +203,12 @@ extern "C" int display_get_buffer_size(void)
     return s_disp_len;
 }
 
+extern "C" bool display_push_rgb565(int /*x*/, int /*y*/, int /*w*/, int /*h*/,
+                                    const void * /*color_map*/)
+{
+    /* No fast path on RLCD - lvgl_port.cpp falls back to the
+     * per-pixel display_set_pixel conversion. */
+    return false;
+}
+
 #endif /* CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42 */

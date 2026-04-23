@@ -22,6 +22,20 @@ static SemaphoreHandle_t s_lvgl_mux = NULL;
 
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_map)
 {
+    int w = area->x2 - area->x1 + 1;
+    int h = area->y2 - area->y1 + 1;
+
+    /* Fast path: if the backend supports it, push the LVGL RGB565
+     * framebuffer directly to the panel without going through our
+     * per-pixel 1-bpp conversion. The PaperS3 (M5GFX) backend uses
+     * this; RLCD and UC8179 return false and we fall back to the
+     * legacy per-pixel path below. */
+    if (display_push_rgb565(area->x1, area->y1, w, h, color_map)) {
+        display_flush();
+        lv_disp_flush_ready(disp);
+        return;
+    }
+
     uint16_t *buf = (uint16_t *)color_map;
     for (int y = area->y1; y <= area->y2; y++) {
         for (int x = area->x1; x <= area->x2; x++) {

@@ -105,14 +105,19 @@ Per-board display backends behind a single C API:
   Seeed reTerminal E1001 and the Waveshare E-Paper Driver HAT;
   resolution and pinout (including BUSY) are passed in at init.
 - **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
-  `m5stack/M5GFX` managed component. v1 keeps a 1-bpp framebuffer
-  and pushes it to the panel as a single full refresh per flush;
-  partial refresh and grayscale are TODO.
+  `m5stack/M5GFX` managed component. Unlike the other backends this
+  one does not maintain its own 1-bpp framebuffer; M5GFX already
+  keeps a 4-bpp grayscale framebuffer internally, and the LVGL port
+  pushes RGB565 pixels straight into it through the optional
+  `display_push_rgb565()` fast path. Each `display_flush()` is a
+  single full panel refresh in `epd_quality` mode; partial refresh
+  and grayscale UI are TODO.
 - **lvgl_port.cpp** -- creates the LVGL display object, sets up a
-  flush callback that converts LVGL's RGB565 output to the
-  backend's 1-bpp / 8-bpp pixel format, and runs the LVGL
-  tick/task timer. Thread safety is provided by a mutex exposed as
-  `lvgl_port_lock()` / `lvgl_port_unlock()`.
+  flush callback that first tries `display_push_rgb565()` (used by
+  the PaperS3 backend) and otherwise converts LVGL's RGB565 output
+  to the backend's 1-bpp pixel format via `display_set_pixel()`, and
+  runs the LVGL tick/task timer. Thread safety is provided by a
+  mutex exposed as `lvgl_port_lock()` / `lvgl_port_unlock()`.
 
 The component's `idf_component.yml` declares the `m5stack/m5gfx`
 dependency required by the PaperS3 backend. (It is downloaded for
@@ -120,9 +125,9 @@ every build; the source itself is gated by `#if defined(CONFIG_DRAFTLING_MODEL_M
 so non-PaperS3 builds do not link it into the final image.)
 
 Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
-`display_flush()`, `display_full_refresh()`, `display_get_buffer()`,
-`display_get_buffer_size()`, `lvgl_port_init()`, `lvgl_port_lock()`,
-`lvgl_port_unlock()`.
+`display_flush()`, `display_full_refresh()`, `display_push_rgb565()`,
+`display_get_buffer()`, `display_get_buffer_size()`, `lvgl_port_init()`,
+`lvgl_port_lock()`, `lvgl_port_unlock()`.
 
 ### components/editor/
 

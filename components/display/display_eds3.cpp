@@ -2,7 +2,7 @@
 #if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 
 /*
- * M5Stack PaperS3 e-paper display driver (1-bit B/W shim over M5GFX).
+ * M5Stack PaperS3 e-paper display driver (thin shim over M5GFX).
  *
  * The PaperS3 drives a 540x960 ED047TC1 panel through the ESP32-S3
  * LCD/I80 parallel peripheral with multi-pass grayscale waveforms.
@@ -12,23 +12,36 @@
  * which detects the PaperS3 board automatically and exposes a simple
  * drawing API.
  *
- * Draftling's UI is 1 bpp, so we keep an internal 1-bpp framebuffer
- * (same packed layout as the UC8179 driver: 1 bit per pixel, 8 pixels
- * per byte, MSB = leftmost, packed row-major; bit set = white) and
- * push it to M5GFX at flush time. v1 always performs a full refresh;
- * partial refresh and grayscale are TODO.
+ * Architecture
+ * ------------
+ * Unlike the RLCD and UC8179 backends, the PaperS3 backend does NOT
+ * keep its own 1-bpp framebuffer. M5GFX already maintains a 4-bpp
+ * grayscale framebuffer internally, so an extra 1-bpp buffer would
+ * be redundant - and the round-trip
  *
- * The driver implements the same public API as the other backends
- * so that the LVGL port (lvgl_port.cpp) can stay generic:
+ *     LVGL RGB565  ->  our 1-bpp buffer  ->  8-bpp grayscale row
+ *                  ->  M5GFX 4-bpp framebuffer
  *
- *   display_init(...)             -- pin params ignored, M5GFX
- *                                    configures everything from the
- *                                    M5PaperS3 board id
- *   display_clear(color)
- *   display_set_pixel(x, y, color)
- *   display_flush()               -- full refresh
- *   display_full_refresh()        -- alias for display_flush() in v1
- *   display_get_buffer / size     -- exposes the 1-bpp framebuffer
+ * proved fragile (it produced unreadable 3-4 px tall text on the
+ * panel). Instead, we expose the optional display_push_rgb565()
+ * fast path, which lvgl_port.cpp calls from its flush_cb to push
+ * the LVGL RGB565 framebuffer straight into M5GFX. M5GFX handles
+ * the RGB565 -> grayscale conversion and Bayer dithering internally.
+ *
+ * This mirrors the proven M5GFX + LVGL bridge used by the public
+ * Boisti13/papers3-dashboard project (see src/display/epd_driver.cpp
+ * in that repo).
+ *
+ * Public API
+ * ----------
+ *   display_init(...)           pin params ignored - M5GFX configures
+ *                               everything from the M5PaperS3 board id
+ *   display_clear(color)        s_gfx.fillScreen(white|black)
+ *   display_set_pixel(x,y,c)    s_gfx.drawPixel
+ *   display_flush()             trigger panel refresh, wait for it
+ *   display_full_refresh()      alias for display_flush() in v1
+ *   display_push_rgb565(...)    fast path used by lvgl_port.cpp
+ *   display_get_buffer / size   return null/0 - no 1-bpp framebuffer
  */
 
 #include <cstdio>
@@ -45,13 +58,10 @@
 
 static const char *TAG = "DisplayEDS3";
 
-static M5GFX     s_gfx;
-static uint8_t  *s_disp_buf = nullptr;
-static int       s_disp_len = 0;
-static int       s_width    = 0;
-static int       s_height   = 0;
-static int       s_stride   = 0;
-static bool      s_dirty    = false;
+static M5GFX s_gfx;
+static int   s_width  = 0;
+static int   s_height = 0;
+static bool  s_dirty  = false;
 
 /* ---- public API ---- */
 
@@ -59,9 +69,9 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
                              int /*pin_d*/, int /*pin_e*/, int /*pin_f*/,
                              int width, int height)
 {
-    /* Bring up the M5GFX panel first. M5GFX auto-detects the PaperS3
-     * board and configures the LCD/I80 peripheral, control GPIOs and
-     * power rail internally.
+    /* Bring up the M5GFX panel. M5GFX auto-detects the PaperS3 board
+     * and configures the LCD/I80 peripheral, control GPIOs and power
+     * rail internally.
      *
      * The PaperS3 panel is configured by M5GFX with
      *   panel_width=960, panel_height=540, offset_rotation=3
@@ -81,37 +91,19 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * modes are designed for incremental partial updates over an
      * already-clean baseline; with our LVGL FULL render mode every
      * flush rewrites the whole screen, so the partial-update modes
-     * leave the panel looking muddy and "flickering". */
+     * leave the panel looking muddy. */
     s_gfx.setEpdMode(epd_mode_t::epd_quality);
 
-    int gfx_w = s_gfx.width();
-    int gfx_h = s_gfx.height();
-
-    /* Use the panel's own reported dimensions as authoritative. If
-     * Kconfig (CONFIG_DRAFTLING_DISPLAY_WIDTH/HEIGHT) is stale (e.g.
-     * an old sdkconfig still has the historical 540x960 portrait
-     * defaults), trusting Kconfig means drawPixel() calls outside the
-     * panel bounds get silently clipped while pixels inside the
-     * "missing" portion are never written -- producing a tiny corner
-     * of UI on a mostly-grey screen. Override silently if needed. */
-    if (gfx_w != width || gfx_h != height) {
+    s_width  = s_gfx.width();
+    s_height = s_gfx.height();
+    if (s_width != width || s_height != height) {
         ESP_LOGW(TAG,
                  "Configured framebuffer size %dx%d does not match M5GFX "
                  "panel size %dx%d; using panel size. Update "
                  "CONFIG_DRAFTLING_DISPLAY_WIDTH/HEIGHT (delete sdkconfig "
                  "and rebuild to pick up the new defaults).",
-                 width, height, gfx_w, gfx_h);
+                 width, height, s_width, s_height);
     }
-    s_width  = gfx_w;
-    s_height = gfx_h;
-    s_stride = (s_width + 7) / 8;
-
-    /* Allocate framebuffer in PSRAM (1 bit per pixel) */
-    s_disp_len = s_stride * s_height;
-    s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
-    assert(s_disp_buf);
-    /* Start clean (all white) */
-    memset(s_disp_buf, 0xFF, s_disp_len);
 
     /* Initial full white refresh so the panel leaves its muddy
      * power-on state. */
@@ -119,40 +111,43 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     s_gfx.display();
     s_gfx.waitDisplay();
 
-    ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d, 1 bpp)",
+    ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d)",
              s_width, s_height);
 }
 
 extern "C" void display_clear(uint8_t color)
 {
-    if (!s_disp_buf) return;
-    /* color != 0 means white in our 1-bpp convention (bit set = white) */
-    memset(s_disp_buf, (color != 0) ? 0xFF : 0x00, s_disp_len);
+    s_gfx.fillScreen((color != 0) ? TFT_WHITE : TFT_BLACK);
     s_dirty = true;
 }
 
 extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
 {
-    if (!s_disp_buf) return;
-    if (x >= s_width || y >= s_height) return;
-    int idx = (int)y * s_stride + (x >> 3);
-    uint8_t mask = (uint8_t)(0x80 >> (x & 7));
-    uint8_t prev = s_disp_buf[idx];
-    uint8_t next;
-    if (color != 0) {
-        next = prev | mask;       /* white */
-    } else {
-        next = prev & ~mask;      /* black */
-    }
-    if (next != prev) {
-        s_disp_buf[idx] = next;
-        s_dirty = true;
-    }
+    /* Slow per-pixel path. lvgl_port.cpp normally bypasses this via
+     * the display_push_rgb565() fast path; this function exists only
+     * to satisfy the legacy display.h API. */
+    if ((int)x >= s_width || (int)y >= s_height) return;
+    s_gfx.drawPixel(x, y, (color != 0) ? TFT_WHITE : TFT_BLACK);
+    s_dirty = true;
+}
+
+extern "C" bool display_push_rgb565(int x, int y, int w, int h,
+                                    const void *color_map)
+{
+    if (color_map == nullptr) return false;
+    if (w <= 0 || h <= 0) return false;
+    /* M5GFX's pushImage accepts an rgb565_t* and writes into its
+     * internal grayscale framebuffer. It does NOT trigger a panel
+     * refresh - that happens in display_flush(). */
+    s_gfx.pushImage(x, y, w, h,
+                    (const lgfx::v1::rgb565_t *)color_map);
+    s_dirty = true;
+    return true;
 }
 
 extern "C" void display_flush(void)
 {
-    if (!s_disp_buf || !s_dirty) return;
+    if (!s_dirty) return;
 
     /* Wait for any in-flight panel refresh to finish before queuing a
      * new one. M5GFX's Panel_EPD runs its waveform on a background
@@ -161,54 +156,29 @@ extern "C" void display_flush(void)
      * flicker. Block here so the panel always reaches a steady state
      * between flushes. */
     s_gfx.waitDisplay();
-
-    /* Push the 1-bpp framebuffer one row at a time as 8-bpp grayscale.
-     * Panel_EPD always operates in grayscale_8bit, so passing a
-     * grayscale_t* row buffer through pushImage avoids the per-pixel
-     * call overhead of drawPixel and lets LovyanGFX use its straight
-     * row-copy fast path. The row buffer lives in PSRAM and is
-     * recycled across flushes. */
-    static lgfx::v1::grayscale_t *row_buf = nullptr;
-    static int row_buf_w = 0;
-    if (row_buf == nullptr || row_buf_w != s_width) {
-        if (row_buf) heap_caps_free(row_buf);
-        row_buf = (lgfx::v1::grayscale_t *)heap_caps_malloc(
-            sizeof(lgfx::v1::grayscale_t) * s_width, MALLOC_CAP_SPIRAM);
-        assert(row_buf);
-        row_buf_w = s_width;
-    }
-
-    s_gfx.startWrite();
-    for (int y = 0; y < s_height; y++) {
-        const uint8_t *src = s_disp_buf + y * s_stride;
-        for (int x = 0; x < s_width; x++) {
-            uint8_t mask = (uint8_t)(0x80 >> (x & 7));
-            row_buf[x].raw = (src[x >> 3] & mask) ? 0xFF : 0x00;
-        }
-        s_gfx.pushImage(0, y, s_width, 1, row_buf);
-    }
-    s_gfx.endWrite();
     s_gfx.display();
+    s_gfx.waitDisplay();
 
     s_dirty = false;
 }
 
 extern "C" void display_full_refresh(void)
 {
-    /* In v1 every refresh is a full refresh. Force the panel to redraw
-     * even if the framebuffer hasn't changed. */
+    /* In v1 every refresh is a full refresh. Force the panel to
+     * redraw even if nothing has been drawn since the last flush. */
     s_dirty = true;
     display_flush();
 }
 
 extern "C" uint8_t *display_get_buffer(void)
 {
-    return s_disp_buf;
+    /* No 1-bpp framebuffer on this backend. */
+    return nullptr;
 }
 
 extern "C" int display_get_buffer_size(void)
 {
-    return s_disp_len;
+    return 0;
 }
 
 #endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
