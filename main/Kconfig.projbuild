@@ -109,18 +109,19 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
     default 270 if DRAFTLING_DISPLAY_ROTATE_270
 
 config DRAFTLING_DISPLAY_SCALE
-    int
+    int "Display scale factor (logical pixel = SCALE x SCALE panel pixels)"
+    range 1 8
     default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 1
     help
-        Logical-pixel scale factor (hidden, auto-derived from the
-        selected hardware model).
+        Logical-pixel scale factor.
 
         Every logical LVGL pixel is rendered as SCALE x SCALE physical
         panel pixels via nearest-neighbor expansion in the display
         backend. The editor and LVGL canvas operate in logical
         coordinates (panel size divided by SCALE); only the display
-        backend scales up when pushing to the panel.
+        backend scales up when pushing to the panel. Larger values give
+        bigger text at the cost of less screen real estate.
 
         Defaults: 2 for the M5Stack PaperS3 (whose 540x960 panel is
         dense enough that 1:1 Greybeard text is uncomfortably small),
@@ -129,10 +130,11 @@ config DRAFTLING_DISPLAY_SCALE
         up-scaling; on the other backends SCALE > 1 would have no
         visible effect.
 
-        Kept hidden (no prompt) so that switching the hardware model
-        in menuconfig always re-applies the per-model default --
-        prompted int symbols are sticky in sdkconfig and would
-        otherwise keep an old value across model changes.
+        NOTE: this is a prompted int, so once you have visited
+        menuconfig the value becomes sticky in sdkconfig. If you later
+        switch DRAFTLING_HARDWARE_MODEL, the per-model default above is
+        NOT re-applied automatically -- delete sdkconfig (or set the
+        value here by hand) to pick up the new default.
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
