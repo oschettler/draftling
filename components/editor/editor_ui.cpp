@@ -430,7 +430,23 @@ static void update_title_bar(void)
              line + 1, col + 1,
              kb_layout_name(kb_layout_get()), batt_str);
 #endif
-    lv_label_set_text(s_lbl_title, buf);
+
+    /* lv_label_set_text() in LVGL v9 unconditionally invalidates the
+     * label even when the new text is identical to the current one,
+     * which on e-paper backends dirties the entire title-bar strip
+     * on every keystroke.  Combined with the dirty region from the
+     * edited line that spans the top and bottom of the screen and
+     * triggers a full-screen refresh in display_eds3.cpp's ">75%"
+     * huge-area path.  Compare against the last text we pushed and
+     * skip the call when unchanged. */
+    static char s_prev_title[128] = { 0 };
+    if (strcmp(s_prev_title, buf) != 0) {
+        lv_label_set_text(s_lbl_title, buf);
+        /* snprintf truncates to at most sizeof(buf)-1 chars, which
+         * also fits in s_prev_title[128]. */
+        strncpy(s_prev_title, buf, sizeof(s_prev_title) - 1);
+        s_prev_title[sizeof(s_prev_title) - 1] = '\0';
+    }
 }
 
 static lv_style_t *style_for_type(md_line_type_t type)
