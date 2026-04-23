@@ -126,6 +126,37 @@ static const lv_font_t *h3_font(void)
     return FONT_14;
 }
 
+/* ---- Color theme ----
+ *
+ * The editor renders only two colors: a foreground (text, cursor,
+ * borders, separator lines) and a background (screens, dialog panels).
+ * Inverted highlights (selection rectangles, active list rows) draw
+ * the foreground color as their background and vice-versa.
+ *
+ * On e-paper boards the user can opt into a black background via
+ * CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND, which simply swaps the two
+ * colors returned by these helpers. The Kconfig symbol is gated to
+ * the e-paper models, so on every other build it is undefined and
+ * theme_fg/theme_bg compile down to plain black/white.
+ */
+static inline lv_color_t theme_fg(void)
+{
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+    return lv_color_white();
+#else
+    return lv_color_black();
+#endif
+}
+
+static inline lv_color_t theme_bg(void)
+{
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+    return lv_color_black();
+#else
+    return lv_color_white();
+#endif
+}
+
 /* Recalculate derived layout values from the current body font. */
 static void recalc_layout(void)
 {
@@ -331,34 +362,34 @@ static void init_styles(void)
 {
     lv_style_init(&s_style_body);
     lv_style_set_text_font(&s_style_body, body_font());
-    lv_style_set_text_color(&s_style_body, lv_color_black());
+    lv_style_set_text_color(&s_style_body, theme_fg());
     lv_style_set_pad_all(&s_style_body, 0);
 
     lv_style_init(&s_style_h1);
     lv_style_set_text_font(&s_style_h1, h1_font());
-    lv_style_set_text_color(&s_style_h1, lv_color_black());
+    lv_style_set_text_color(&s_style_h1, theme_fg());
 
     lv_style_init(&s_style_h2);
     lv_style_set_text_font(&s_style_h2, h2_font());
-    lv_style_set_text_color(&s_style_h2, lv_color_black());
+    lv_style_set_text_color(&s_style_h2, theme_fg());
 
     lv_style_init(&s_style_h3);
     lv_style_set_text_font(&s_style_h3, h3_font());
-    lv_style_set_text_color(&s_style_h3, lv_color_black());
+    lv_style_set_text_color(&s_style_h3, theme_fg());
 
     lv_style_init(&s_style_code);
     lv_style_set_text_font(&s_style_code, body_font());
-    lv_style_set_text_color(&s_style_code, lv_color_black());
+    lv_style_set_text_color(&s_style_code, theme_fg());
     lv_style_set_border_width(&s_style_code, 1);
-    lv_style_set_border_color(&s_style_code, lv_color_black());
+    lv_style_set_border_color(&s_style_code, theme_fg());
     lv_style_set_pad_left(&s_style_code, 4);
 
     lv_style_init(&s_style_quote);
     lv_style_set_text_font(&s_style_quote, body_font());
-    lv_style_set_text_color(&s_style_quote, lv_color_black());
+    lv_style_set_text_color(&s_style_quote, theme_fg());
     lv_style_set_border_side(&s_style_quote, LV_BORDER_SIDE_LEFT);
     lv_style_set_border_width(&s_style_quote, 2);
-    lv_style_set_border_color(&s_style_quote, lv_color_black());
+    lv_style_set_border_color(&s_style_quote, theme_fg());
     lv_style_set_pad_left(&s_style_quote, 8);
 
     recalc_layout();
@@ -722,11 +753,11 @@ extern "C" void editor_ui_refresh(void)
                 }
                 if (fully) {
                     lv_obj_set_style_bg_color(s_line_labels[i],
-                                              lv_color_black(), 0);
+                                              theme_fg(), 0);
                     lv_obj_set_style_bg_opa(s_line_labels[i],
                                             LV_OPA_COVER, 0);
                     lv_obj_set_style_text_color(s_line_labels[i],
-                                                lv_color_white(), 0);
+                                                theme_bg(), 0);
                     if (s_sel_rects[i])
                         lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
                 } else if (partial && s_sel_rects[i]) {
@@ -786,11 +817,11 @@ extern "C" void editor_ui_refresh(void)
                             /* Multi-row partial: fall back to
                              * full-line inversion on the label. */
                             lv_obj_set_style_bg_color(s_line_labels[i],
-                                                      lv_color_black(), 0);
+                                                      theme_fg(), 0);
                             lv_obj_set_style_bg_opa(s_line_labels[i],
                                                     LV_OPA_COVER, 0);
                             lv_obj_set_style_text_color(s_line_labels[i],
-                                                        lv_color_white(), 0);
+                                                        theme_bg(), 0);
                             lv_obj_add_flag(s_sel_rects[i],
                                             LV_OBJ_FLAG_HIDDEN);
                         }
@@ -959,12 +990,12 @@ static void apply_list_selection_styles(lv_obj_t *list, int sel)
     for (uint32_t i = 0; i < count; i++) {
         lv_obj_t *child = lv_obj_get_child(list, i);
         if ((int)i == sel) {
-            lv_obj_set_style_bg_color(child, lv_color_black(), 0);
+            lv_obj_set_style_bg_color(child, theme_fg(), 0);
             lv_obj_set_style_bg_opa(child, LV_OPA_COVER, 0);
-            lv_obj_set_style_text_color(child, lv_color_white(), 0);
+            lv_obj_set_style_text_color(child, theme_bg(), 0);
         } else {
             lv_obj_set_style_bg_opa(child, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_text_color(child, lv_color_black(), 0);
+            lv_obj_set_style_text_color(child, theme_fg(), 0);
         }
     }
     /* After a full rebuild make sure the selected row is on screen.
@@ -988,13 +1019,13 @@ static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel)
     if (prev_sel >= 0 && (uint32_t)prev_sel < count) {
         lv_obj_t *prev = lv_obj_get_child(list, prev_sel);
         lv_obj_set_style_bg_opa(prev, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_text_color(prev, lv_color_black(), 0);
+        lv_obj_set_style_text_color(prev, theme_fg(), 0);
     }
     if (sel >= 0 && (uint32_t)sel < count) {
         lv_obj_t *cur = lv_obj_get_child(list, sel);
-        lv_obj_set_style_bg_color(cur, lv_color_black(), 0);
+        lv_obj_set_style_bg_color(cur, theme_fg(), 0);
         lv_obj_set_style_bg_opa(cur, LV_OPA_COVER, 0);
-        lv_obj_set_style_text_color(cur, lv_color_white(), 0);
+        lv_obj_set_style_text_color(cur, theme_bg(), 0);
         /* Scroll the list so the highlighted row is always visible.
          * Needed when the list is taller than the panel (e.g. on
          * PaperS3 with DRAFTLING_DISPLAY_SCALE = 3, where only a few
@@ -2296,21 +2327,21 @@ extern "C" void editor_ui_init(void)
 
     /* ---- Editor screen ---- */
     s_scr = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_scr, theme_bg(), 0);
 
     /* Title bar */
     s_lbl_title = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_title, 2, 0);
     lv_obj_set_width(s_lbl_title, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_title, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_title, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_title, theme_fg(), 0);
     lv_label_set_text(s_lbl_title, "Draftling");
 
     /* Header separator line */
     lv_obj_t *hline = lv_obj_create(s_scr);
     lv_obj_set_size(hline, SCR_W, 1);
     lv_obj_set_pos(hline, 0, HEADER_H - 1);
-    lv_obj_set_style_bg_color(hline, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(hline, theme_fg(), 0);
     lv_obj_set_style_bg_opa(hline, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(hline, 0, 0);
     lv_obj_set_style_radius(hline, 0, 0);
@@ -2345,10 +2376,10 @@ extern "C" void editor_ui_init(void)
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
         s_sel_rects[i] = lv_label_create(s_cont_edit);
         lv_obj_set_style_bg_color(s_sel_rects[i],
-                                  lv_color_black(), 0);
+                                  theme_fg(), 0);
         lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(s_sel_rects[i],
-                                    lv_color_white(), 0);
+                                    theme_bg(), 0);
         lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
         lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
         lv_obj_set_style_pad_all(s_sel_rects[i], 0, 0);
@@ -2359,7 +2390,7 @@ extern "C" void editor_ui_init(void)
     /* Cursor (thin vertical bar) */
     s_cursor = lv_obj_create(s_cont_edit);
     lv_obj_set_size(s_cursor, 2, LINE_H);
-    lv_obj_set_style_bg_color(s_cursor, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(s_cursor, theme_fg(), 0);
     lv_obj_set_style_bg_opa(s_cursor, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_cursor, 0, 0);
     lv_obj_set_style_radius(s_cursor, 0, 0);
@@ -2369,7 +2400,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_t *sline = lv_obj_create(s_scr);
     lv_obj_set_size(sline, SCR_W, 1);
     lv_obj_set_pos(sline, 0, SCR_H - STATUS_H);
-    lv_obj_set_style_bg_color(sline, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(sline, theme_fg(), 0);
     lv_obj_set_style_bg_opa(sline, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(sline, 0, 0);
     lv_obj_set_style_radius(sline, 0, 0);
@@ -2379,7 +2410,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_pos(s_lbl_status, 2, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_status, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_status, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_status,
         "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
 
@@ -2387,7 +2418,7 @@ extern "C" void editor_ui_init(void)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_dev_batt, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_dev_batt, theme_fg(), 0);
     lv_obj_set_style_text_align(s_lbl_dev_batt, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(s_lbl_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_dev_batt, 78);
@@ -2416,12 +2447,12 @@ extern "C" void editor_ui_init(void)
 
     /* ---- File browser screen ---- */
     s_scr_browser = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_browser, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_scr_browser, theme_bg(), 0);
 
     lv_obj_t *br_title = lv_label_create(s_scr_browser);
     lv_obj_set_pos(br_title, 2, 0);
     lv_obj_set_style_text_font(br_title, FONT_11, 0);
-    lv_obj_set_style_text_color(br_title, lv_color_black(), 0);
+    lv_obj_set_style_text_color(br_title, theme_fg(), 0);
     lv_label_set_text(br_title, "File Browser - Up/Down, Enter to open, N for new");
 
     s_list_files = lv_list_create(s_scr_browser);
@@ -2436,7 +2467,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_t *br_sline = lv_obj_create(s_scr_browser);
     lv_obj_set_size(br_sline, SCR_W, 1);
     lv_obj_set_pos(br_sline, 0, SCR_H - STATUS_H);
-    lv_obj_set_style_bg_color(br_sline, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(br_sline, theme_fg(), 0);
     lv_obj_set_style_bg_opa(br_sline, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(br_sline, 0, 0);
     lv_obj_set_style_radius(br_sline, 0, 0);
@@ -2446,14 +2477,14 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_pos(s_lbl_br_status, 2, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_br_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_br_status, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_br_status, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_br_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
     lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_br_dev_batt, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_br_dev_batt, theme_fg(), 0);
     lv_obj_set_style_text_align(s_lbl_br_dev_batt, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(s_lbl_br_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_br_dev_batt, 78);
@@ -2469,14 +2500,14 @@ extern "C" void editor_ui_init(void)
 
     /* ---- BLE connection prompt screen ---- */
     s_scr_ble_prompt = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_ble_prompt, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_scr_ble_prompt, theme_bg(), 0);
 
     /* "draftling" title centered near the top */
     {
         lv_obj_t *title = lv_label_create(s_scr_ble_prompt);
         lv_obj_set_width(title, SCR_W);
         lv_obj_set_style_text_font(title, FONT_18, 0);
-        lv_obj_set_style_text_color(title, lv_color_black(), 0);
+        lv_obj_set_style_text_color(title, theme_fg(), 0);
         lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_text(title, "draftling");
         int fh = lv_font_get_line_height(FONT_18);
@@ -2487,7 +2518,7 @@ extern "C" void editor_ui_init(void)
     s_ble_prompt_lbl = lv_label_create(s_scr_ble_prompt);
     lv_obj_set_width(s_ble_prompt_lbl, SCR_W - 20);
     lv_obj_set_style_text_font(s_ble_prompt_lbl, FONT_14, 0);
-    lv_obj_set_style_text_color(s_ble_prompt_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_ble_prompt_lbl, theme_fg(), 0);
     lv_obj_set_style_text_align(s_ble_prompt_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_ble_prompt_lbl,
         "Searching for BLE keyboard...\nPlease turn on your keyboard");
@@ -2499,12 +2530,12 @@ extern "C" void editor_ui_init(void)
 
     /* ---- Menu screen ---- */
     s_scr_menu = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_menu, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_scr_menu, theme_bg(), 0);
 
     s_lbl_menu_hdr = lv_label_create(s_scr_menu);
     lv_obj_set_pos(s_lbl_menu_hdr, 2, 0);
     lv_obj_set_style_text_font(s_lbl_menu_hdr, FONT_11, 0);
-    lv_obj_set_style_text_color(s_lbl_menu_hdr, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_lbl_menu_hdr, theme_fg(), 0);
     lv_label_set_text(s_lbl_menu_hdr,
                       "Menu - Up/Down, Enter to select, Esc to close");
 
@@ -2518,12 +2549,12 @@ extern "C" void editor_ui_init(void)
 
     /* ---- Settings screen ---- */
     s_scr_settings = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(s_scr_settings, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_scr_settings, theme_bg(), 0);
 
     lv_obj_t *set_hdr = lv_label_create(s_scr_settings);
     lv_obj_set_pos(set_hdr, 2, 0);
     lv_obj_set_style_text_font(set_hdr, FONT_11, 0);
-    lv_obj_set_style_text_color(set_hdr, lv_color_black(), 0);
+    lv_obj_set_style_text_color(set_hdr, theme_fg(), 0);
     lv_label_set_text(set_hdr,
                       "Settings - Up/Down, Enter to change, Esc to go back");
 
@@ -2540,9 +2571,9 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_size(s_passkey_panel, SCR_W - 20, 60);
     lv_obj_set_pos(s_passkey_panel,
                    10, (SCR_H - 60) / 2);
-    lv_obj_set_style_bg_color(s_passkey_panel, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_passkey_panel, theme_bg(), 0);
     lv_obj_set_style_bg_opa(s_passkey_panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(s_passkey_panel, lv_color_black(), 0);
+    lv_obj_set_style_border_color(s_passkey_panel, theme_fg(), 0);
     lv_obj_set_style_border_width(s_passkey_panel, 2, 0);
     lv_obj_set_style_radius(s_passkey_panel, 4, 0);
     lv_obj_set_style_pad_all(s_passkey_panel, 6, 0);
@@ -2551,7 +2582,7 @@ extern "C" void editor_ui_init(void)
 
     s_passkey_label = lv_label_create(s_passkey_panel);
     lv_obj_set_style_text_font(s_passkey_label, FONT_16, 0);
-    lv_obj_set_style_text_color(s_passkey_label, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_passkey_label, theme_fg(), 0);
     lv_obj_set_style_text_align(s_passkey_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(s_passkey_label, SCR_W - 20 - 12);
     lv_obj_center(s_passkey_label);
@@ -2564,9 +2595,9 @@ extern "C" void editor_ui_init(void)
     s_save_panel = lv_obj_create(s_scr);
     lv_obj_set_size(s_save_panel, SCR_W - 20, 46);
     lv_obj_set_pos(s_save_panel, 10, (SCR_H - 46) / 2);
-    lv_obj_set_style_bg_color(s_save_panel, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(s_save_panel, theme_bg(), 0);
     lv_obj_set_style_bg_opa(s_save_panel, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(s_save_panel, lv_color_black(), 0);
+    lv_obj_set_style_border_color(s_save_panel, theme_fg(), 0);
     lv_obj_set_style_border_width(s_save_panel, 2, 0);
     lv_obj_set_style_radius(s_save_panel, 4, 0);
     lv_obj_set_style_pad_all(s_save_panel, 6, 0);
@@ -2575,13 +2606,13 @@ extern "C" void editor_ui_init(void)
 
     s_save_hdr_lbl = lv_label_create(s_save_panel);
     lv_obj_set_style_text_font(s_save_hdr_lbl, FONT_11, 0);
-    lv_obj_set_style_text_color(s_save_hdr_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_save_hdr_lbl, theme_fg(), 0);
     lv_label_set_text(s_save_hdr_lbl, "Save as (Enter/Esc):");
     lv_obj_set_pos(s_save_hdr_lbl, 0, 0);
 
     s_save_name_lbl = lv_label_create(s_save_panel);
     lv_obj_set_style_text_font(s_save_name_lbl, FONT_11, 0);
-    lv_obj_set_style_text_color(s_save_name_lbl, lv_color_black(), 0);
+    lv_obj_set_style_text_color(s_save_name_lbl, theme_fg(), 0);
     lv_obj_set_width(s_save_name_lbl, SCR_W - 20 - 12);
     lv_label_set_text(s_save_name_lbl, "");
     lv_obj_set_pos(s_save_name_lbl, 0, 20);
@@ -2589,7 +2620,7 @@ extern "C" void editor_ui_init(void)
     /* Thin cursor bar inside the save prompt name field */
     s_save_cur = lv_obj_create(s_save_panel);
     lv_obj_set_size(s_save_cur, 2, LINE_H);
-    lv_obj_set_style_bg_color(s_save_cur, lv_color_black(), 0);
+    lv_obj_set_style_bg_color(s_save_cur, theme_fg(), 0);
     lv_obj_set_style_bg_opa(s_save_cur, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_save_cur, 0, 0);
     lv_obj_set_style_radius(s_save_cur, 0, 0);

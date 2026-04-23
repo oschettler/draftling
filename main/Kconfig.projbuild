@@ -152,6 +152,21 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
         faster than the older two-pass epd_text but accumulates
         ghosting slightly more quickly.
 
+config DRAFTLING_EPD_BLACK_BACKGROUND
+    bool "Black background (white text on black)"
+    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
+    default n
+    help
+        When enabled, the editor renders white text on a black
+        background instead of the default black text on a white
+        background. Applies to the editor, file browser, menu, settings
+        and all overlay dialogs. Selection and active-row highlights
+        are inverted accordingly (they become black-on-white).
+
+        Available only on e-paper boards. The screen is still wiped to
+        white before deep sleep regardless of this setting, so the
+        panel is left in a clean state while the MCU is asleep.
+
 menu "Waveshare E-Paper Driver HAT pinout"
     depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
 

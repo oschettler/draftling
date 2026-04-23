@@ -32,6 +32,26 @@ static void pre_sleep_autosave(void)
         }
     }
 
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* E-paper retains its image without power. Wipe the panel to a
+     * clean white frame so the user does not see the editor frozen on
+     * the display while the MCU is in deep sleep. We do this even when
+     * CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND is enabled -- the panel is
+     * easier to read at a glance when blank, and a black frame held
+     * indefinitely is worse for the e-paper than a white one.
+     *
+     * Take the LVGL mutex first so this does not race with the LVGL
+     * task's flush_cb (the PaperS3 backend in particular requires
+     * exclusive access to its M5GFX instance). */
+    if (lvgl_port_lock(-1)) {
+        display_clear(0xFF);
+        display_full_refresh();
+        lvgl_port_unlock();
+    }
+#endif
+
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
     /* Drop the e-paper PWR rail so the panel draws no current while
      * the MCU is in deep sleep. The image already on the panel is
