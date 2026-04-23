@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include "sdkconfig.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -93,11 +94,30 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     }
     lv_display_set_rotation(disp, rot);
 
-    size_t buf_size = width * height * BYTES_PER_PIXEL;
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    /* PaperS3 / M5GFX path: use PARTIAL render mode so flush_cb is
+     * called once per invalidated rectangle with a tightly-packed
+     * pixel buffer. This lets the display backend issue a partial
+     * e-paper refresh of just the changed region (typically the
+     * cursor or a single edited line) instead of repainting all
+     * 540x960 pixels and running the full grayscale waveform on
+     * every keystroke.
+     *
+     * A draw buffer sized to ~1/8 of the screen is enough to hold any
+     * single LVGL invalidated region the editor produces (status bar,
+     * a line of text, a dialog box) in one flush. */
+    size_t buf_size = (size_t)width * height * BYTES_PER_PIXEL / 8;
+    uint8_t *buf1 = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    uint8_t *buf2 = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    assert(buf1 && buf2);
+    lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+#else
+    size_t buf_size = (size_t)width * height * BYTES_PER_PIXEL;
     uint8_t *buf1 = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     uint8_t *buf2 = (uint8_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     assert(buf1 && buf2);
     lv_display_set_buffers(disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_FULL);
+#endif
 
     /* Tick timer */
     esp_timer_create_args_t timer_args = {};

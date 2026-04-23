@@ -109,9 +109,14 @@ Per-board display backends behind a single C API:
   one does not maintain its own 1-bpp framebuffer; M5GFX already
   keeps a 4-bpp grayscale framebuffer internally, and the LVGL port
   pushes RGB565 pixels straight into it through the optional
-  `display_push_rgb565()` fast path. Each `display_flush()` is a
-  single full panel refresh in `epd_quality` mode; partial refresh
-  and grayscale UI are TODO.
+  `display_push_rgb565()` fast path. The backend accumulates a
+  dirty bounding box across pushes and, on `display_flush()`, calls
+  `M5GFX::display(x,y,w,h)` over that rect using the fast `epd_text`
+  waveform; every `CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL`
+  partials (or whenever the dirty area covers most of the screen,
+  or after `display_clear()` / `display_full_refresh()`) the next
+  refresh is promoted to a full-screen `epd_quality` pass to clear
+  ghosting. Grayscale UI is still TODO.
 - **lvgl_port.cpp** -- creates the LVGL display object, sets up a
   flush callback that first tries `display_push_rgb565()` (used by
   the PaperS3 backend) and otherwise converts LVGL's RGB565 output
@@ -353,8 +358,9 @@ for the ESP32-S3-DevKitC-1:
 
 #### E-paper full-refresh interval (DRAFTLING_EPD_FULL_REFRESH_INTERVAL)
 
-`int` shared by the reTerminal E1001 and HAT models (UC8179 backend).
-Number of partial refreshes between full refreshes; default 50.
+`int` shared by the reTerminal E1001 and HAT models (UC8179 backend)
+and the M5Stack PaperS3 (M5GFX backend). Number of partial refreshes
+between full refreshes; default 50.
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 
