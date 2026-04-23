@@ -238,9 +238,9 @@ static bool s_in_partial_mode = false;
  * full-screen border flash on each partial refresh -- only pixels that
  * actually transitioned receive any drive. */
 #define EPD_PART_T1 30   /* charge-balance pre-phase frames */
-#define EPD_PART_T2  5   /* optional extension */
+#define EPD_PART_T2  5   /* optional extension of the pre-phase (T1) */
 #define EPD_PART_T3 30   /* color-change phase frames */
-#define EPD_PART_T4  5   /* optional extension */
+#define EPD_PART_T4  5   /* optional extension of the color-change (T3) */
 
 /* VCOM (cmd 0x20) -- LUTC. */
 static const uint8_t LUT_VCOM_PARTIAL[42] = {
