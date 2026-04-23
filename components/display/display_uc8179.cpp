@@ -216,6 +216,71 @@ static void wait_busy(int timeout_ms)
     }
 }
 
+/* ---- fast-partial LUT data (HAT panel) ---- */
+
+#if defined(CONFIG_DRAFTLING_EPD_FAST_PARTIAL)
+/* Tracks whether the panel currently has the fast-partial LUTs loaded
+ * (PSR = 0x3F, register LUTs, partial-mode CDI/VDCS) or the OTP full-
+ * refresh waveform (PSR = 0x1F). We switch lazily so that a sequence
+ * of partial refreshes pays the mode-switch cost only once. */
+static bool s_in_partial_mode = false;
+
+/* Single-stage partial-refresh LUTs adapted from the GxEPD2 community
+ * library's GxEPD2_750_T7 driver (GDEW075T7 panel, UC8179 controller).
+ *
+ * The UC8179 expects 42 bytes per LUT (7 stages x 6 bytes); we use
+ * one active stage and zero-pad the remaining six. Each stage encodes
+ * the source-driver level for the four KW transitions (W->W, K->W,
+ * W->K, K->K) plus three frame-count fields and a stage-repeat count.
+ *
+ * Critical property: WW and KK both use 0x00 as the level byte, which
+ * means "no voltage" for unchanged pixels. That is what suppresses the
+ * full-screen border flash on each partial refresh -- only pixels that
+ * actually transitioned receive any drive. */
+#define EPD_PART_T1 30   /* charge-balance pre-phase frames */
+#define EPD_PART_T2  5   /* optional extension */
+#define EPD_PART_T3 30   /* color-change phase frames */
+#define EPD_PART_T4  5   /* optional extension */
+
+/* VCOM (cmd 0x20) -- LUTC. */
+static const uint8_t LUT_VCOM_PARTIAL[42] = {
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    /* remaining stages zero-padded */
+};
+
+/* W->W (cmd 0x21) -- LUTWW. Zero level: no drive. */
+static const uint8_t LUT_WW_PARTIAL[42] = {
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+};
+
+/* K->W (cmd 0x22) -- LUTKW. 0x5A = "more white" pull-up pattern from
+ * GxEPD2; gives a slightly cleaner white than the textbook 0x48. */
+static const uint8_t LUT_KW_PARTIAL[42] = {
+    0x5A, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+};
+
+/* W->K (cmd 0x23) -- LUTWK. 0x84 = pull-down pattern. */
+static const uint8_t LUT_WK_PARTIAL[42] = {
+    0x84, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+};
+
+/* K->K (cmd 0x24) -- LUTKK. Zero level: no drive. */
+static const uint8_t LUT_KK_PARTIAL[42] = {
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+};
+
+/* Border (cmd 0x25) -- LUTBD. Zero level: no border drive, no flash. */
+static const uint8_t LUT_BD_PARTIAL[42] = {
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+};
+
+static void send_lut(uint8_t cmd, const uint8_t *lut)
+{
+    send_command(cmd);
+    send_buffer(lut, 42);
+}
+#endif /* CONFIG_DRAFTLING_EPD_FAST_PARTIAL */
+
 /* ---- public API ---- */
 
 extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
@@ -358,11 +423,73 @@ extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
 
 /* ---- refresh helpers ---- */
 
+#if defined(CONFIG_DRAFTLING_EPD_FAST_PARTIAL)
+/* Switch the panel into fast-partial mode: load custom LUTs into
+ * registers 0x20-0x25, set PSR to use those registers (KW = 0x3F)
+ * instead of the OTP waveform (BWOTP = 0x1F), and tweak CDI/VDCS to
+ * the partial-mode values from the GxEPD2 reference. Cheap to re-call
+ * but we still gate on s_in_partial_mode so that a burst of partial
+ * refreshes only pays the LUT upload once.
+ *
+ * Must be called before issuing PTIN/PTL/DTM*/DRF for a partial. */
+static void epd_enter_partial_mode(void)
+{
+    if (s_in_partial_mode) return;
+
+    send_command(UC8179_CMD_PSR);
+    send_data(0x3F);                       /* KW, register-LUT mode */
+
+    send_command(UC8179_CMD_VDCS);
+    send_data(0x26);                       /* VCOM_DC = -2.0 V (partial) */
+
+    send_command(UC8179_CMD_CDI);
+    send_data(0x39);                       /* LUTBD border, N2OCP copy new->old */
+    send_data(0x07);
+
+    send_lut(0x20, LUT_VCOM_PARTIAL);
+    send_lut(0x21, LUT_WW_PARTIAL);
+    send_lut(0x22, LUT_KW_PARTIAL);
+    send_lut(0x23, LUT_WK_PARTIAL);
+    send_lut(0x24, LUT_KK_PARTIAL);
+    send_lut(0x25, LUT_BD_PARTIAL);
+
+    s_in_partial_mode = true;
+}
+
+/* Restore the OTP full-refresh waveform and the original CDI/VDCS so
+ * that the next display_full_refresh() does a proper ghost-clearing
+ * pass instead of the gentle partial-mode drive. */
+static void epd_enter_full_mode(void)
+{
+    if (!s_in_partial_mode) return;
+
+    send_command(UC8179_CMD_PSR);
+    send_data(0x1F);                       /* KW-BF, BWOTP, scan up, shift right */
+
+    send_command(UC8179_CMD_VDCS);
+    send_data(0x22);                       /* VCOM_DC, original init value */
+
+    send_command(UC8179_CMD_CDI);
+    send_data(0x10);                       /* white border, default interval */
+    send_data(0x07);
+
+    s_in_partial_mode = false;
+}
+#else
+static inline void epd_enter_partial_mode(void) {}
+static inline void epd_enter_full_mode(void)    {}
+#endif
+
 /* Send the entire framebuffer using the full-update waveform.
  * Always called from display_full_refresh() and as a fallback when the
  * partial-refresh interval expires or every byte of the frame changed. */
 static void epd_full_refresh(void)
 {
+    /* Full refresh always uses the OTP ghost-clearing waveform; if we
+     * had switched into fast-partial mode for typing, restore the
+     * full-mode PSR/CDI/VDCS first. */
+    epd_enter_full_mode();
+
     /* Old data buffer (DTM1) -- the previous frame so the controller
      * has a valid reference when generating the full waveform. */
     send_command(UC8179_CMD_DTM1);
@@ -426,6 +553,11 @@ static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
         epd_full_refresh();
         return;
     }
+
+    /* Load the fast-partial LUTs (and switch PSR to register-LUT mode)
+     * the first time we do a partial after init or after a full refresh.
+     * No-op on subsequent partials and on builds without the option. */
+    epd_enter_partial_mode();
 
     send_command(UC8179_CMD_PTIN);
 

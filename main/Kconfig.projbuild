@@ -170,6 +170,31 @@ config DRAFTLING_EPD_INVERT
         Leave disabled for the reTerminal E1001 and for HAT panels that
         already render correctly.
 
+config DRAFTLING_EPD_FAST_PARTIAL
+    bool "Fast partial-refresh LUTs (Waveshare 7.5\" V2 / GDEW075T7)"
+    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default y
+    help
+        Load custom UC8179 partial-refresh LUTs into registers 0x20-0x25
+        and switch the panel to register-LUT mode (PSR = 0x3F) for
+        partial refreshes. The LUTs are the single-stage waveform from
+        the GxEPD2 community library for the GDEW075T7 panel: pixels
+        whose color does not change get zero drive, so the screen border
+        stops flashing on every keystroke and a partial refresh
+        completes in a single ~600 ms pulse instead of the OTP
+        waveform's three full-frame sweeps.
+
+        Periodic full refreshes still use the OTP LUT (PSR = 0x1F) for
+        proper ghost clearing; the driver flips PSR/CDI/VDCS lazily on
+        each mode transition.
+
+        Recommended for the standalone Waveshare 7.5" V2 BW panels sold
+        for the E-Paper Driver HAT. Disable if your panel ghosts badly
+        with this enabled or shows wrong colors -- some 7.5" variants
+        (notably the panel soldered to the Seeed reTerminal E1001) have
+        a different OTP that already supports proper partial windows
+        and does not need this workaround.
+
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
