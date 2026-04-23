@@ -967,6 +967,13 @@ static void apply_list_selection_styles(lv_obj_t *list, int sel)
             lv_obj_set_style_text_color(child, lv_color_black(), 0);
         }
     }
+    /* After a full rebuild make sure the selected row is on screen.
+     * Without this, a list taller than the panel (e.g. on PaperS3 at
+     * DRAFTLING_DISPLAY_SCALE >= 2) keeps its previous scroll offset
+     * and the highlight may land outside the visible area. */
+    if (sel >= 0 && (uint32_t)sel < count) {
+        lv_obj_scroll_to_view(lv_obj_get_child(list, sel), LV_ANIM_OFF);
+    }
 }
 
 /* Move the highlight from `prev_sel` to `sel` by restyling only those
@@ -988,6 +995,12 @@ static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel)
         lv_obj_set_style_bg_color(cur, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(cur, LV_OPA_COVER, 0);
         lv_obj_set_style_text_color(cur, lv_color_white(), 0);
+        /* Scroll the list so the highlighted row is always visible.
+         * Needed when the list is taller than the panel (e.g. on
+         * PaperS3 with DRAFTLING_DISPLAY_SCALE = 3, where only a few
+         * items fit on screen).  LV_ANIM_OFF avoids smooth-scroll
+         * animation, which would force many extra e-paper refreshes. */
+        lv_obj_scroll_to_view(cur, LV_ANIM_OFF);
     }
 }
 
