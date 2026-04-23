@@ -1104,60 +1104,32 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
 
 /* ---- BLE init task (runs in its own FreeRTOS task) ---- */
 
-/* The full BT stack bring-up runs in a dedicated task because
- * esp_hidh_init() internally calls esp_ble_gattc_app_register()
- * which blocks on a semaphore waiting for the BTC task to confirm
- * the registration.  Running this from app_main can deadlock
- * because app_main sits at priority 1 on core 0 and the BTC task
- * may not get enough CPU time to process the request while
- * app_main is blocked.  A dedicated task at priority 3 avoids
- * this and also allows the rest of app_main to proceed. */
+/* HIDH bring-up runs in a dedicated task because esp_hidh_init()
+ * internally calls esp_ble_gattc_app_register() which blocks on a
+ * semaphore waiting for the BTC task to confirm the registration.
+ * Running this from app_main can deadlock because app_main sits at
+ * priority 1 on core 0 and the BTC task may not get enough CPU
+ * time to process the request while app_main is blocked.  A
+ * dedicated task at priority 3 avoids this and also allows the
+ * rest of app_main to proceed.
+ *
+ * The earlier steps (Classic mem release, BT controller init/enable
+ * and Bluedroid init/enable) are now performed synchronously from
+ * ble_keyboard_init() instead of from this task.  Doing them
+ * synchronously is important on memory-constrained boards (notably
+ * the M5Stack PaperS3, where M5GFX/LovyanGFX statics leave only
+ * ~191 KB of internal heap on boot): if Bluedroid bring-up races
+ * with esp_wifi_init() in main(), WiFi can grab enough internal RAM
+ * that BTU_StartUp later fails to allocate its workqueue and the
+ * device asserts and reboots in a loop. */
 
 static void ble_init_task(void *arg)
 {
     (void)arg;
 
-    /* Load bonded device list from NVS */
-    bonded_load();
-
-    /* Release Classic BT memory (ESP32-S3 is BLE-only) */
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-    ESP_LOGI(TAG, "Classic BT memory released");
-
-    /* Initialize BT controller in BLE mode */
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
-    ESP_LOGI(TAG, "BT controller enabled (BLE mode)");
-
-    /* Initialize Bluedroid */
-    ESP_ERROR_CHECK(esp_bluedroid_init());
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-    ESP_LOGI(TAG, "Bluedroid enabled");
-
-    /* Register the GATTC callback BEFORE esp_hidh_init().
-     *
-     * esp_ble_hidh_init() (called internally by esp_hidh_init)
-     * calls esp_ble_gattc_app_register() and then waits on a
-     * semaphore for the ESP_GATTC_REG_EVT callback.  However,
-     * esp_ble_hidh_init() does NOT register the GATTC callback
-     * itself -- it relies on the caller to attach
-     * esp_hidh_gattc_event_handler via
-     * esp_ble_gattc_register_callback() beforehand.
-     *
-     * Without this registration, the GATTC registration event is
-     * never delivered, the semaphore is never signalled, and
-     * esp_hidh_init() blocks forever.
-     *
-     * See esp_hidh_gattc.h and the official ESP-IDF HID host
-     * example (examples/bluetooth/esp_hid_host). */
-    ESP_ERROR_CHECK(
-        esp_ble_gattc_register_callback(esp_hidh_gattc_event_handler));
-    ESP_LOGI(TAG, "GATTC callback registered");
-
     /* Initialize HIDH (HID Host).  The GATTC callback must already
-     * be registered (above) so that esp_ble_hidh_init can receive
-     * the ESP_GATTC_REG_EVT and unblock. */
+     * be registered (in ble_keyboard_init) so that esp_ble_hidh_init
+     * can receive the ESP_GATTC_REG_EVT and unblock. */
     {
         esp_hidh_config_t hidh_cfg = {};
         hidh_cfg.callback = hidh_callback;
@@ -1254,6 +1226,61 @@ static void ble_init_task(void *arg)
 
 extern "C" void ble_keyboard_init(void)
 {
+    /* Synchronous bring-up of the BT controller and Bluedroid stack.
+     *
+     * These steps are deliberately performed in the caller's
+     * context (not in ble_init_task) so that ble_keyboard_init()
+     * does not return until the Bluedroid workqueues and timers
+     * have been allocated.  This guarantees that anything the
+     * caller does next -- in particular esp_wifi_init() in
+     * wifi_manager_init() -- cannot starve Bluedroid of internal
+     * RAM mid-bring-up.  On boards with little internal heap
+     * (e.g. M5Stack PaperS3) the previous fully-async layout
+     * caused BTU_StartUp to fail allocating its workqueue and the
+     * device rebooted in a loop. */
+
+    /* Load bonded device list from NVS */
+    bonded_load();
+
+    /* Release Classic BT memory (ESP32-S3 is BLE-only) */
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+    ESP_LOGI(TAG, "Classic BT memory released");
+
+    /* Initialize BT controller in BLE mode */
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
+    ESP_LOGI(TAG, "BT controller enabled (BLE mode)");
+
+    /* Initialize Bluedroid */
+    ESP_ERROR_CHECK(esp_bluedroid_init());
+    ESP_ERROR_CHECK(esp_bluedroid_enable());
+    ESP_LOGI(TAG, "Bluedroid enabled");
+
+    /* Register the GATTC callback BEFORE esp_hidh_init().
+     *
+     * esp_ble_hidh_init() (called internally by esp_hidh_init)
+     * calls esp_ble_gattc_app_register() and then waits on a
+     * semaphore for the ESP_GATTC_REG_EVT callback.  However,
+     * esp_ble_hidh_init() does NOT register the GATTC callback
+     * itself -- it relies on the caller to attach
+     * esp_hidh_gattc_event_handler via
+     * esp_ble_gattc_register_callback() beforehand.
+     *
+     * Without this registration, the GATTC registration event is
+     * never delivered, the semaphore is never signalled, and
+     * esp_hidh_init() blocks forever.
+     *
+     * See esp_hidh_gattc.h and the official ESP-IDF HID host
+     * example (examples/bluetooth/esp_hid_host). */
+    ESP_ERROR_CHECK(
+        esp_ble_gattc_register_callback(esp_hidh_gattc_event_handler));
+    ESP_LOGI(TAG, "GATTC callback registered");
+
+    /* Spawn ble_init_task to handle esp_hidh_init() and the
+     * subsequent scan/security setup asynchronously.  HIDH init
+     * itself blocks on a semaphore that the BTC task signals, so
+     * it must not run on the priority-1 main task. */
     xTaskCreate(ble_init_task, "ble_init", BLE_INIT_TASK_STACK,
                 NULL, 3, NULL);
 }
