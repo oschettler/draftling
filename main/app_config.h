@@ -126,11 +126,16 @@
  * the display driver (SD card, wakeup, optional I2C).
  */
 
-/* Onboard MicroSD on a dedicated SPI host (SPI3 - SPI2 is used by the
- * LCD peripheral on the PaperS3). */
-#define SD_SPI_MOSI_PIN 6
-#define SD_SPI_MISO_PIN 8
-#define SD_SPI_SCK_PIN  7
+/* Onboard MicroSD on a dedicated SPI host (SPI3 - the EPD parallel bus
+ * driven by M5GFX claims GPIO 6-18 plus 45/46 for its data/control
+ * lines, so the SD slot must use a separate set of pins).
+ *
+ * Pin assignments verified against the M5Stack PaperS3 hardware
+ * reference and the FastEPD/Arduino "papers3_screenshot" example:
+ *   CS=47, SCK=39, MOSI=38, MISO=40. */
+#define SD_SPI_MOSI_PIN 38
+#define SD_SPI_MISO_PIN 40
+#define SD_SPI_SCK_PIN  39
 #define SD_SPI_CS_PIN   47
 #define SD_EN_PIN       -1
 
