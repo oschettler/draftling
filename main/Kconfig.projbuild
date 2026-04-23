@@ -108,6 +108,29 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
     default 180 if DRAFTLING_DISPLAY_ROTATE_180
     default 270 if DRAFTLING_DISPLAY_ROTATE_270
 
+config DRAFTLING_DISPLAY_SCALE
+    int "Display scale factor (logical pixel size)"
+    range 1 4
+    default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 1
+    help
+        Integer pixel-doubling factor. Every logical LVGL pixel is
+        rendered as SCALE x SCALE physical panel pixels using nearest-
+        neighbor expansion. The editor and LVGL canvas operate in
+        logical coordinates (panel size divided by SCALE); only the
+        display backend scales up when pushing to the panel.
+
+        SCALE = 1 (the default for the RLCD, reTerminal and HAT
+        boards) means no scaling -- one LVGL pixel equals one panel
+        pixel. SCALE = 2 (the default for the M5Stack PaperS3, whose
+        panel is a high-density 540 x 960) makes text comfortably
+        readable without changing the bitmap fonts. The panel
+        dimensions (CONFIG_DRAFTLING_DISPLAY_WIDTH / HEIGHT) must be
+        evenly divisible by this factor.
+
+        Currently only the M5Stack PaperS3 backend implements
+        scaling; on the other backends SCALE > 1 has no effect.
+
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3

@@ -123,7 +123,12 @@ Per-board display backends behind a single C API:
   optional one-shot `display_set_partial_clip(x,y,w,h)` API lets the
   editor narrow the next refresh to the area around the typed
   character (cursor + edited columns) when it knows the rest of the
-  LVGL-pushed line pixels are unchanged. Grayscale UI is still TODO.
+  LVGL-pushed line pixels are unchanged. The backend also honours
+  `CONFIG_DRAFTLING_DISPLAY_SCALE` (default 2 on PaperS3): every
+  logical LVGL pixel is rendered as SCALE x SCALE physical panel
+  pixels via nearest-neighbor expansion in `display_push_rgb565()`,
+  and the dirty-bbox / partial-clip math is converted to panel
+  coordinates internally. Grayscale UI is still TODO.
 - **lvgl_port.cpp** -- creates the LVGL display object, sets up a
   flush callback that first tries `display_push_rgb565()` (used by
   the PaperS3 backend) and otherwise converts LVGL's RGB565 output
@@ -204,7 +209,12 @@ Monitors user inactivity and enters ESP32 deep sleep after a configurable
 timeout (default 600 seconds / 10 minutes). The timeout is persisted in
 NVS so it survives reboots. A pre-sleep callback allows the editor to
 auto-save before power-down. On the Waveshare RLCD board, wakeup is
-triggered by pressing the GPIO18 button (EXT0, active-low).
+triggered by pressing the GPIO18 button (EXT0, active-low). On the
+M5Stack PaperS3 the wake source is the GT911 touch-panel INT line on
+GPIO48 (active-low); since GPIO48 is not an RTC GPIO, the board uses
+light sleep with `gpio_wakeup_enable()` and follows it with
+`esp_restart()` so the rest of the firmware sees the same cold-boot
+semantics as the deep-sleep boards.
 
 Public API: `standby_init()`, `standby_reset_timer()`,
 `standby_set_timeout()`, `standby_set_pre_sleep_cb()`,
@@ -330,7 +340,9 @@ SOC_BLE_SUPPORTED`):
   ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
-  library, on-board MicroSD on SPI3, GPIO21 (power button) wakeup.
+  library, on-board MicroSD on SPI3, GT911 touch-panel INT on
+  GPIO48 used as the wake source (light sleep + restart -- GPIO48
+  is not an RTC GPIO so EXT0 deep sleep is unavailable).
   *Requires ESP32-S3.*
 
 The hardware model selection drives two `int` symbols consumed in
@@ -376,6 +388,19 @@ A `choice` that sets the display rotation angle. Options are 0, 90, 180,
 and 270 degrees. The default is 0 (no rotation). The selected angle is
 exposed as the hidden `int` symbol **DRAFTLING_DISPLAY_ROTATE_ANGLE**,
 consumed in `app_config.h` as `DISPLAY_ROTATE`.
+
+#### Display scale factor (DRAFTLING_DISPLAY_SCALE)
+
+`int` (range 1-4). Logical pixel size: every LVGL pixel is rendered as
+SCALE x SCALE physical panel pixels via nearest-neighbor expansion in
+the display backend. The editor and LVGL canvas operate in *logical*
+coordinates (panel size divided by SCALE); only the display backend
+deals in physical panel pixels. Defaults: 2 for the M5Stack PaperS3 (so
+the high-density 540x960 panel renders Greybeard text at a comfortably
+readable size), 1 for every other board. Currently only the
+`display_eds3` backend implements the up-scaling; on the RLCD and
+UC8179 backends a value > 1 has no visible effect because their LVGL
+framebuffers already match their panel sizes.
 
 ### components/kb_layout/Kconfig.projbuild -- Keyboard Layouts
 

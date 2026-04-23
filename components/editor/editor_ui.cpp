@@ -46,14 +46,18 @@
 
 static const char *TAG = "EditorUI";
 
-/* Layout constants -- account for display rotation.
+/* Layout constants -- account for display rotation and the logical
+ * pixel scale factor (CONFIG_DRAFTLING_DISPLAY_SCALE). The editor
+ * lives entirely in logical pixels; the display backend scales each
+ * logical pixel to SCALE x SCALE physical panel pixels.
+ *
  * At 90 or 270 degrees, the logical width and height are swapped. */
 #if CONFIG_DRAFTLING_DISPLAY_ROTATE_ANGLE == 90 || CONFIG_DRAFTLING_DISPLAY_ROTATE_ANGLE == 270
-#define SCR_W        CONFIG_DRAFTLING_DISPLAY_HEIGHT
-#define SCR_H        CONFIG_DRAFTLING_DISPLAY_WIDTH
+#define SCR_W        (CONFIG_DRAFTLING_DISPLAY_HEIGHT / CONFIG_DRAFTLING_DISPLAY_SCALE)
+#define SCR_H        (CONFIG_DRAFTLING_DISPLAY_WIDTH  / CONFIG_DRAFTLING_DISPLAY_SCALE)
 #else
-#define SCR_W        CONFIG_DRAFTLING_DISPLAY_WIDTH
-#define SCR_H        CONFIG_DRAFTLING_DISPLAY_HEIGHT
+#define SCR_W        (CONFIG_DRAFTLING_DISPLAY_WIDTH  / CONFIG_DRAFTLING_DISPLAY_SCALE)
+#define SCR_H        (CONFIG_DRAFTLING_DISPLAY_HEIGHT / CONFIG_DRAFTLING_DISPLAY_SCALE)
 #endif
 #define HEADER_H     16
 #define STATUS_H     16

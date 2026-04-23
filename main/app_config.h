@@ -7,6 +7,15 @@
 #define DISPLAY_HEIGHT  CONFIG_DRAFTLING_DISPLAY_HEIGHT
 #define DISPLAY_ROTATE  CONFIG_DRAFTLING_DISPLAY_ROTATE_ANGLE
 
+/* Logical pixel size: every logical LVGL pixel is rendered as
+ * DISPLAY_SCALE x DISPLAY_SCALE panel pixels by the display backend
+ * (nearest-neighbor expansion). The editor and LVGL canvas use
+ * DISPLAY_LOGICAL_WIDTH / DISPLAY_LOGICAL_HEIGHT; only the display
+ * backend deals in physical panel pixels. */
+#define DISPLAY_SCALE          CONFIG_DRAFTLING_DISPLAY_SCALE
+#define DISPLAY_LOGICAL_WIDTH  (DISPLAY_WIDTH  / DISPLAY_SCALE)
+#define DISPLAY_LOGICAL_HEIGHT (DISPLAY_HEIGHT / DISPLAY_SCALE)
+
 /* SD Card mount point (shared across all hardware models) */
 #define SD_MOUNT_POINT  "/sdcard"
 
@@ -149,8 +158,18 @@
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
 
-/* Deep-sleep wakeup on the PaperS3 power button (GPIO21, active-low) */
-#define WAKEUP_GPIO_NUM 21
+/* Deep-sleep wakeup on the PaperS3 touch panel INT (GPIO48,
+ * active-low). M5Unified uses the same pin as its wake source.
+ *
+ * Note: GPIO48 is NOT an RTC GPIO on the ESP32-S3, so the standby
+ * manager cannot use it with esp_sleep_enable_ext0_wakeup; it falls
+ * back to light sleep + esp_restart() on this board. (The previous
+ * mapping to GPIO21 in this file was wrong -- GPIO21 is the on-board
+ * buzzer/speaker pin on PaperS3, which would either fail to pair as
+ * EXT0 or wake the device immediately depending on the speaker
+ * driver state. See components/standby/standby.cpp for the wake
+ * implementation.) */
+#define WAKEUP_GPIO_NUM 48
 
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."

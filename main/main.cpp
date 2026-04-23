@@ -72,9 +72,14 @@ extern "C" void app_main(void)
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #endif
 
-    /* Initialize LVGL */
+    /* Initialize LVGL.
+     *
+     * LVGL renders in *logical* pixels (panel size / DISPLAY_SCALE).
+     * The display backend is responsible for scaling each logical
+     * pixel to a SCALE x SCALE block of physical panel pixels. With
+     * SCALE = 1 the logical and panel dimensions are identical. */
     ESP_LOGI(TAG, "Initializing LVGL...");
-    lvgl_port_init(DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_ROTATE);
+    lvgl_port_init(DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT, DISPLAY_ROTATE);
 
     /* Initialize battery voltage monitor before the UI so the editor
      * status bar can show the battery level immediately. battery_init

@@ -83,6 +83,15 @@ static M5GFX s_gfx;
 static int   s_width  = 0;
 static int   s_height = 0;
 
+/* Logical-to-panel pixel scale. Read from Kconfig at compile time.
+ * Each logical LVGL pixel is rendered as SCALE x SCALE physical
+ * panel pixels. */
+#ifdef CONFIG_DRAFTLING_DISPLAY_SCALE
+#define EDS3_SCALE CONFIG_DRAFTLING_DISPLAY_SCALE
+#else
+#define EDS3_SCALE 1
+#endif
+
 /* Dirty bounding box accumulated since the last display_flush(). */
 static int  s_dx0 = 0, s_dy0 = 0, s_dx1 = -1, s_dy1 = -1;
 /* True if the next flush must be a full-screen quality refresh. */
@@ -206,10 +215,12 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * keeps the post-init steady state unambiguous). */
     s_last_flush_us = esp_timer_get_time();
 
-    ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d), "
-                  "partial refresh every flush, full refresh every "
-                  "%d partials",
-             s_width, s_height, EDS3_FULL_REFRESH_INTERVAL);
+    ESP_LOGI(TAG, "PaperS3 display initialized via M5GFX (%dx%d panel, "
+                  "scale=%d -> %dx%d logical), partial refresh every "
+                  "flush, full refresh every %d partials",
+             s_width, s_height, EDS3_SCALE,
+             s_width / EDS3_SCALE, s_height / EDS3_SCALE,
+             EDS3_FULL_REFRESH_INTERVAL);
 }
 
 extern "C" void display_clear(uint8_t color)
@@ -226,10 +237,57 @@ extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
 {
     /* Slow per-pixel path. lvgl_port.cpp normally bypasses this via
      * the display_push_rgb565() fast path; this function exists only
-     * to satisfy the legacy display.h API. */
-    if ((int)x >= s_width || (int)y >= s_height) return;
-    s_gfx.drawPixel(x, y, (color != 0) ? TFT_WHITE : TFT_BLACK);
-    mark_dirty_rect(x, y, 1, 1);
+     * to satisfy the legacy display.h API. Coordinates are *logical*
+     * pixels -- expand to a SCALE x SCALE block of panel pixels. */
+    int px = (int)x * EDS3_SCALE;
+    int py = (int)y * EDS3_SCALE;
+    if (px >= s_width || py >= s_height) return;
+    int pw = EDS3_SCALE;
+    int ph = EDS3_SCALE;
+    if (px + pw > s_width)  pw = s_width  - px;
+    if (py + ph > s_height) ph = s_height - py;
+    s_gfx.fillRect(px, py, pw, ph,
+                   (color != 0) ? TFT_WHITE : TFT_BLACK);
+    mark_dirty_rect(px, py, pw, ph);
+}
+
+/* Scale a logical RGB565 image into a freshly-allocated panel-pixel
+ * RGB565 buffer using nearest-neighbor (each source pixel becomes a
+ * SCALE x SCALE block). Returns the new buffer (caller frees with
+ * heap_caps_free), or nullptr on allocation failure. */
+static uint16_t *scale_rgb565_2x_or_more(const uint16_t *src,
+                                         int sw, int sh, int scale)
+{
+    int dw = sw * scale;
+    int dh = sh * scale;
+    size_t bytes = (size_t)dw * dh * sizeof(uint16_t);
+    uint16_t *dst = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (dst == nullptr) {
+        /* Fall back to internal RAM for tiny buffers (e.g. the cursor
+         * blink) when PSRAM is exhausted. */
+        dst = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+        if (dst == nullptr) return nullptr;
+    }
+    /* Two-step expand: first row-replicate horizontally into the
+     * destination's first row of each block, then memcpy the rest of
+     * each block from that row. This is cache-friendlier than a
+     * naive nested loop and amortises the per-pixel branch. */
+    for (int sy = 0; sy < sh; sy++) {
+        uint16_t *drow0 = dst + (size_t)sy * scale * dw;
+        const uint16_t *srow = src + (size_t)sy * sw;
+        /* Horizontal expansion into the first row of the block. */
+        uint16_t *p = drow0;
+        for (int sx = 0; sx < sw; sx++) {
+            uint16_t v = srow[sx];
+            for (int k = 0; k < scale; k++) *p++ = v;
+        }
+        /* Replicate that row scale-1 more times. */
+        for (int k = 1; k < scale; k++) {
+            memcpy(drow0 + (size_t)k * dw, drow0,
+                   (size_t)dw * sizeof(uint16_t));
+        }
+    }
+    return dst;
 }
 
 extern "C" bool display_push_rgb565(int x, int y, int w, int h,
@@ -239,10 +297,31 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
     if (w <= 0 || h <= 0) return false;
     /* M5GFX's pushImage accepts an rgb565_t* and writes into its
      * internal grayscale framebuffer. It does NOT trigger a panel
-     * refresh - that happens in display_flush(). */
-    s_gfx.pushImage(x, y, w, h,
-                    (const lgfx::v1::rgb565_t *)color_map);
-    mark_dirty_rect(x, y, w, h);
+     * refresh - that happens in display_flush().
+     *
+     * Coordinates and the source buffer are in *logical* pixels;
+     * scale up to panel pixels using nearest-neighbor expansion. */
+    int px = x * EDS3_SCALE;
+    int py = y * EDS3_SCALE;
+    int pw = w * EDS3_SCALE;
+    int ph = h * EDS3_SCALE;
+    if (EDS3_SCALE == 1) {
+        s_gfx.pushImage(px, py, pw, ph,
+                        (const lgfx::v1::rgb565_t *)color_map);
+    } else {
+        uint16_t *scaled = scale_rgb565_2x_or_more(
+            (const uint16_t *)color_map, w, h, EDS3_SCALE);
+        if (scaled == nullptr) {
+            ESP_LOGE(TAG,
+                     "scale_rgb565: out of memory for %dx%d -> %dx%d",
+                     w, h, pw, ph);
+            return false;
+        }
+        s_gfx.pushImage(px, py, pw, ph,
+                        (const lgfx::v1::rgb565_t *)scaled);
+        heap_caps_free(scaled);
+    }
+    mark_dirty_rect(px, py, pw, ph);
     return true;
 }
 
@@ -388,10 +467,13 @@ extern "C" void display_set_partial_clip(int x, int y, int w, int h)
         s_clip_set = false;
         return;
     }
-    int x0 = x;
-    int y0 = y;
-    int x1 = x + w - 1;
-    int y1 = y + h - 1;
+    /* Caller passes *logical* coordinates; the dirty-bbox machinery
+     * (and ultimately M5GFX::display) works in panel coordinates, so
+     * scale the clip rect up before clamping/unioning. */
+    int x0 = x * EDS3_SCALE;
+    int y0 = y * EDS3_SCALE;
+    int x1 = (x + w) * EDS3_SCALE - 1;
+    int y1 = (y + h) * EDS3_SCALE - 1;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 >= s_width)  x1 = s_width  - 1;
