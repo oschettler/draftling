@@ -104,15 +104,19 @@ Per-board display backends behind a single C API:
 - **display_uc8179.cpp** -- UC8179 e-paper over SPI. Shared by the
   Seeed reTerminal E1001 and the Waveshare E-Paper Driver HAT;
   resolution and pinout (including BUSY) are passed in at init.
-  When `DRAFTLING_EPD_FAST_PARTIAL` is enabled (default on the HAT
-  model) the driver loads custom single-stage partial-refresh LUTs
-  into UC8179 registers `0x20`-`0x25` and switches PSR to
+  When `DRAFTLING_EPD_FAST_PARTIAL` is enabled (off by default; opt-in
+  on the HAT model) the driver loads custom single-stage partial-refresh
+  LUTs into UC8179 registers `0x20`-`0x25` and switches PSR to
   register-LUT mode (`0x3F`) on the first partial after init or after
   a periodic full refresh. Unchanged-pixel LUT entries are zero-drive
   so the screen border stops flashing on every keystroke. Mode is
   switched lazily so a burst of partials shares one upload; the
   full-refresh path restores PSR `0x1F` for the OTP ghost-clearing
-  waveform.
+  waveform. The LUT timings are calibrated against one specific
+  GDEW075T7 panel revision and may need re-tuning for other 7.5"
+  panels -- if typing produces only cursor strokes with no letter
+  glyphs, leave this option off to use the panel's OTP waveform
+  (with border flash on every refresh).
 - **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
   `m5stack/M5GFX` managed component. Unlike the other backends this
   one does not maintain its own 1-bpp framebuffer; M5GFX already
@@ -415,15 +419,16 @@ driver without touching anything else.
 #### Fast partial-refresh LUTs (DRAFTLING_EPD_FAST_PARTIAL)
 
 `bool` available only on the HAT model (`DRAFTLING_MODEL_WAVESHARE_EPD_HAT`),
-default `y`. Loads custom UC8179 partial-refresh LUTs into registers
+default `n`. Loads custom UC8179 partial-refresh LUTs into registers
 `0x20`-`0x25` and switches the panel to register-LUT mode (PSR = `0x3F`)
 the first time a partial refresh runs. The LUTs are the single-stage
 waveform from the GxEPD2 community library for the GDEW075T7 panel
-(Waveshare 7.5" V2 BW); the key property is that the W->W and K->K
-entries use level byte `0x00`, i.e. unchanged pixels receive **no
-voltage**, so the screen border stops flashing on every keystroke and
-each partial refresh completes in a single ~600 ms pulse instead of
-the OTP waveform's three full-frame sweeps.
+(Waveshare 7.5" V2 BW): `KW=0x5A, WK=0x84`, timing
+`T1=30, T2=5, T3=30, T4=5, RP=1`. The key property is that the W->W
+and K->K entries use level byte `0x00`, i.e. unchanged pixels receive
+**no voltage**, so the screen border stops flashing on every keystroke
+and each partial refresh completes in a single ~600 ms pulse instead
+of the OTP waveform's three full-frame sweeps.
 
 The driver tracks current mode and switches lazily: a burst of partial
 refreshes pays the LUT-upload cost only once. The periodic full
@@ -431,10 +436,13 @@ refresh (every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials) restores
 PSR = `0x1F` and the original CDI/VDCS so it still does a proper
 ghost-clearing OTP pass.
 
-Disable if a particular HAT panel ghosts badly with this enabled or
-shows wrong colors -- some 7.5" variants have OTP that already supports
-proper partial windows. The reTerminal E1001 panel is one such
-variant, which is why the option is gated to the HAT model only.
+Disabled by default because the LUT level/timing bytes are calibrated
+for one specific 7.5" V2 BW panel revision and have produced garbled
+output on others (only the cursor stroke renders, letter glyphs do
+not appear). With this option off the driver falls back to the panel's
+OTP partial waveform, which always works on UC8179 panels but flashes
+the border once per refresh. Enable only if your HAT panel renders
+text correctly with no border flash.
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 

@@ -228,58 +228,62 @@ static bool s_in_partial_mode = false;
 /* Single-stage partial-refresh LUTs taken verbatim from the GxEPD2
  * community library's GxEPD2_750_T7 driver (GDEW075T7 panel, UC8179
  * controller). These are the exact values shipped in production by
- * GxEPD2 and known to work on the Waveshare 7.5" V2 BW HAT panel.
+ * GxEPD2 and known to work on the Waveshare 7.5" V2 BW panel.
  *
- * The UC8179 expects 42 bytes per LUT (7 stages x 6 bytes); only the
- * first stage is active here -- the remaining six are zero-padded
- * (RP=0) so the controller skips them. Per-stage layout:
- *   byte 0    : level select (LV0..LV3, two bits per sub-phase A..D;
- *               00=GND, 01=VDH, 10=VDL, 11=VDHR)
- *   bytes 1-4 : frame counts TP[A..D]
- *   byte 5    : stage repeat count (RP)
+ * The UC8179 expects 42 bytes per LUT (7 stages x 6 bytes); we use
+ * one active stage and zero-pad the remaining six. Each stage encodes
+ * the source-driver level byte plus four frame-count fields T1..T4
+ * and an RP (stage repeat) count:
+ *   T1 -- charge-balance pre-phase frames
+ *   T2 -- optional extension of T1
+ *   T3 -- color-change phase frames (the actual transition pulse)
+ *   T4 -- optional extension of T3
+ *   RP -- number of times to repeat the stage
  *
- * Critical property: LUTWW and LUTKK use level byte 0x00, i.e. all
- * sub-phases at GND -> unchanged pixels receive **no drive**. That is
- * what suppresses the full-screen border flash on each partial refresh:
- * only pixels that actually transitioned (KW and WK) get any pulse.
+ * Critical property: LUTWW and LUTKK use level byte 0x00, i.e. no
+ * drive for unchanged pixels. That is what suppresses the full-screen
+ * border flash on each partial refresh -- only pixels that actually
+ * transitioned (KW and WK) receive any pulse.
  *
- * Earlier revisions of this driver used different level bytes
- * (0x5A/0x84) and a longer 4-sub-phase timing (T1=30,T2=5,T3=30,T4=5);
- * those values do not produce a usable transition on the GDEW075T7 and
- * caused the symptom of "old ink remains where the cursor was, no new
- * letters where typed." The values below are the GxEPD2 originals. */
+ * NB: an earlier revision of this driver used T3 = 0 (no color-change
+ * phase) which meant pixels never got the actual transition pulse, so
+ * letters never appeared on screen even though the cursor stroke did.
+ * Keep T3 nonzero. */
+#define EPD_PART_T1 30
+#define EPD_PART_T2  5
+#define EPD_PART_T3 30
+#define EPD_PART_T4  5
 
 /* VCOM (cmd 0x20) -- LUTC. */
 static const uint8_t LUT_VCOM_PARTIAL[42] = {
-    0x00, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
     /* remaining 6 stages zero-padded (RP=0 -> skipped) */
 };
 
 /* W->W (cmd 0x21) -- LUTWW. Level 0x00: no drive on unchanged white. */
 static const uint8_t LUT_WW_PARTIAL[42] = {
-    0x00, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->W (cmd 0x22) -- LUTKW. Level 0x80: VDL on sub-phase A (drive the
- * pixel toward white per the panel's KW data convention). */
+/* K->W (cmd 0x22) -- LUTKW. 0x5A = "more white" pull-up pattern from
+ * GxEPD2; gives a slightly cleaner white than the textbook 0x48. */
 static const uint8_t LUT_KW_PARTIAL[42] = {
-    0x80, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x5A, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* W->K (cmd 0x23) -- LUTWK. Level 0x40: VDH on sub-phase A (drive the
- * pixel toward black). */
+/* W->K (cmd 0x23) -- LUTWK. 0x84 = pull-down pattern. */
 static const uint8_t LUT_WK_PARTIAL[42] = {
-    0x40, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x84, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* K->K (cmd 0x24) -- LUTKK. Level 0x00: no drive on unchanged black. */
 static const uint8_t LUT_KK_PARTIAL[42] = {
-    0x00, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* Border (cmd 0x25) -- LUTBD. Level 0x00: no border drive, no flash. */
 static const uint8_t LUT_BD_PARTIAL[42] = {
-    0x00, 0x19, 0x01, 0x00, 0x00, 0x01,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 static void send_lut(uint8_t cmd, const uint8_t *lut)

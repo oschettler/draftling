@@ -173,7 +173,7 @@ config DRAFTLING_EPD_INVERT
 config DRAFTLING_EPD_FAST_PARTIAL
     bool "Fast partial-refresh LUTs (Waveshare 7.5\" V2 / GDEW075T7)"
     depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-    default y
+    default n
     help
         Load custom UC8179 partial-refresh LUTs into registers 0x20-0x25
         and switch the panel to register-LUT mode (PSR = 0x3F) for
@@ -188,12 +188,14 @@ config DRAFTLING_EPD_FAST_PARTIAL
         proper ghost clearing; the driver flips PSR/CDI/VDCS lazily on
         each mode transition.
 
-        Recommended for the standalone Waveshare 7.5" V2 BW panels sold
-        for the E-Paper Driver HAT. Disable if your panel ghosts badly
-        with this enabled or shows wrong colors -- some 7.5" variants
-        (notably the panel soldered to the Seeed reTerminal E1001) have
-        a different OTP that already supports proper partial windows
-        and does not need this workaround.
+        Disabled by default because the LUT timing/level bytes are
+        calibrated for one specific 7.5" V2 BW panel revision and have
+        produced garbled output on others (e.g. only the cursor stroke
+        renders, letters never appear). With this option off the driver
+        falls back to the panel's OTP partial waveform, which always
+        works on UC8179 panels but flashes the border once per
+        refresh. Enable if your HAT panel renders text correctly with
+        no border flash -- otherwise leave it off.
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
