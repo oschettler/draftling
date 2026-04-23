@@ -123,26 +123,19 @@ static int s_stride   = 0;     /* bytes per row */
 
 /* Small DMA-capable bounce buffer used by send_buffer() to stream
  * pixel data into the SPI master regardless of where the caller's
- * source buffer lives. Two reasons we cannot just hand a PSRAM source
- * pointer to esp_lcd_panel_io_tx_color():
- *
- *   1. On HAT builds with octal PSRAM at 80 MHz and BLE Bluedroid
- *      active, esp_lcd_panel_io_spi has been observed to fail
- *      spi_device_queue_trans() with PSRAM-backed buffers (the symptom
- *      is repeated "spi transmit (queue) color failed" errors right
- *      after BLE keyboard connect, freezing the panel mid-DTM).
- *   2. We tried allocating the framebuffers themselves in
- *      MALLOC_CAP_DMA | MALLOC_CAP_8BIT, but two 48000-byte buffers
- *      do not fit in the ~135 KiB of contiguous internal DRAM
- *      available on the HAT model at display_init() time -- the
- *      allocation fails outright and asserts.
+ * source buffer lives. The framebuffers live in PSRAM (one 48 KB
+ * buffer would not fit in the ~135 KiB of contiguous internal DRAM
+ * available on the HAT model at display_init() time, let alone two);
+ * that storage is fine for CPU access but the panel-IO SPI driver
+ * cannot DMA from it directly when the cache is busy with BLE/Wi-Fi
+ * traffic. Instead, send_buffer() copies the pixel data into this
+ * small internal-RAM buffer in chunks and does N synchronous
+ * tx_param() calls.
  *
  * A single small DMA bounce buffer fits comfortably (well under the
- * 32 KiB internal-DMA reserve), keeps the framebuffers in PSRAM where
- * they belong, and turns each send_buffer() into N back-to-back
- * tx_color() calls with internal-RAM sources. UC8179 DTM1/DTM2 take
- * a continuous pixel stream after the command, so chunking is fine
- * as long as no other command is interleaved. */
+ * 32 KiB internal-DMA reserve). UC8179 DTM1/DTM2 take a continuous
+ * pixel stream after the command, so chunking is fine as long as no
+ * other command is interleaved. */
 #define EPD_DMA_BOUNCE_BYTES 4096
 static uint8_t *s_dma_bounce = NULL;
 
@@ -167,10 +160,22 @@ static void send_buffer(const uint8_t *data, int len)
 {
     /* Stream `data` to the panel through the small internal-RAM DMA
      * bounce buffer. We copy in chunks of EPD_DMA_BOUNCE_BYTES and
-     * call esp_lcd_panel_io_tx_color() for each chunk; UC8179 DTM
-     * commands accept a continuous pixel stream, so multiple back-to-
-     * back tx_color() calls (with no command in between) concatenate
-     * correctly into the panel's frame buffer.
+     * call esp_lcd_panel_io_tx_param() for each chunk.
+     *
+     * IMPORTANT: tx_param is synchronous (it uses spi_device_polling_
+     * transmit under the hood), so the bounce buffer can be safely
+     * reused as soon as it returns. We deliberately do NOT use
+     * tx_color() here -- tx_color is async (queued, depth = 10 in
+     * io_cfg) and the SPI driver may still be DMAing from the bounce
+     * buffer when the loop's next memcpy() overwrites it, producing
+     * garbage on the panel. The garbage holds BUSY low until our
+     * 5 s wait_busy() timeout, which freezes the LVGL task and
+     * blocks every other subsystem that needs the LVGL mutex (the
+     * editor UI, the BLE connect callback, etc.).
+     *
+     * UC8179 DTM1/DTM2 take a continuous pixel stream after the
+     * command, so chunking is fine as long as no other command is
+     * interleaved.
      *
      * s_dma_bounce is allocated and asserted in display_init(), so it
      * is non-NULL by the time any caller can reach this function. */
@@ -180,7 +185,7 @@ static void send_buffer(const uint8_t *data, int len)
         int chunk = len - sent;
         if (chunk > EPD_DMA_BOUNCE_BYTES) chunk = EPD_DMA_BOUNCE_BYTES;
         memcpy(s_dma_bounce, data + sent, chunk);
-        esp_lcd_panel_io_tx_color(s_io_handle, -1, s_dma_bounce, chunk);
+        esp_lcd_panel_io_tx_param(s_io_handle, -1, s_dma_bounce, chunk);
         sent += chunk;
     }
 }
