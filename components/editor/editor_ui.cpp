@@ -2058,6 +2058,9 @@ static void process_key_event(const kb_event_t *ev)
     }
 }
 
+/* Forward declaration -- defined later in the BLE callback section. */
+static void apply_pending_connect_state(void);
+
 /* LVGL timer callback: drains the key-event queue in a batch.
  * This runs inside lv_timer_handler() which already holds the LVGL
  * mutex, so we must NOT call lvgl_port_lock() here. */
@@ -2065,6 +2068,15 @@ static void key_drain_cb(lv_timer_t *timer)
 {
     (void)timer;
     kb_event_t ev;
+
+    /* Drain any pending BLE connect/disconnect transition first.
+     * The BLE host task only sets the flag (it cannot safely take
+     * the LVGL mutex - on the e-paper boards display_flush() can
+     * hold the mutex for several seconds during a panel refresh,
+     * which would time out the BLE callback and leave the user
+     * stuck on the "Reconnecting..." prompt screen even after
+     * the keyboard has connected). See apply_pending_connect_state(). */
+    apply_pending_connect_state();
 
     while (xQueueReceive(s_key_queue, &ev, 0) == pdTRUE) {
         process_key_event(&ev);
@@ -2152,15 +2164,25 @@ static void passkey_display_cb(uint32_t passkey)
 
 /* ---- BLE connection status callback ---- */
 
-static void ble_connect_status_cb(bool connected)
-{
-    ESP_LOGI("EditorUI", "BLE connect status: %s",
-             connected ? "CONNECTED" : "DISCONNECTED");
+/* Pending connect/disconnect state set by the BLE host task and
+ * consumed by the LVGL task. Values: -1 = no pending change,
+ * 0 = pending disconnect, 1 = pending connect. Declared volatile
+ * since it crosses task boundaries; we accept the tiny race where
+ * a back-to-back connect/disconnect could overwrite each other --
+ * the consumer always observes the latest state, which matches
+ * what `ble_keyboard_is_connected()` would report. */
+static volatile int8_t s_pending_conn_state = -1;
 
-    if (!lvgl_port_lock(500)) {
-        ESP_LOGW("EditorUI", "LVGL lock timeout in connect_status_cb");
-        return;
-    }
+/* Run on the LVGL task (from key_drain_cb). At this point the LVGL
+ * mutex is already held by the LVGL task, so we must NOT call
+ * lvgl_port_lock() here. */
+static void apply_pending_connect_state(void)
+{
+    int8_t pending = s_pending_conn_state;
+    if (pending < 0) return;
+    s_pending_conn_state = -1;
+
+    bool connected = (pending != 0);
 
     if (connected) {
         /* Flush any stale key events that accumulated while
@@ -2203,8 +2225,22 @@ static void ble_connect_status_cb(bool connected)
         }
         lv_scr_load(s_scr_ble_prompt);
     }
+}
 
-    lvgl_port_unlock();
+/* Runs in the BLE/Bluedroid host task. We deliberately do NOT take
+ * the LVGL mutex here: on the e-paper boards, display_flush() can
+ * hold the mutex for several seconds during a panel refresh (the
+ * OTP partial waveform on the UC8179 takes ~3 s), which would
+ * exceed any reasonable callback-side timeout and leave the user
+ * stuck on the "Reconnecting..." prompt screen even after the
+ * keyboard is connected. Instead, set a flag that the LVGL task
+ * (key_drain_cb) drains on its next tick, where the mutex is
+ * already held. */
+static void ble_connect_status_cb(bool connected)
+{
+    ESP_LOGI("EditorUI", "BLE connect status: %s",
+             connected ? "CONNECTED" : "DISCONNECTED");
+    s_pending_conn_state = connected ? 1 : 0;
 }
 
 /* BLE status text callback -- update the BLE prompt label with
