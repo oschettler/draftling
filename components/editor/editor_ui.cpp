@@ -188,7 +188,11 @@ static bool      s_menu_open    = false;
 /* Number of menu items */
 #define MENU_ITEM_COUNT 8
 
+#if !(defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+      defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+      defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3))
 static lv_timer_t *s_blink_timer = NULL;
+#endif
 static bool s_cursor_visible = true;
 static int  s_browser_sel    = 0;
 static int  s_browser_count  = 0;
@@ -310,6 +314,9 @@ static void init_styles(void)
     recalc_layout();
 }
 
+#if !(defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+      defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+      defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3))
 static void cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -319,6 +326,7 @@ static void cursor_blink_cb(lv_timer_t *timer)
         else lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
     }
 }
+#endif
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
 /* Build a battery level string for the status bar. */
