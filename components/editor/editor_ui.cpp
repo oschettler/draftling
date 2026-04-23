@@ -549,12 +549,15 @@ extern "C" void editor_ui_refresh(void)
                  * partial-update path on e-paper backends. */
                 if (s_line_labels[i] && s_prev_line_visible[i]) {
                     lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
-                    s_prev_line_visible[i] = false;
                 }
                 if (s_sel_rects[i] && s_prev_line_was_selected[i]) {
                     lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
-                    s_prev_line_was_selected[i] = false;
                 }
+                /* Always clear the cached state for hidden slots so a
+                 * later transition back to visible is forced through
+                 * the full re-render path with a clean baseline. */
+                s_prev_line_visible[i]      = false;
+                s_prev_line_was_selected[i] = false;
                 continue;
             }
 
