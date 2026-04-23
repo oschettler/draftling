@@ -97,6 +97,11 @@
 #define EPD_CS_PIN      CONFIG_DRAFTLING_HAT_EPD_CS_PIN
 #define EPD_RST_PIN     CONFIG_DRAFTLING_HAT_EPD_RST_PIN
 #define EPD_BUSY_PIN    CONFIG_DRAFTLING_HAT_EPD_BUSY_PIN
+/* Panel power-enable pin. Driven HIGH at boot (before display_init)
+ * and LOW just before deep sleep so the panel is unpowered while the
+ * MCU is asleep. Set to -1 in Kconfig if PWR is wired permanently
+ * high. */
+#define EPD_PWR_PIN     CONFIG_DRAFTLING_HAT_EPD_PWR_PIN
 
 /* Optional SD card on its own SPI host (SPI3). Only consulted when
  * CONFIG_DRAFTLING_HAT_HAS_SD is selected. */

@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <driver/gpio.h>
 #include <driver/spi_common.h>
 #include "sdkconfig.h"
 
@@ -30,6 +31,15 @@ static void pre_sleep_autosave(void)
             ESP_LOGE(TAG, "Auto-save failed: %s", esp_err_to_name(err));
         }
     }
+
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+    /* Drop the e-paper PWR rail so the panel draws no current while
+     * the MCU is in deep sleep. The image already on the panel is
+     * retained without power. */
+    if (EPD_PWR_PIN >= 0) {
+        gpio_set_level((gpio_num_t)EPD_PWR_PIN, 0);
+    }
+#endif
 }
 
 extern "C" void app_main(void)
@@ -61,6 +71,23 @@ extern "C" void app_main(void)
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
       defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+#  if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
+    /* Power the e-paper panel on before initialising the SPI driver.
+     * EPD_PWR_PIN gates the panel's power rail on the Waveshare HAT;
+     * driving it high here turns the panel on, and the standby
+     * pre-sleep callback drops it again before deep sleep. -1 means
+     * the user wired PWR permanently high and no MCU pin is needed. */
+    if (EPD_PWR_PIN >= 0) {
+        gpio_config_t pwr_io = {};
+        pwr_io.pin_bit_mask = 1ULL << EPD_PWR_PIN;
+        pwr_io.mode         = GPIO_MODE_OUTPUT;
+        pwr_io.pull_up_en   = GPIO_PULLUP_DISABLE;
+        pwr_io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        pwr_io.intr_type    = GPIO_INTR_DISABLE;
+        gpio_config(&pwr_io);
+        gpio_set_level((gpio_num_t)EPD_PWR_PIN, 1);
+    }
+#  endif
     display_init(EPD_MOSI_PIN, EPD_SCK_PIN, EPD_DC_PIN,
                  EPD_CS_PIN, EPD_RST_PIN, EPD_BUSY_PIN,
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);

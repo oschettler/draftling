@@ -188,6 +188,19 @@ config DRAFTLING_HAT_EPD_BUSY_PIN
     range 0 48
     default 9
 
+config DRAFTLING_HAT_EPD_PWR_PIN
+    int "EPD PWR pin (GPIO, -1 to disable)"
+    range -1 48
+    default 7
+    help
+        GPIO that gates power to the e-paper panel on the Waveshare
+        E-Paper Driver HAT. Driven HIGH at boot (before display_init)
+        to enable the panel, and driven LOW just before deep sleep so
+        the panel draws no current while the MCU is asleep. Default is
+        GPIO7, which matches Waveshare's ESP32-S3-DevKitC-1 reference
+        wiring. Set to -1 if your wiring ties PWR permanently high
+        (e.g. directly to the 3V3 rail) and no MCU pin is needed.
+
 config DRAFTLING_HAT_WAKEUP_GPIO
     int "Deep-sleep wakeup GPIO (active-low)"
     range 0 48

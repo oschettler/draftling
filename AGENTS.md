@@ -373,6 +373,7 @@ for the ESP32-S3-DevKitC-1:
 | `DRAFTLING_HAT_EPD_CS_PIN`   | 10 | Chip select |
 | `DRAFTLING_HAT_EPD_RST_PIN`  | 14 | Reset |
 | `DRAFTLING_HAT_EPD_BUSY_PIN` | 9  | BUSY input |
+| `DRAFTLING_HAT_EPD_PWR_PIN`  | 7  | Panel power-enable (HIGH = on; driven LOW before deep sleep). -1 if PWR is wired permanently high. |
 | `DRAFTLING_HAT_WAKEUP_GPIO`  | 0  | EXT0 deep-sleep wakeup pin |
 | `DRAFTLING_HAT_HAS_SD`       | n  | Opt in to an SD card on SPI3 |
 | `DRAFTLING_HAT_SD_MOSI/MISO/SCK/CS_PIN` | 35 / 37 / 36 / 34 | Visible only when SD support is on |
