@@ -945,6 +945,12 @@ static void refresh_file_list(void)
      * next update_list_highlight() call should not try to "clear"
      * a stale previous selection. */
     s_browser_sel_prev = -1;
+    /* Apply the editor theme colors (and initial highlight) to every
+     * row so list buttons render with theme_fg() text on theme_bg(),
+     * not the LVGL default greys that would be near-invisible on a
+     * black background. Mirror what refresh_menu_items() does. */
+    apply_list_selection_styles(s_list_files, s_browser_sel);
+    s_browser_sel_prev = s_browser_sel;
 }
 
 extern "C" void editor_ui_show_file_browser(void)
@@ -2462,6 +2468,12 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_radius(s_list_files, 0, 0);
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
     lv_obj_set_style_text_font(s_list_files, FONT_14, 0);
+    /* lv_list defaults to LVGL theme background (white). Force it to
+     * the editor theme background so the list panel matches the
+     * surrounding screen when CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND
+     * is enabled (otherwise the list paints a white rectangle on top
+     * of the black screen and white-on-white text is invisible). */
+    lv_obj_set_style_bg_color(s_list_files, theme_bg(), 0);
 
     /* File browser status bar */
     lv_obj_t *br_sline = lv_obj_create(s_scr_browser);
@@ -2546,6 +2558,10 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_radius(s_menu_list, 0, 0);
     lv_obj_set_style_pad_all(s_menu_list, 0, 0);
     lv_obj_set_style_text_font(s_menu_list, FONT_14, 0);
+    /* See note on s_list_files above: override the LVGL default white
+     * list background so the menu blends with the screen in
+     * CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND mode. */
+    lv_obj_set_style_bg_color(s_menu_list, theme_bg(), 0);
 
     /* ---- Settings screen ---- */
     s_scr_settings = lv_obj_create(NULL);
@@ -2565,6 +2581,8 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_radius(s_settings_list, 0, 0);
     lv_obj_set_style_pad_all(s_settings_list, 0, 0);
     lv_obj_set_style_text_font(s_settings_list, FONT_14, 0);
+    /* See note on s_list_files above. */
+    lv_obj_set_style_bg_color(s_settings_list, theme_bg(), 0);
 
     /* ---- Passkey overlay (shown on the editor screen) ---- */
     s_passkey_panel = lv_obj_create(s_scr);
