@@ -109,27 +109,30 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
     default 270 if DRAFTLING_DISPLAY_ROTATE_270
 
 config DRAFTLING_DISPLAY_SCALE
-    int "Display scale factor (logical pixel size)"
-    range 1 4
+    int
     default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 1
     help
-        Integer pixel-doubling factor. Every logical LVGL pixel is
-        rendered as SCALE x SCALE physical panel pixels using nearest-
-        neighbor expansion. The editor and LVGL canvas operate in
-        logical coordinates (panel size divided by SCALE); only the
-        display backend scales up when pushing to the panel.
+        Logical-pixel scale factor (hidden, auto-derived from the
+        selected hardware model).
 
-        SCALE = 1 (the default for the RLCD, reTerminal and HAT
-        boards) means no scaling -- one LVGL pixel equals one panel
-        pixel. SCALE = 2 (the default for the M5Stack PaperS3, whose
-        panel is a high-density 540 x 960) makes text comfortably
-        readable without changing the bitmap fonts. The panel
-        dimensions (CONFIG_DRAFTLING_DISPLAY_WIDTH / HEIGHT) must be
-        evenly divisible by this factor.
+        Every logical LVGL pixel is rendered as SCALE x SCALE physical
+        panel pixels via nearest-neighbor expansion in the display
+        backend. The editor and LVGL canvas operate in logical
+        coordinates (panel size divided by SCALE); only the display
+        backend scales up when pushing to the panel.
 
-        Currently only the M5Stack PaperS3 backend implements
-        scaling; on the other backends SCALE > 1 has no effect.
+        Defaults: 2 for the M5Stack PaperS3 (whose 540x960 panel is
+        dense enough that 1:1 Greybeard text is uncomfortably small),
+        1 everywhere else (one LVGL pixel == one panel pixel).
+        Currently only the M5Stack PaperS3 backend implements the
+        up-scaling; on the other backends SCALE > 1 would have no
+        visible effect.
+
+        Kept hidden (no prompt) so that switching the hardware model
+        in menuconfig always re-applies the per-model default --
+        prompted int symbols are sticky in sdkconfig and would
+        otherwise keep an old value across model changes.
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"

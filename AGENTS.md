@@ -391,13 +391,17 @@ consumed in `app_config.h` as `DISPLAY_ROTATE`.
 
 #### Display scale factor (DRAFTLING_DISPLAY_SCALE)
 
-`int` (range 1-4). Logical pixel size: every LVGL pixel is rendered as
-SCALE x SCALE physical panel pixels via nearest-neighbor expansion in
-the display backend. The editor and LVGL canvas operate in *logical*
-coordinates (panel size divided by SCALE); only the display backend
-deals in physical panel pixels. Defaults: 2 for the M5Stack PaperS3 (so
-the high-density 540x960 panel renders Greybeard text at a comfortably
-readable size), 1 for every other board. Currently only the
+Hidden `int` (no prompt) auto-derived from the hardware model.
+Logical pixel size: every LVGL pixel is rendered as SCALE x SCALE
+physical panel pixels via nearest-neighbor expansion in the display
+backend. The editor and LVGL canvas operate in *logical* coordinates
+(panel size divided by SCALE); only the display backend deals in
+physical panel pixels. Defaults: 2 for the M5Stack PaperS3 (so the
+high-density 540x960 panel renders Greybeard text at a comfortably
+readable size), 1 for every other board. Kept hidden so switching the
+hardware model in menuconfig always re-applies the per-model default
+(prompted int symbols are sticky in sdkconfig and would otherwise
+keep an old value across model changes). Currently only the
 `display_eds3` backend implements the up-scaling; on the RLCD and
 UC8179 backends a value > 1 has no visible effect because their LVGL
 framebuffers already match their panel sizes.
