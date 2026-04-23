@@ -82,7 +82,15 @@ static void lvgl_task(void *arg)
 
 extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
 {
-    s_lvgl_mux = xSemaphoreCreateMutex();
+    /* Recursive mutex so a task that already holds it can call
+     * lvgl_port_lock() again without deadlocking. The "Sleep now"
+     * menu path is the motivating case: it runs inside the LVGL
+     * timer/key handler (mutex held) and then calls
+     * standby_enter_sleep() -> pre_sleep_autosave(), which itself
+     * takes lvgl_port_lock() to wipe the panel to white before deep
+     * sleep. With a plain mutex the second take would block forever
+     * and the screen would never get the white frame. */
+    s_lvgl_mux = xSemaphoreCreateRecursiveMutex();
     lv_init();
 
     lv_display_t *disp = lv_display_create(width, height);
@@ -146,10 +154,10 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
 extern "C" bool lvgl_port_lock(int timeout_ms)
 {
     TickType_t t = (timeout_ms == -1) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    return xSemaphoreTake(s_lvgl_mux, t) == pdTRUE;
+    return xSemaphoreTakeRecursive(s_lvgl_mux, t) == pdTRUE;
 }
 
 extern "C" void lvgl_port_unlock(void)
 {
-    xSemaphoreGive(s_lvgl_mux);
+    xSemaphoreGiveRecursive(s_lvgl_mux);
 }

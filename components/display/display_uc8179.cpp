@@ -121,6 +121,31 @@ static int s_rst_pin  = -1;
 static int s_busy_pin = -1;
 static int s_stride   = 0;     /* bytes per row */
 
+/* Small DMA-capable bounce buffer used by send_buffer() to stream
+ * pixel data into the SPI master regardless of where the caller's
+ * source buffer lives. Two reasons we cannot just hand a PSRAM source
+ * pointer to esp_lcd_panel_io_tx_color():
+ *
+ *   1. On HAT builds with octal PSRAM at 80 MHz and BLE Bluedroid
+ *      active, esp_lcd_panel_io_spi has been observed to fail
+ *      spi_device_queue_trans() with PSRAM-backed buffers (the symptom
+ *      is repeated "spi transmit (queue) color failed" errors right
+ *      after BLE keyboard connect, freezing the panel mid-DTM).
+ *   2. We tried allocating the framebuffers themselves in
+ *      MALLOC_CAP_DMA | MALLOC_CAP_8BIT, but two 48000-byte buffers
+ *      do not fit in the ~135 KiB of contiguous internal DRAM
+ *      available on the HAT model at display_init() time -- the
+ *      allocation fails outright and asserts.
+ *
+ * A single small DMA bounce buffer fits comfortably (well under the
+ * 32 KiB internal-DMA reserve), keeps the framebuffers in PSRAM where
+ * they belong, and turns each send_buffer() into N back-to-back
+ * tx_color() calls with internal-RAM sources. UC8179 DTM1/DTM2 take
+ * a continuous pixel stream after the command, so chunking is fine
+ * as long as no other command is interleaved. */
+#define EPD_DMA_BOUNCE_BYTES 4096
+static uint8_t *s_dma_bounce = NULL;
+
 /* How many partial refreshes we have done since the last full refresh.
  * When this hits CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL we force a
  * full refresh to clear residual ghosting. */
@@ -140,7 +165,29 @@ static void send_data(uint8_t data)
 
 static void send_buffer(const uint8_t *data, int len)
 {
-    esp_lcd_panel_io_tx_color(s_io_handle, -1, data, len);
+    /* Stream `data` to the panel through the small internal-RAM DMA
+     * bounce buffer. We copy in chunks of EPD_DMA_BOUNCE_BYTES and
+     * call esp_lcd_panel_io_tx_color() for each chunk; UC8179 DTM
+     * commands accept a continuous pixel stream, so multiple back-to-
+     * back tx_color() calls (with no command in between) concatenate
+     * correctly into the panel's frame buffer.
+     *
+     * If the bounce buffer was unavailable for any reason we fall back
+     * to handing the source pointer directly to the SPI driver -- this
+     * preserves the legacy behaviour for boards/configs where the SPI
+     * master will accept the source's memory region. */
+    if (!s_dma_bounce) {
+        esp_lcd_panel_io_tx_color(s_io_handle, -1, data, len);
+        return;
+    }
+    int sent = 0;
+    while (sent < len) {
+        int chunk = len - sent;
+        if (chunk > EPD_DMA_BOUNCE_BYTES) chunk = EPD_DMA_BOUNCE_BYTES;
+        memcpy(s_dma_bounce, data + sent, chunk);
+        esp_lcd_panel_io_tx_color(s_io_handle, -1, s_dma_bounce, chunk);
+        sent += chunk;
+    }
 }
 
 static void hw_reset(void)
@@ -221,21 +268,29 @@ extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
     in_cfg.pull_up_en   = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&in_cfg));
 
-    /* Allocate framebuffer in DMA-capable internal RAM. These buffers
-     * are passed directly to spi_device_queue_trans() by
-     * esp_lcd_panel_io_spi for the DTM1/DTM2 sends, and on octal-PSRAM
-     * builds with BLE active SPI transfers from PSRAM can be rejected
-     * by the SPI master driver (the symptom is repeated
-     * "spi transmit (queue) color failed" errors right after BLE
-     * connect). Two 1-bpp buffers for an 800x480 panel is ~96 KB of
-     * internal DRAM, which fits comfortably on the ESP32-S3 with
-     * BT/WiFi allocations preferring SPIRAM. */
+    /* Framebuffers live in PSRAM (1 bpp; on the 800x480 HAT panel
+     * each is ~48 KB, more than the contiguous internal DRAM left
+     * over after BLE/WiFi reservations). The actual SPI transfers
+     * are bounced through s_dma_bounce below, so DMA-capability of
+     * the framebuffer storage does not matter.
+     *
+     * We keep two buffers: s_disp_buf is the frame being composed by
+     * the LVGL flush callback, s_prev_buf is the frame currently
+     * displayed on the panel. The diff between them drives partial-
+     * refresh decisions. */
     s_disp_len = s_stride * height;
-    s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    s_prev_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
+    s_prev_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
     assert(s_disp_buf && s_prev_buf);
     memset(s_disp_buf, EPD_WHITE_BYTE, s_disp_len);
     memset(s_prev_buf, EPD_WHITE_BYTE, s_disp_len);
+
+    /* Small DMA-capable bounce buffer for SPI sends. See the comment
+     * on s_dma_bounce above for why we cannot just hand the panel a
+     * PSRAM source pointer on the HAT/BLE configuration. */
+    s_dma_bounce = (uint8_t *)heap_caps_malloc(EPD_DMA_BOUNCE_BYTES,
+                                               MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    assert(s_dma_bounce);
 
     /* Hardware reset and UC8179 init sequence (B/W mode, full update) */
     hw_reset();
@@ -336,7 +391,11 @@ static uint8_t *crop_window(const uint8_t *src,
     int row_bytes = byte_x1 - byte_x0 + 1;
     int rows      = y1 - y0 + 1;
     size_t len    = (size_t)row_bytes * rows;
-    uint8_t *out  = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    /* The cropped window can live in PSRAM -- send_buffer() will
+     * stream it to the panel through the small internal-RAM DMA
+     * bounce buffer, so the source memory region does not need to
+     * be DMA-capable. */
+    uint8_t *out  = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
     if (!out) return NULL;
     for (int y = 0; y < rows; y++) {
         memcpy(out + (size_t)y * row_bytes,
