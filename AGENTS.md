@@ -375,8 +375,9 @@ for the ESP32-S3-DevKitC-1:
 | `DRAFTLING_HAT_EPD_BUSY_PIN` | 9  | BUSY input |
 | `DRAFTLING_HAT_EPD_PWR_PIN`  | 7  | Panel power-enable (HIGH = on; driven LOW before deep sleep). -1 if PWR is wired permanently high. |
 | `DRAFTLING_HAT_WAKEUP_GPIO`  | 0  | EXT0 deep-sleep wakeup pin |
-| `DRAFTLING_HAT_HAS_SD`       | n  | Opt in to an SD card on SPI3 |
-| `DRAFTLING_HAT_SD_MOSI/MISO/SCK/CS_PIN` | 35 / 37 / 36 / 34 | Visible only when SD support is on |
+| `DRAFTLING_HAT_SD_INTERFACE` | None | SD card interface: None / SPI / SDMMC 1-bit. SDMMC is gated to chips with an SDMMC host (ESP32, ESP32-S3). Auto-selects the internal `DRAFTLING_HAT_HAS_SD` symbol when not None. |
+| `DRAFTLING_HAT_SD_MOSI/MISO/SCK/CS_PIN` | 35 / 37 / 36 / 34 | SPI pinout, visible only when SPI is selected |
+| `DRAFTLING_HAT_SD_SDMMC_CLK/CMD/D0_PIN` | 14 / 15 / 2 | SDMMC 1-bit pinout (Freenove ESP32-S3 defaults), visible only when SDMMC is selected |
 
 #### E-paper full-refresh interval (DRAFTLING_EPD_FULL_REFRESH_INTERVAL)
 

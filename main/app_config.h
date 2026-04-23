@@ -103,14 +103,22 @@
  * high. */
 #define EPD_PWR_PIN     CONFIG_DRAFTLING_HAT_EPD_PWR_PIN
 
-/* Optional SD card on its own SPI host (SPI3). Only consulted when
- * CONFIG_DRAFTLING_HAT_HAS_SD is selected. */
-#ifdef CONFIG_DRAFTLING_HAT_HAS_SD
+/* Optional SD card. The interface is selected via the
+ * DRAFTLING_HAT_SD_INTERFACE choice (None / SPI / SDMMC 1-bit).
+ * CONFIG_DRAFTLING_HAT_HAS_SD is auto-selected by Kconfig whenever
+ * any non-None interface is picked, so existing checks for it
+ * continue to mean "is there an SD card at all". */
+#ifdef CONFIG_DRAFTLING_HAT_SD_SPI
 #define SD_SPI_MOSI_PIN CONFIG_DRAFTLING_HAT_SD_MOSI_PIN
 #define SD_SPI_MISO_PIN CONFIG_DRAFTLING_HAT_SD_MISO_PIN
 #define SD_SPI_SCK_PIN  CONFIG_DRAFTLING_HAT_SD_SCK_PIN
 #define SD_SPI_CS_PIN   CONFIG_DRAFTLING_HAT_SD_CS_PIN
 #define SD_EN_PIN       -1
+#endif
+#ifdef CONFIG_DRAFTLING_HAT_SD_SDMMC
+#define SD_CLK_PIN      CONFIG_DRAFTLING_HAT_SD_SDMMC_CLK_PIN
+#define SD_CMD_PIN      CONFIG_DRAFTLING_HAT_SD_SDMMC_CMD_PIN
+#define SD_D0_PIN       CONFIG_DRAFTLING_HAT_SD_SDMMC_D0_PIN
 #endif
 
 /* No on-board battery on a bare HAT */

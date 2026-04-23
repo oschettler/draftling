@@ -155,15 +155,22 @@ extern "C" void app_main(void)
                               SD_SPI_CS_PIN, SD_EN_PIN,
                               SD_MOUNT_POINT);
 #elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
-#  ifdef CONFIG_DRAFTLING_HAT_HAS_SD
+#  if defined(CONFIG_DRAFTLING_HAT_SD_SPI)
     /* HAT has no on-board SD; user opted in to a separate SD on SPI3
      * with its own dedicated pinout. */
     sd_ret = sd_card_init_spi(SPI3_HOST,
                               SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
                               SD_SPI_CS_PIN, SD_EN_PIN,
                               SD_MOUNT_POINT);
+#  elif defined(CONFIG_DRAFTLING_HAT_SD_SDMMC)
+    /* SDMMC 1-bit (CLK/CMD/D0) on the chip's dedicated SDMMC peripheral.
+     * Faster than SPI; available on ESP32 and ESP32-S3 only. Pinout is
+     * user-configurable via the HAT pinout menu and defaults to the
+     * Freenove ESP32-S3 example wiring (CLK=14, CMD=15, D0=2). */
+    sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
 #  else
-    ESP_LOGW(TAG, "HAT model built without SD support (CONFIG_DRAFTLING_HAT_HAS_SD=n)");
+    ESP_LOGW(TAG, "HAT model built without SD support "
+                  "(CONFIG_DRAFTLING_HAT_SD_NONE)");
     sd_ret = ESP_ERR_NOT_SUPPORTED;
 #  endif
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)

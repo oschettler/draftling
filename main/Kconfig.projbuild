@@ -225,38 +225,100 @@ config DRAFTLING_HAT_WAKEUP_GPIO
         deep sleep. Default is GPIO0 (BOOT button on most ESP32-S3 dev
         kits).
 
-config DRAFTLING_HAT_HAS_SD
-    bool "Enable SD card on a separate SPI bus"
-    default n
+choice DRAFTLING_HAT_SD_INTERFACE
+    prompt "SD card interface"
+    default DRAFTLING_HAT_SD_NONE
     help
-        When enabled, the HAT model also initializes a MicroSD card on
-        a second SPI host (SPI3). When disabled, the editor runs
+        Select how (if at all) the HAT host board talks to a MicroSD
+        card. The HAT itself has no SD slot, so the card is wired to
+        free GPIOs on the host MCU. When set to "None" the editor runs
         without persistent storage (the editor UI displays an
         SD-not-ready status and Git sync is unavailable).
 
+config DRAFTLING_HAT_SD_NONE
+    bool "None (no SD card)"
+
+config DRAFTLING_HAT_SD_SPI
+    bool "SPI (separate SPI3 bus)"
+    help
+        Drive the SD card over a dedicated SPI host (SPI3) with its
+        own CS/MOSI/MISO/SCK pins. Works on every supported ESP32
+        target.
+
+config DRAFTLING_HAT_SD_SDMMC
+    bool "SDMMC 1-bit"
+    depends on SOC_SDMMC_HOST_SUPPORTED
+    help
+        Drive the SD card over the dedicated SDMMC peripheral in
+        1-bit mode (CLK / CMD / D0). Faster than SPI but only
+        available on chips with an SDMMC host (ESP32 and ESP32-S3).
+        On the ESP32-S3 the SDMMC slot uses the GPIO matrix, so the
+        pins are freely assignable below; the defaults match the
+        Freenove ESP32-S3 example wiring referenced in the project
+        README.
+
+endchoice
+
+config DRAFTLING_HAT_HAS_SD
+    bool
+    default y if DRAFTLING_HAT_SD_SPI || DRAFTLING_HAT_SD_SDMMC
+    default n
+    help
+        Internal helper symbol -- selected automatically when any SD
+        interface is chosen above. Existing code paths that only need
+        to know "is there an SD card at all" can continue to test
+        CONFIG_DRAFTLING_HAT_HAS_SD.
+
 config DRAFTLING_HAT_SD_MOSI_PIN
     int "SD MOSI pin (GPIO)"
-    depends on DRAFTLING_HAT_HAS_SD
+    depends on DRAFTLING_HAT_SD_SPI
     range 0 48
     default 35
 
 config DRAFTLING_HAT_SD_MISO_PIN
     int "SD MISO pin (GPIO)"
-    depends on DRAFTLING_HAT_HAS_SD
+    depends on DRAFTLING_HAT_SD_SPI
     range 0 48
     default 37
 
 config DRAFTLING_HAT_SD_SCK_PIN
     int "SD SCK pin (GPIO)"
-    depends on DRAFTLING_HAT_HAS_SD
+    depends on DRAFTLING_HAT_SD_SPI
     range 0 48
     default 36
 
 config DRAFTLING_HAT_SD_CS_PIN
     int "SD CS pin (GPIO)"
-    depends on DRAFTLING_HAT_HAS_SD
+    depends on DRAFTLING_HAT_SD_SPI
     range 0 48
     default 34
+
+config DRAFTLING_HAT_SD_SDMMC_CLK_PIN
+    int "SD SDMMC CLK pin (GPIO)"
+    depends on DRAFTLING_HAT_SD_SDMMC
+    range 0 48
+    default 14
+    help
+        SDMMC CLK pin. Default 14 matches the Freenove FNK0083
+        ESP32-S3 example wiring.
+
+config DRAFTLING_HAT_SD_SDMMC_CMD_PIN
+    int "SD SDMMC CMD pin (GPIO)"
+    depends on DRAFTLING_HAT_SD_SDMMC
+    range 0 48
+    default 15
+    help
+        SDMMC CMD pin. Default 15 matches the Freenove FNK0083
+        ESP32-S3 example wiring.
+
+config DRAFTLING_HAT_SD_SDMMC_D0_PIN
+    int "SD SDMMC D0 pin (GPIO)"
+    depends on DRAFTLING_HAT_SD_SDMMC
+    range 0 48
+    default 2
+    help
+        SDMMC D0 (DAT0) pin. Default 2 matches the Freenove FNK0083
+        ESP32-S3 example wiring.
 
 endmenu
 
