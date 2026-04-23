@@ -45,10 +45,21 @@ static void pre_sleep_autosave(void)
      * Take the LVGL mutex first so this does not race with the LVGL
      * task's flush_cb (the PaperS3 backend in particular requires
      * exclusive access to its M5GFX instance). */
-    if (lvgl_port_lock(-1)) {
-        display_clear(0xFF);
-        display_full_refresh();
+    /* Take the LVGL mutex if we can so the wipe does not race with
+     * the LVGL task's flush_cb. The mutex is recursive
+     * (lvgl_port_init), so this also works when pre_sleep_autosave
+     * runs inside the LVGL task itself (the "Sleep now" menu path).
+     * If for any reason the lock cannot be obtained quickly, wipe
+     * anyway -- a clean white frame on the panel matters more than
+     * the slim chance of a flush_cb collision right before deep
+     * sleep. */
+    bool locked = lvgl_port_lock(200);
+    display_clear(0xFF);
+    display_full_refresh();
+    if (locked) {
         lvgl_port_unlock();
+    } else {
+        ESP_LOGW(TAG, "pre_sleep wipe: LVGL lock not acquired, proceeded anyway");
     }
 #endif
 

@@ -172,14 +172,9 @@ static void send_buffer(const uint8_t *data, int len)
      * back tx_color() calls (with no command in between) concatenate
      * correctly into the panel's frame buffer.
      *
-     * If the bounce buffer was unavailable for any reason we fall back
-     * to handing the source pointer directly to the SPI driver -- this
-     * preserves the legacy behaviour for boards/configs where the SPI
-     * master will accept the source's memory region. */
-    if (!s_dma_bounce) {
-        esp_lcd_panel_io_tx_color(s_io_handle, -1, data, len);
-        return;
-    }
+     * s_dma_bounce is allocated and asserted in display_init(), so it
+     * is non-NULL by the time any caller can reach this function. */
+    assert(s_dma_bounce);
     int sent = 0;
     while (sent < len) {
         int chunk = len - sent;
