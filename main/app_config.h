@@ -158,18 +158,23 @@
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
 
-/* Deep-sleep wakeup on the PaperS3 touch panel INT (GPIO48,
- * active-low). M5Unified uses the same pin as its wake source.
+/* Deep-sleep wakeup on the BOOT button (GPIO0, active-low).
  *
- * Note: GPIO48 is NOT an RTC GPIO on the ESP32-S3, so the standby
- * manager cannot use it with esp_sleep_enable_ext0_wakeup; it falls
- * back to light sleep + esp_restart() on this board. (The previous
- * mapping to GPIO21 in this file was wrong -- GPIO21 is the on-board
- * buzzer/speaker pin on PaperS3, which would either fail to pair as
- * EXT0 or wake the device immediately depending on the speaker
- * driver state. See components/standby/standby.cpp for the wake
- * implementation.) */
-#define WAKEUP_GPIO_NUM 48
+ * Earlier revisions tried GPIO21 (wrong -- that's the on-board
+ * buzzer/speaker pin) and GPIO48 (the GT911 touch-panel INT line).
+ * GPIO48 also failed: M5GFX initializes only the e-paper panel, not
+ * the touch controller, so the GT911 is left uninitialized and holds
+ * its INT line low (the line doubles as I2C-address selection during
+ * reset). The standby manager would then see GPIO48 stuck low and
+ * fire the GPIO_INTR_LOW_LEVEL wake immediately.
+ *
+ * GPIO0 is the only digital input button on the PaperS3 besides the
+ * hardware power switch, and -- being an ESP32-S3 strapping pin with
+ * a board-level pull-up -- is guaranteed high while the device is
+ * idle. It is also RTC-capable, so we can use real EXT0 deep sleep
+ * (matching the other supported boards) instead of the light-sleep
+ * + esp_restart() workaround. */
+#define WAKEUP_GPIO_NUM 0
 
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."

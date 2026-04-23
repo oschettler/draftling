@@ -210,11 +210,13 @@ timeout (default 600 seconds / 10 minutes). The timeout is persisted in
 NVS so it survives reboots. A pre-sleep callback allows the editor to
 auto-save before power-down. On the Waveshare RLCD board, wakeup is
 triggered by pressing the GPIO18 button (EXT0, active-low). On the
-M5Stack PaperS3 the wake source is the GT911 touch-panel INT line on
-GPIO48 (active-low); since GPIO48 is not an RTC GPIO, the board uses
-light sleep with `gpio_wakeup_enable()` and follows it with
-`esp_restart()` so the rest of the firmware sees the same cold-boot
-semantics as the deep-sleep boards.
+M5Stack PaperS3 the wake source is the BOOT button on GPIO0 (EXT0,
+active-low) -- the only RTC-capable user-input GPIO on the board.
+Earlier revisions tried GPIO21 (wrong -- that's the buzzer) and
+GPIO48 (the GT911 touch INT) with a light-sleep + `esp_restart()`
+workaround; both woke the device immediately, the latter because
+M5GFX initializes only the e-paper panel (not the touch controller),
+so the GT911 is left uninitialized and holds INT low.
 
 Public API: `standby_init()`, `standby_reset_timer()`,
 `standby_set_timeout()`, `standby_set_pre_sleep_cb()`,
@@ -340,10 +342,9 @@ SOC_BLE_SUPPORTED`):
   ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
-  library, on-board MicroSD on SPI3, GT911 touch-panel INT on
-  GPIO48 used as the wake source (light sleep + restart -- GPIO48
-  is not an RTC GPIO so EXT0 deep sleep is unavailable).
-  *Requires ESP32-S3.*
+  library, on-board MicroSD on SPI3, BOOT button on GPIO0 used as
+  the EXT0 deep-sleep wake source (the only RTC-capable user-input
+  GPIO on the board). *Requires ESP32-S3.*
 
 The hardware model selection drives two `int` symbols consumed in
 `main/app_config.h` as `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`:
