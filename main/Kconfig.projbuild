@@ -152,6 +152,24 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
         faster than the older two-pass epd_text but accumulates
         ghosting slightly more quickly.
 
+config DRAFTLING_EPD_INVERT
+    bool "Invert e-paper pixel polarity"
+    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default n
+    help
+        Flip the panel's data polarity in the UC8179 driver: black
+        pixels become white and vice versa at the framebuffer level.
+
+        Enable this if the panel comes up showing white-on-black with
+        DRAFTLING_EPD_BLACK_BACKGROUND disabled. Standalone Waveshare
+        7.5" panels sold for the E-Paper Driver HAT come in several
+        flavours that share the same UC8179 controller but expect
+        opposite KW data polarity from the panel soldered to the Seeed
+        reTerminal E1001 (which is the default this driver targets).
+
+        Leave disabled for the reTerminal E1001 and for HAT panels that
+        already render correctly.
+
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3

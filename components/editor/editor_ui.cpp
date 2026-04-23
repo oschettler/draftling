@@ -986,6 +986,10 @@ extern "C" void editor_ui_set_status(const char *msg)
     if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
 }
 
+/* Forward declaration: defined below in the menu system section, but
+ * called from refresh_file_list() above. */
+static void apply_list_selection_styles(lv_obj_t *list, int sel);
+
 /* ---- Menu system ---- */
 
 /* Apply the "selected" styling to item `sel` and the "unselected"

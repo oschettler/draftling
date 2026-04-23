@@ -61,6 +61,27 @@
 
 static const char *TAG = "DisplayEPD";
 
+/* Polarity convention for the 1-bpp framebuffer:
+ *   - default (CONFIG_DRAFTLING_EPD_INVERT not set): bit = 1 is white,
+ *     bit = 0 is black. Matches the Waveshare 7.5" V2 panel soldered to
+ *     the Seeed reTerminal E1001 and many HAT panels.
+ *   - inverted: bit = 1 is black, bit = 0 is white. Some standalone
+ *     Waveshare 7.5" panels sold for the E-Paper Driver HAT use this
+ *     opposite KW data polarity even though the controller is the
+ *     same UC8179. Selectable via menuconfig.
+ *
+ * Keep all polarity-sensitive sites going through these constants so
+ * the convention swap is one byte per call. */
+#if defined(CONFIG_DRAFTLING_EPD_INVERT)
+#  define EPD_WHITE_BYTE 0x00
+#  define EPD_BLACK_BYTE 0xFF
+#  define EPD_PIXEL_WHITE_SET 0   /* 0 = clear bit for white */
+#else
+#  define EPD_WHITE_BYTE 0xFF
+#  define EPD_BLACK_BYTE 0x00
+#  define EPD_PIXEL_WHITE_SET 1   /* 1 = set bit for white */
+#endif
+
 /* The reTerminal E1001 shares the SPI bus between the e-paper and the
  * SD card. We use HSPI (SPI2) so SPI3 is left free for any future
  * peripheral (and to mirror the upstream Seeed_GFX setup). The HAT
@@ -200,16 +221,21 @@ extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
     in_cfg.pull_up_en   = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&in_cfg));
 
-    /* Allocate framebuffer in PSRAM (one bit per pixel). We keep two
-     * buffers: s_disp_buf is the frame being composed by the LVGL flush
-     * callback, s_prev_buf is the frame currently displayed on the
-     * panel. The diff between them drives partial-refresh decisions. */
+    /* Allocate framebuffer in DMA-capable internal RAM. These buffers
+     * are passed directly to spi_device_queue_trans() by
+     * esp_lcd_panel_io_spi for the DTM1/DTM2 sends, and on octal-PSRAM
+     * builds with BLE active SPI transfers from PSRAM can be rejected
+     * by the SPI master driver (the symptom is repeated
+     * "spi transmit (queue) color failed" errors right after BLE
+     * connect). Two 1-bpp buffers for an 800x480 panel is ~96 KB of
+     * internal DRAM, which fits comfortably on the ESP32-S3 with
+     * BT/WiFi allocations preferring SPIRAM. */
     s_disp_len = s_stride * height;
-    s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
-    s_prev_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_SPIRAM);
+    s_disp_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    s_prev_buf = (uint8_t *)heap_caps_malloc(s_disp_len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     assert(s_disp_buf && s_prev_buf);
-    memset(s_disp_buf, 0xFF, s_disp_len);  /* white */
-    memset(s_prev_buf, 0xFF, s_disp_len);  /* white */
+    memset(s_disp_buf, EPD_WHITE_BYTE, s_disp_len);
+    memset(s_prev_buf, EPD_WHITE_BYTE, s_disp_len);
 
     /* Hardware reset and UC8179 init sequence (B/W mode, full update) */
     hw_reset();
@@ -253,9 +279,9 @@ extern "C" void display_init(int mosi, int sck, int dc, int cs, int rst,
 
 extern "C" void display_clear(uint8_t color)
 {
-    /* Convert "8-bit gray" caller convention (0x00 = black, 0xFF = white)
-     * into our 1bpp packed buffer where 1 = white, 0 = black. */
-    memset(s_disp_buf, color ? 0xFF : 0x00, s_disp_len);
+    /* Caller convention: 0x00 = black, non-zero = white. Map that to
+     * the framebuffer-byte convention selected at compile time. */
+    memset(s_disp_buf, color ? EPD_WHITE_BYTE : EPD_BLACK_BYTE, s_disp_len);
 }
 
 extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
@@ -263,10 +289,15 @@ extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
     if (x >= s_width || y >= s_height) return;
     int idx = y * s_stride + (x >> 3);
     uint8_t mask = 0x80 >> (x & 7);
-    if (color) {
-        s_disp_buf[idx] |= mask;          /* white */
+    /* color != 0 means "draw white". EPD_PIXEL_WHITE_SET decides
+     * whether white corresponds to bit-set (default) or bit-clear
+     * (CONFIG_DRAFTLING_EPD_INVERT). */
+    bool want_white = (color != 0);
+    bool set_bit    = (want_white == (EPD_PIXEL_WHITE_SET != 0));
+    if (set_bit) {
+        s_disp_buf[idx] |= mask;
     } else {
-        s_disp_buf[idx] &= ~mask;         /* black */
+        s_disp_buf[idx] &= ~mask;
     }
 }
 
@@ -305,7 +336,7 @@ static uint8_t *crop_window(const uint8_t *src,
     int row_bytes = byte_x1 - byte_x0 + 1;
     int rows      = y1 - y0 + 1;
     size_t len    = (size_t)row_bytes * rows;
-    uint8_t *out  = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    uint8_t *out  = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (!out) return NULL;
     for (int y = 0; y < rows; y++) {
         memcpy(out + (size_t)y * row_bytes,

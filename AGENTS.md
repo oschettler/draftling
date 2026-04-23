@@ -393,6 +393,16 @@ for the ESP32-S3-DevKitC-1:
 and the M5Stack PaperS3 (M5GFX backend). Number of partial refreshes
 between full refreshes; default 50.
 
+#### Invert e-paper pixel polarity (DRAFTLING_EPD_INVERT)
+
+`bool` shared by the reTerminal E1001 and HAT models (UC8179 backend),
+default `n`. Enable when a HAT panel comes up showing white-on-black
+with `DRAFTLING_EPD_BLACK_BACKGROUND` disabled. Some standalone
+Waveshare 7.5" panels expect the opposite KW data polarity from the
+panel soldered to the reTerminal E1001 even though the controller is
+the same UC8179; this flag flips the framebuffer convention in the
+driver without touching anything else.
+
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 
 A `choice` that sets the display rotation angle. Options are 0, 90, 180,
