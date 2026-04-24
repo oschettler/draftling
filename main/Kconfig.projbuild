@@ -269,6 +269,43 @@ config DRAFTLING_EPD_PARTIAL_VCOM_DEFAULT
         bytes (KW = 0x5A, WK = 0x84) -- recommended with Experiment B
         DISABLED.
 
+config DRAFTLING_EPD_PARTIAL_CDI_BYTE1
+    hex "Experiment F: CDI command byte 1 in partial mode (default 0x39)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL && !DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
+    range 0x00 0xFF
+    default 0x39
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Override the first byte of the CDI = 0x39, 0x07 write that
+        epd_enter_partial_mode() applies to enter register-LUT partial
+        mode. The second byte (data interval = 0x07) is unchanged.
+
+        Experiment E demonstrated that writing 0x39 here breaks
+        rendering on the GDEW075T7 panel (typed glyphs whitewash on
+        the next partial), while skipping the CDI write entirely
+        renders correctly but causes border flash on every keystroke
+        (init 0x10 drives the border to white via VBD[7:6] instead of
+        following LUT_BD) and slow refreshes (no N2OCP -> the
+        controller does not auto-copy NEW->OLD, so the next refresh
+        cannot tell which pixels are unchanged).
+
+        Use this option to bisect 0x39 and find a byte value that:
+          - renders correctly (does NOT whitewash like 0x39),
+          - sets LUTBD so the border follows LUT_BD (no flash),
+          - sets N2OCP so the next refresh's unchanged-pixel mask is
+            correct (full partial speed restored).
+
+        Suggested sweep (with B disabled so glyphs render):
+          0x10 = init value written explicitly (control vs E)
+          0x17 = GxEPD2 alternate: border floating, init DDX
+          0x30 = bits 5,4 only
+          0x19 = bits 4,3,0 only
+          0x39 = full GxEPD2 partial value (currently broken)
+
+        Has no effect when Experiment E
+        (DRAFTLING_EPD_PARTIAL_CDI_DEFAULT) is enabled.
+
 config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
     bool "Experiment E: skip CDI override (keep init border + N2OCP)"
     depends on DRAFTLING_EPD_FAST_PARTIAL

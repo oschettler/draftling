@@ -469,7 +469,7 @@ static void epd_enter_partial_mode(void)
 
 #if !defined(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_DEFAULT)
     send_command(UC8179_CMD_CDI);
-    send_data(0x39);                       /* LUTBD border, N2OCP copy new->old */
+    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_BYTE1);  /* default 0x39: LUTBD border, N2OCP copy new->old */
     send_data(0x07);
 #endif
 
