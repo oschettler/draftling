@@ -249,6 +249,46 @@ config DRAFTLING_EPD_PARTIAL_FULL_FRAME
         PTL ordering). If it persists, the bug is in the LUT data
         itself and Experiment B is the relevant axis.
 
+config DRAFTLING_EPD_PARTIAL_VCOM_DEFAULT
+    bool "Experiment D: skip VDCS override (keep init VCOM = 0x22)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    default n
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Skip the VDCS = 0x26 (-2.0 V) override that
+        epd_enter_partial_mode() normally applies on top of the init
+        register state, leaving the VCOM_DC value at the init default
+        of 0x22. The partial-mode VCOM bias from the GxEPD2 reference
+        is more negative than the init value; on some panel revisions
+        a more-negative VCOM can prevent LUT_KK = 0x00 (no-drive)
+        entries from holding black across a refresh, leading to
+        previously-rendered glyphs whitewashing on the next partial.
+        Enable this to test whether VCOM bias is the cause of the
+        whitewash symptom seen with the default GxEPD2 LUT level
+        bytes (KW = 0x5A, WK = 0x84) -- recommended with Experiment B
+        DISABLED.
+
+config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
+    bool "Experiment E: skip CDI override (keep init border + N2OCP)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    default n
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Skip the CDI = 0x39, 0x07 override that
+        epd_enter_partial_mode() normally applies on top of the init
+        register state, leaving the border / data-interval value at
+        the init default of 0x10, 0x07. The partial-mode CDI value
+        sets LUTBD = 1 (border follows the BD LUT) and N2OCP = 1
+        (copy NEW data buffer to OLD after refresh); both are
+        plausible causes of the whitewash symptom. If LUTBD is being
+        applied incorrectly the border voltage can leak into visible
+        pixels; if N2OCP is overwriting OLD with stale NEW data the
+        next refresh's "unchanged" mask will be wrong. Enable this
+        with Experiment B DISABLED to isolate the CDI effect from the
+        LUT level bytes.
+
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
