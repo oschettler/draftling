@@ -121,10 +121,20 @@
 #define SD_D0_PIN       CONFIG_DRAFTLING_HAT_SD_SDMMC_D0_PIN
 #endif
 
-/* No on-board battery on a bare HAT */
-#define BATT_ADC_PIN    -1
+/* Optional battery monitor on a user-selected ADC1 pin. Disabled by
+ * default (CONFIG_DRAFTLING_HAT_BATT_ADC_PIN = -1) since the bare HAT
+ * has no battery wiring; battery_init() then becomes a no-op and the
+ * editor UI hides the battery icon. Configure under
+ * "Waveshare E-Paper Driver HAT pinout" in menuconfig if the host
+ * board has a cell wired to an ADC1 pin through a resistive divider. */
+#define BATT_ADC_PIN    CONFIG_DRAFTLING_HAT_BATT_ADC_PIN
+#if CONFIG_DRAFTLING_HAT_BATT_ADC_PIN >= 0
+#define BATT_EN_PIN     CONFIG_DRAFTLING_HAT_BATT_EN_PIN
+#define BATT_DIVIDER    CONFIG_DRAFTLING_HAT_BATT_DIVIDER
+#else
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
+#endif
 
 /* Deep-sleep wakeup pin (active-low). User-configurable via the
  * CONFIG_DRAFTLING_HAT_WAKEUP_GPIO option (default GPIO0, the BOOT

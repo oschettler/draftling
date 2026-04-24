@@ -401,6 +401,54 @@ config DRAFTLING_HAT_SD_SDMMC_D0_PIN
     range 0 48
     default 40
 
+config DRAFTLING_HAT_BATT_ADC_PIN
+    int "Battery ADC pin (GPIO, -1 to disable)"
+    range -1 48
+    default -1
+    help
+        Optional analog input on the host MCU used to measure the
+        battery voltage through a resistive divider. Set to -1 (the
+        default) when the host has no battery wiring; the editor will
+        then hide the battery icon and the editor's bottom-right
+        battery readout stays empty.
+
+        Must be an ADC1 channel on the host chip (e.g. GPIO1..GPIO10
+        on ESP32-S3, GPIO32..GPIO39 on the original ESP32, GPIO0..
+        GPIO4 on ESP32-C3 -- check your chip's datasheet). The driver
+        currently only knows the ESP32-S3 ADC1 pin map; on other
+        targets unsupported pins fall back to a default channel and
+        log a warning. Pick a pin that is not otherwise in use by the
+        EPD/SD pinout above.
+
+        Wire the cell through a resistive divider (so the pin sees no
+        more than ~3.1 V at full charge) and set
+        DRAFTLING_HAT_BATT_DIVIDER to the divider ratio.
+
+config DRAFTLING_HAT_BATT_EN_PIN
+    int "Battery divider enable GPIO (-1 to disable)"
+    depends on DRAFTLING_HAT_BATT_ADC_PIN >= 0
+    range -1 48
+    default -1
+    help
+        Optional GPIO that gates power to the battery resistive
+        divider. When set (>= 0) the driver pulses this pin HIGH
+        before each ADC read and releases it LOW between samples to
+        save the few microamps the divider would otherwise burn
+        continuously. Set to -1 if the divider is wired directly to
+        the cell with no enable transistor.
+
+config DRAFTLING_HAT_BATT_DIVIDER
+    int "Battery voltage divider ratio (cell V / pin V)"
+    depends on DRAFTLING_HAT_BATT_ADC_PIN >= 0
+    range 1 10
+    default 2
+    help
+        Ratio of the resistive divider between the battery and the
+        ADC pin. For example, two equal resistors give a ratio of 2
+        (the pin sees half the cell voltage); 200K + 100K gives a
+        ratio of 3. The driver multiplies the measured pin voltage
+        by this number to recover the real cell voltage.
+
 endmenu
 
 endmenu
