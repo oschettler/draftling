@@ -463,7 +463,7 @@ static void epd_enter_partial_mode(void)
     send_data(0x3F);                       /* KW, register-LUT mode */
 
     send_command(UC8179_CMD_VDCS);
-    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_VCOM_BYTE);  /* default 0x26 = -2.0 V (partial) */
+    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_VCOM_BYTE);  /* VCOM_DC; default 0x26 = -2.0 V (GxEPD2 partial), see Kconfig */
 
 #if !defined(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_DEFAULT)
     send_command(UC8179_CMD_CDI);
