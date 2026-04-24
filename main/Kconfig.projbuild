@@ -214,24 +214,6 @@ config DRAFTLING_EPD_PARTIAL_PWR_CYCLE
         values. Enable this if FAST_PARTIAL produces garbled output
         (e.g. only the cursor stroke renders, glyph bodies missing).
 
-config DRAFTLING_EPD_PARTIAL_CANONICAL_LUT
-    bool "Experiment B: textbook single-pulse LUT level bytes (KW=0x80, WK=0x40)"
-    depends on DRAFTLING_EPD_FAST_PARTIAL
-    default n
-    help
-        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
-
-        Replace the GxEPD2 LUT level bytes (KW=0x5A, WK=0x84 - patterns
-        with embedded sub-pulses) with the textbook single-pulse values
-        (KW=0x80, WK=0x40 - drive VSH or VSL solidly across the entire
-        T1..T4 window). The GxEPD2 patterns charge-balance during T1/T2
-        before the actual transition pulse in T3, which is calibrated
-        for one specific GDEW075T7 panel revision. On other revisions
-        the leading sub-pulses can charge-balance the pixel back toward
-        indeterminate before T3 finishes, leaving glyph bodies missing
-        even though thin features (like the cursor stroke) still
-        render. Try this if Experiment A does not help.
-
 config DRAFTLING_EPD_PARTIAL_FULL_FRAME
     bool "Experiment C: skip PTIN/PTL, push full framebuffer per partial"
     depends on DRAFTLING_EPD_FAST_PARTIAL
@@ -247,7 +229,7 @@ config DRAFTLING_EPD_PARTIAL_FULL_FRAME
         disappears, the bug is in the partial-window setup under
         register-LUT mode (PTL coordinates, PT_SCAN flag, or PSR-then-
         PTL ordering). If it persists, the bug is in the LUT data
-        itself and Experiment B is the relevant axis.
+        itself and Experiments H/I are the relevant axes.
 
 config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
     bool "Experiment E: skip CDI override (keep init border + N2OCP)"
@@ -276,7 +258,7 @@ config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
         bits have no visible effect; only the low-nibble (N2OCP +
         LUTBD) matters, and 0x39 is the only useful setting. The
         whitewash cause therefore lies in the LUT/VCOM domain, not
-        in the CDI byte -- see Experiments B and D.
+        in the CDI byte -- see Experiments D, H and I.
 
 config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
     hex "Experiment D: VCOM_DC byte in partial mode (default 0x26)"
@@ -292,22 +274,24 @@ config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
         partial-mode value from the GxEPD2 reference; the chip's
         init value is 0x22 (-1.6 V).
 
-        With CDI byte 1 = 0x39 (N2OCP = 1) and the GxEPD2 LUT level
-        bytes (KW = 0x5A, WK = 0x84), the LUT_KK entries are zero
-        drive ("no voltage on unchanged-black pixels"). For black to
-        actually hold across a refresh, VCOM_DC has to be negative
-        enough that the pixel sits below the threshold while no
-        drive is applied. The current 0x26 may not be negative
-        enough for some GDEW075T7 revisions, which would explain
-        the whitewash symptom (previously-rendered glyphs disappear
-        on the next partial because their pixels drift toward white
-        during the no-drive phase).
+        Result so far (D=0x28, all others disabled): the failure is
+        ASYMMETRIC. Typed black-on-white glyphs whitewash on the next
+        partial (W->K thin features on a stable white field do not
+        hold), but Ctrl+A inversion produces a clean black area
+        (W->K large area works), and typing white-on-black inside the
+        inverted area renders cleanly (K->W in both small and large
+        forms works). VCOM bias alone therefore does not explain the
+        symptom -- a generic VCOM problem would also break inverted
+        glyph rendering. Continue the D sweep as a control axis, but
+        focus the primary investigation on Experiments H (LUT_WK
+        thin-feature drive) and I (LUT_WW stable-white background
+        drive); see those entries below.
 
-        Suggested sweep (run with Experiment B disabled so the
-        GxEPD2 LUT level bytes are in effect):
+        Suggested sweep (run with H, I at defaults so the GxEPD2
+        LUT level bytes are in effect):
           0x22 = chip init value (equivalent to the old D=skip)
           0x26 = GxEPD2 partial-mode reference (current default)
-          0x28 = -2.2 V, slightly more negative
+          0x28 = -2.2 V (tested: asymmetric whitewash, see above)
           0x2A = -2.4 V
           0x2C = -2.6 V, GxEPD2 deep-sleep recovery value
           0x2E = -2.8 V, near the lower limit
@@ -317,6 +301,107 @@ config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
         run with E enabled (init CDI, border flashes) or disabled
         (CDI = 0x39, fast/no-flash) to test VCOM in isolation from
         N2OCP/LUTBD effects.
+
+config DRAFTLING_EPD_PARTIAL_KW_LEVEL
+    hex "Experiment G: LUT_KW level byte (default 0x5A)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    range 0x00 0xFF
+    default 0x5A
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Override the source-driver level byte at offset 0 of LUT_KW
+        (cmd 0x22, K->W transition LUT). Default 0x5A is the GxEPD2
+        reference pattern -- two VSH sub-pulses bracketing a VSL
+        relax pulse, repeating every two frames. Textbook alternative
+        is 0x80 (single-stage solid VSH drive across T1..T4).
+
+        K->W transitions render correctly with the default value in
+        both small and large forms (cursor strokes, inverted-area
+        glyphs, Ctrl+A clearing), so this option is mainly a CONTROL
+        axis -- if a value here breaks K->W, it confirms the LUT
+        is actually being applied. The asymmetric failure documented
+        in Experiment D is in the OPPOSITE transition; see Experiment
+        H below for the primary investigation.
+
+        Suggested sweep:
+          0x5A = GxEPD2 default (currently working)
+          0x80 = textbook single-pulse VSH
+          0x88 = lighter pull-up (one VSH frame per stage)
+          0xA0 = stronger early VSH
+
+config DRAFTLING_EPD_PARTIAL_WK_LEVEL
+    hex "Experiment H: LUT_WK level byte (default 0x84)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    range 0x00 0xFF
+    default 0x84
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Override the source-driver level byte at offset 0 of LUT_WK
+        (cmd 0x23, W->K transition LUT). Default 0x84 is the GxEPD2
+        reference pattern -- a VSL sub-pulse on frame 0 followed by
+        a VSH frame, repeating. Textbook alternative is 0x40 (single-
+        stage solid VSL drive across T1..T4, no charge-balance VSH
+        sub-pulse).
+
+        PRIMARY NEW AXIS. The Experiment D result shows that W->K
+        works for large areas (Ctrl+A inversion) but FAILS for thin
+        features on a stable white field (typed black glyphs
+        whitewash on the next partial). The 0x84 sub-pulse pattern
+        was calibrated for the bulk-pixel-flip case (large W->K
+        regions where neighboring pixels share the same drive).
+        For an isolated W->K pixel surrounded by W->W (zero-drive)
+        neighbors, the embedded VSH sub-pulse may be charge-balancing
+        the pixel back toward white before T3 finishes, since the
+        surrounding LUT_WW = 0x00 (no drive) does not anchor the
+        field. A textbook 0x40 (solid VSL, no sub-pulse) avoids the
+        embedded charge-balance and may hold the pixel black.
+
+        Suggested sweep (run with G at default, I at default 0x00):
+          0x84 = GxEPD2 default (currently broken: thin-feature whitewash)
+          0x40 = textbook single-pulse solid VSL
+          0x44 = solid VSL with one VSH balance frame per stage
+          0x48 = stronger pull-down pattern
+          0xC0 = double-strength VSL bursts
+
+config DRAFTLING_EPD_PARTIAL_WW_LEVEL
+    hex "Experiment I: LUT_WW level byte (default 0x00)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    range 0x00 0xFF
+    default 0x00
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Override the source-driver level byte at offset 0 of LUT_WW
+        (cmd 0x21, W->W stable-pixel LUT). Default 0x00 = no drive on
+        unchanged-white pixels, which is what suppresses the full-
+        screen border flash on every partial refresh.
+
+        SECONDARY NEW AXIS. The Experiment D result shows W->K thin
+        features failing on a stable white field while large-area
+        W->K works. One plausible cause: with LUT_WW = 0x00 (no
+        drive on the surrounding stable-white pixels), an isolated
+        W->K pixel has no field anchor in its neighborhood, and the
+        small but nonzero coupling capacitance to the neighbors
+        plus the LUT_WK = 0x84 sub-pulses charge-balance it back to
+        white. Adding a small pull-up drive (e.g. 0x40 = solid VSH)
+        on the stable-white field would anchor the W neighbors so
+        that the W->K pixel transitions cleanly -- at the cost of
+        reintroducing some border flash and a slower refresh.
+
+        Suggested sweep (run with H at default 0x84):
+          0x00 = no drive (current default; thin features whitewash)
+          0x40 = solid VSH on stable-white (anchor the field)
+          0x44 = VSH with one VSL balance frame
+          0x80 = solid VSL on stable-white (DARKENS unchanged white,
+                 likely produces grey background -- diagnostic only)
+
+        If a nonzero value here fixes the thin-feature whitewash,
+        the problem is field-anchoring, not the WK pattern itself,
+        and the fix is to leave I at the working level (accepting
+        more flash) or to lengthen LUT_WK T3 instead of changing
+        WW.
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"

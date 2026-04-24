@@ -240,10 +240,15 @@ static bool s_in_partial_mode = false;
  *   T4 -- optional extension of T3
  *   RP -- number of times to repeat the stage
  *
- * Critical property: LUTWW and LUTKK use level byte 0x00, i.e. no
- * drive for unchanged pixels. That is what suppresses the full-screen
- * border flash on each partial refresh -- only pixels that actually
- * transitioned (KW and WK) receive any pulse.
+ * Critical property: LUTKK uses level byte 0x00, i.e. no drive for
+ * unchanged-black pixels. LUTWW also defaults to 0x00 (no drive on
+ * unchanged white) which is what suppresses the full-screen border
+ * flash on each partial refresh -- only pixels that actually
+ * transitioned (KW and WK) receive any pulse. LUTWW is overridable
+ * via CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL (Experiment I) to test
+ * whether anchoring the stable-white field with a small drive fixes
+ * the W->K thin-feature whitewash; a nonzero value reintroduces some
+ * border flash.
  *
  * NB: an earlier revision of this driver used T3 = 0 (no color-change
  * phase) which meant pixels never got the actual transition pulse, so
@@ -260,31 +265,34 @@ static const uint8_t LUT_VCOM_PARTIAL[42] = {
     /* remaining 6 stages zero-padded (RP=0 -> skipped) */
 };
 
-/* W->W (cmd 0x21) -- LUTWW. Level 0x00: no drive on unchanged white. */
+/* W->W (cmd 0x21) -- LUTWW. Default 0x00 = no drive on unchanged
+ * white (suppresses border flash). Overridable via Experiment I to
+ * test whether anchoring the stable-white field with a small VSH
+ * drive fixes the W->K thin-feature whitewash from Experiment H. */
 static const uint8_t LUT_WW_PARTIAL[42] = {
-    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL,
+    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->W (cmd 0x22) -- LUTKW. Default 0x5A = "more white" pull-up
- * pattern from GxEPD2; gives a slightly cleaner white than the
- * textbook 0x48. With CONFIG_DRAFTLING_EPD_PARTIAL_CANONICAL_LUT the
- * textbook single-pulse value 0x80 is used instead (drive VSH solidly
- * across the entire T1..T4 window with no charge-balance sub-pulses). */
-#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_CANONICAL_LUT)
-#  define EPD_LUT_KW_LEVEL 0x80
-#  define EPD_LUT_WK_LEVEL 0x40
-#else
-#  define EPD_LUT_KW_LEVEL 0x5A
-#  define EPD_LUT_WK_LEVEL 0x84
-#endif
+/* K->W (cmd 0x22) -- LUTKW. Default 0x5A is the GxEPD2 reference
+ * "more white" pull-up pattern; textbook alternative is 0x80 (single-
+ * stage solid VSH). Sweepable via Experiment G. K->W currently
+ * works in both small- and large-feature forms, so this is mainly
+ * a control axis. */
 static const uint8_t LUT_KW_PARTIAL[42] = {
-    EPD_LUT_KW_LEVEL, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    CONFIG_DRAFTLING_EPD_PARTIAL_KW_LEVEL,
+    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* W->K (cmd 0x23) -- LUTWK. Default 0x84 = pull-down pattern (GxEPD2);
- * canonical override 0x40 = drive VSL solidly across T1..T4. */
+/* W->K (cmd 0x23) -- LUTWK. Default 0x84 is the GxEPD2 reference
+ * pull-down pattern with embedded VSH balance frame; textbook
+ * alternative is 0x40 (single-stage solid VSL). Sweepable via
+ * Experiment H -- the primary axis under investigation, since
+ * W->K thin features on a stable white field currently whitewash
+ * (typed black-on-white glyphs disappear on the next partial). */
 static const uint8_t LUT_WK_PARTIAL[42] = {
-    EPD_LUT_WK_LEVEL, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    CONFIG_DRAFTLING_EPD_PARTIAL_WK_LEVEL,
+    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* K->K (cmd 0x24) -- LUTKK. Level 0x00: no drive on unchanged black. */
