@@ -462,14 +462,12 @@ static void epd_enter_partial_mode(void)
     send_command(UC8179_CMD_PSR);
     send_data(0x3F);                       /* KW, register-LUT mode */
 
-#if !defined(CONFIG_DRAFTLING_EPD_PARTIAL_VCOM_DEFAULT)
     send_command(UC8179_CMD_VDCS);
-    send_data(0x26);                       /* VCOM_DC = -2.0 V (partial) */
-#endif
+    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_VCOM_BYTE);  /* default 0x26 = -2.0 V (partial) */
 
 #if !defined(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_DEFAULT)
     send_command(UC8179_CMD_CDI);
-    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_BYTE1);  /* default 0x39: LUTBD border, N2OCP copy new->old */
+    send_data(0x39);                       /* LUTBD border, N2OCP copy new->old */
     send_data(0x07);
 #endif
 
