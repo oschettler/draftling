@@ -279,6 +279,26 @@ config DRAFTLING_EPD_PARTIAL_FULL_FRAME
         (G=0x5A, H=0x84, I=0x00, J=0x00) and D=0x26 so the only
         independent variable is windowed vs full-frame transmission.
 
+        TEST RESULT (commit 489a357 / this branch, C=on, A/E off,
+        D=0x26, G=0x5A, H=0x84, I=0x00, J=0x00, EPD_INVERT on):
+        typed text remains INVISIBLE. Per the rubric above this
+        rules out PTL/windowed-transmission bugs entirely (the
+        entire framebuffer was sent for every refresh, so there
+        was no PTL window or raster-offset to get wrong).
+
+        Combined with the J=0x40 corner-inversion result (which
+        proved register-LUT levels DO drive pixels), the actual
+        root cause is now identified as LUT BYTE POLARITY UNDER
+        EPD_INVERT -- see the long write-up under Experiment G
+        (DRAFTLING_EPD_PARTIAL_KW_LEVEL). The GxEPD2 default G=0x5A
+        decodes as a balanced kick-then-pull pattern that nets to
+        zero impulse on this panel under EPD_INVERT polarity, so
+        the typed-character pixel ends near its starting state.
+
+        Next test moves out of this Experiment and into G: try
+        G=0xA5 (bit-inverse of 0x5A) with C OFF. Experiment C can
+        be left off going forward.
+
 config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
     bool "Experiment E: skip CDI override (keep init border + N2OCP)"
     depends on DRAFTLING_EPD_FAST_PARTIAL
@@ -406,27 +426,85 @@ config DRAFTLING_EPD_PARTIAL_KW_LEVEL
         sub-pulse) avoids the embedded charge-balance and may hold
         the pixel.
 
-        UPDATE: tested G=0x80 with EPD_INVERT on, A/C/E disabled,
-        D=0x26, H=0x84, I=0x00, J=0x00 -> typing STILL invisible,
-        Ctrl+A still reveals the text in inverted color. Combined
-        with the H=0x40 null result, this strongly suggests no LUT
-        level byte change is reaching the failing pixels, because
-        the windowed partial-refresh path may not be applying the
-        register LUTs correctly at all. Investigation has pivoted
-        to Experiment C (windowed-vs-full-frame transmission), which
-        is now the primary suspect.
+        UPDATE 1: G=0x80 with EPD_INVERT on, A/C/E off, D=0x26,
+        H=0x84, I=0x00, J=0x00 -> typing STILL invisible. H=0x40
+        sweep also null. Initial conclusion was "LUT not applied".
+
+        UPDATE 2 (J=0x40 corner-inversion test): J=0x40 visibly
+        darkened the upper-left title-bar background while typing,
+        which proves the register-LUT path DOES reach pixels and
+        rules out the "LUT not applied" hypothesis.
+
+        UPDATE 3 (Experiment C ON test, G=0x5A, defaults elsewhere):
+        with the entire framebuffer transmitted via DTM1/DTM2 (no
+        PTL window at all), typed text is STILL invisible. This
+        rules out PTL/windowed-transmission bugs as well.
+
+        ROOT CAUSE -- LUT BYTE POLARITY UNDER EPD_INVERT.
+        Cross-referencing the J=0x40 result with the EPD_INVERT
+        framebuffer convention gives a complete and consistent
+        explanation:
+
+          - EPD_INVERT swaps the framebuffer STORAGE convention but
+            not the bytes sent to the controller. EPD_WHITE_BYTE
+            is 0x00 under invert, so visual-white background is
+            transmitted as 0x00 and the controller classifies
+            those pixels as "K" (controller bit 0). Visual-black
+            typed text is 0xFF -> controller "W".
+          - A typed character is therefore a controller-side K->W
+            transition, governed by THIS LUT (LUT_KW = G).
+          - J=0x40 = `01 00 00 00` = 30 frames of voltage code 01
+            (= VDH/VSH) on stable-K pixels. Those pixels (visual
+            white) DARKENED in the test -- empirically proving that
+            on this panel under EPD_INVERT, voltage code "01" (VDH)
+            drives toward visual BLACK. Conversely "10" (VDL) drives
+            toward visual WHITE.
+          - The GxEPD2 default G=0x5A = `01 01 10 10` therefore
+            decodes as: 35 frames push-toward-visual-black, then
+            35 frames push-toward-visual-white. NET IMPULSE
+            CANCELS. The typed pixel ends near its original visual-
+            white state -> invisible character.
+
+        This is the standard GxEPD2 "kick-then-pull" overdrive
+        pattern, which is correct for default polarity (where a
+        controller K->W naming means visual black-to-white: kick
+        deeper into black to break static friction, then strong
+        pull to white). Under EPD_INVERT the visual meanings flip
+        but the LUT byte does not -> the kick-and-pull self-cancels.
+
+        FIX HYPOTHESIS: bit-invert the LUT level bytes for
+        EPD_INVERT mode. The bit-inverse of 0x5A is 0xA5
+        = `10 10 01 01`:
+          - 35 frames push-to-visual-WHITE (kick the white-
+            background pixel deeper into the white well to break
+            static friction)
+          - 35 frames push-to-visual-BLACK (long strong pull to
+            target visual black)
+
+        Equivalent transformations for the other LUTs under
+        EPD_INVERT: H 0x84 -> 0x48, I 0x00 -> 0x00 (unchanged),
+        J 0x00 -> 0x00 (unchanged).
+
+        NEXT TEST (decisive): set G=0xA5 with EPD_INVERT on,
+        A/C/E off, D=0x26, H=0x84, I=0x00, J=0x00. Expected
+        outcome: typed characters appear in visual black with no
+        upper-left flash. If confirmed, also try H=0x48 to verify
+        the W->K direction (cursor erase / character delete).
 
         Suggested sweep (with EPD_INVERT on, H/I/J at defaults):
-          0x5A = GxEPD2 default (currently broken: thin-feature whitewash)
-          0x80 = textbook single-pulse solid VSH
-          0x88 = solid VSH with one VSL balance frame per stage
-          0xA0 = stronger early VSH bursts
-          0xC0 = double-strength VSH bursts
+          0xA5 = bit-inverse of GxEPD2 default (predicted FIX)
+          0x55 = continuous push-to-black, no kick (simple but
+                 may ghost without kick)
+          0xAA = continuous push-to-white (sanity check: should
+                 keep typed pixel WHITE = invisible; expected
+                 to confirm direction mapping)
+          0x40 = single 30f push-to-black, mirror of J=0x40
+                 (predicted: light grey character, no kick)
 
-        Suggested sweep (with EPD_INVERT off): this becomes a control
-        axis on the visual K->W transition, which is currently
-        believed to work; sweep only to verify the LUT is being
-        applied at all.
+        Suggested sweep (with EPD_INVERT off): this becomes a
+        control axis on the visual K->W transition. The GxEPD2
+        default 0x5A is correct for that polarity; sweep only to
+        verify the LUT is being applied at all.
 
 config DRAFTLING_EPD_PARTIAL_WK_LEVEL
     hex "Experiment H: LUT_WK level byte (default 0x84)"
