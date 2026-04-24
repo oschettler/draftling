@@ -224,12 +224,36 @@ config DRAFTLING_EPD_PARTIAL_FULL_FRAME
         Keep the register-LUT fast-partial waveform but bypass the
         UC8179 partial-window machinery: skip PTIN (0x91) / PTL (0x90)
         / PTOUT (0x92) and send the entire framebuffer through DTM1
-        (old) and DTM2 (new) for every refresh. This decouples LUT
-        correctness from partial-window handling. If the symptom
-        disappears, the bug is in the partial-window setup under
-        register-LUT mode (PTL coordinates, PT_SCAN flag, or PSR-then-
-        PTL ordering). If it persists, the bug is in the LUT data
-        itself and Experiments H/I are the relevant axes.
+        (old) and DTM2 (new) for every refresh.
+
+        PROMOTED TO PRIMARY SUSPECT. The G=0x5A/0x80 and H=0x84/0x40
+        sweeps under EPD_INVERT on produced ZERO visible change in
+        typing rendering, while Ctrl+A reveals the typed characters
+        correctly. The cause is structural: display_flush() routes
+        Ctrl+A (huge dirty bbox) through epd_full_refresh() which
+        uses the OTP waveform and bypasses our register LUTs entirely,
+        whereas typing (small dirty bbox) routes through
+        epd_partial_refresh() which uses the windowed PTL/PTIN path
+        with our custom LUTs. The fact that no LUT level byte change
+        is visible means the LUT loading or the windowed transmission
+        is fundamentally broken on this panel, not that any specific
+        level byte is wrong.
+
+        Discriminating test:
+          C ON  -> typing visible  : bug is in the PTL/PTIN window
+                                     setup (PTL byte layout, PT_SCAN
+                                     flag, byte ordering, or PSR ->
+                                     PTL ordering).
+          C ON  -> typing still
+                   invisible       : bug is in epd_enter_partial_mode
+                                     itself (PSR=0x3F not sticking,
+                                     LUTs not actually loaded, or
+                                     CDI=0x39 interaction with
+                                     register-LUT mode).
+
+        Recommended to run with the LUT bytes at GxEPD2 defaults
+        (G=0x5A, H=0x84, I=0x00, J=0x00) and D=0x26 so the only
+        independent variable is windowed vs full-frame transmission.
 
 config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
     bool "Experiment E: skip CDI override (keep init border + N2OCP)"
@@ -284,10 +308,16 @@ config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
         alone therefore does not explain the symptom -- a generic VCOM
         problem would also break inverted glyph rendering. Continue
         the D sweep as a control axis, but focus the primary
-        investigation on Experiments G (LUT_KW thin-feature drive,
-        which is the visual W->K LUT under EPD_INVERT) and J (LUT_KK
-        stable-white anchor, which is the stable-visual-white LUT
-        under EPD_INVERT); see those entries below.
+        investigation on Experiment C (windowed-vs-full-frame
+        transmission); the G=0x80 and H=0x40 sweeps both produced
+        zero visible effect on typing, indicating the LUT level
+        bytes are NOT the failing axis on this panel. The Ctrl+A
+        success is now understood to be a code-path artifact:
+        display_flush() routes huge dirty bboxes through
+        epd_full_refresh() (OTP waveform), bypassing the register
+        LUTs entirely, while typing routes through the windowed
+        epd_partial_refresh() that is failing. See Experiment C
+        help for details.
 
         IMPORTANT polarity caveat: the experiments reporting "W->K"
         and "K->W" results above describe what the USER SEES on the
@@ -348,9 +378,19 @@ config DRAFTLING_EPD_PARTIAL_KW_LEVEL
         thin feature the VSH sub-pulse can pull the pixel back toward
         the bit-1 state (visual white) before T3 finishes; for a bulk
         flip the neighbouring pixels share the same drive and the
-        balance frame is harmless. A textbook 0x80 (solid VSH, no
+        balance frame is harmless. A textbook 0x80 (solid VSL, no
         sub-pulse) avoids the embedded charge-balance and may hold
         the pixel.
+
+        UPDATE: tested G=0x80 with EPD_INVERT on, A/C/E disabled,
+        D=0x26, H=0x84, I=0x00, J=0x00 -> typing STILL invisible,
+        Ctrl+A still reveals the text in inverted color. Combined
+        with the H=0x40 null result, this strongly suggests no LUT
+        level byte change is reaching the failing pixels, because
+        the windowed partial-refresh path may not be applying the
+        register LUTs correctly at all. Investigation has pivoted
+        to Experiment C (windowed-vs-full-frame transmission), which
+        is now the primary suspect.
 
         Suggested sweep (with EPD_INVERT on, H/I/J at defaults):
           0x5A = GxEPD2 default (currently broken: thin-feature whitewash)
@@ -388,11 +428,9 @@ config DRAFTLING_EPD_PARTIAL_WK_LEVEL
         Currently a CONTROL AXIS under EPD_INVERT on. Tested H=0x40
         (textbook single-pulse solid VSL) with EPD_INVERT on, A/C/E
         disabled, D=0x26, G=0x5A: visual thin-feature whitewash
-        UNCHANGED, confirming the polarity mapping above -- LUT_WK
-        does not affect the failing visual W->K transition under
-        EPD_INVERT on. Under EPD_INVERT off this would be the primary
-        suspect; if a future test runs with EPD_INVERT disabled,
-        swap H and G in the priority order.
+        UNCHANGED. Combined with the G=0x80 null result, this points
+        away from any LUT level byte being the failing axis -- see
+        Experiment C, now the primary suspect.
 
         Suggested sweep (with EPD_INVERT on): mostly a control --
         sweep to confirm LUT_WK is being applied to the working
