@@ -258,7 +258,7 @@ config DRAFTLING_EPD_PARTIAL_CDI_DEFAULT
         bits have no visible effect; only the low-nibble (N2OCP +
         LUTBD) matters, and 0x39 is the only useful setting. The
         whitewash cause therefore lies in the LUT/VCOM domain, not
-        in the CDI byte -- see Experiments D, H and I.
+        in the CDI byte -- see Experiments D, G and J.
 
 config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
     hex "Experiment D: VCOM_DC byte in partial mode (default 0x26)"
@@ -274,21 +274,36 @@ config DRAFTLING_EPD_PARTIAL_VCOM_BYTE
         partial-mode value from the GxEPD2 reference; the chip's
         init value is 0x22 (-1.6 V).
 
-        Result so far (D=0x28, all others disabled): the failure is
-        ASYMMETRIC. Typed black-on-white glyphs whitewash on the next
-        partial (W->K thin features on a stable white field do not
-        hold), but Ctrl+A inversion produces a clean black area
-        (W->K large area works), and typing white-on-black inside the
-        inverted area renders cleanly (K->W in both small and large
-        forms works). VCOM bias alone therefore does not explain the
-        symptom -- a generic VCOM problem would also break inverted
-        glyph rendering. Continue the D sweep as a control axis, but
-        focus the primary investigation on Experiments H (LUT_WK
-        thin-feature drive) and I (LUT_WW stable-white background
-        drive); see those entries below.
+        Result so far (D=0x28, all others disabled, EPD_INVERT ON):
+        the failure is ASYMMETRIC. Typed black-on-white visual glyphs
+        whitewash on the next partial (visual W->K thin features on a
+        stable white field do not hold), but Ctrl+A inversion produces
+        a clean black area (visual W->K large area works), and typing
+        white-on-black inside the inverted area renders cleanly
+        (visual K->W in both small and large forms works). VCOM bias
+        alone therefore does not explain the symptom -- a generic VCOM
+        problem would also break inverted glyph rendering. Continue
+        the D sweep as a control axis, but focus the primary
+        investigation on Experiments G (LUT_KW thin-feature drive,
+        which is the visual W->K LUT under EPD_INVERT) and J (LUT_KK
+        stable-white anchor, which is the stable-visual-white LUT
+        under EPD_INVERT); see those entries below.
 
-        Suggested sweep (run with H, I at defaults so the GxEPD2
-        LUT level bytes are in effect):
+        IMPORTANT polarity caveat: the experiments reporting "W->K"
+        and "K->W" results above describe what the USER SEES on the
+        panel. With CONFIG_DRAFTLING_EPD_INVERT enabled (the
+        configuration the user has been testing), the framebuffer
+        bit polarity is flipped before reaching the controller, so
+        the controller's LUT_KW (cmd 0x22) drives the visual W->K
+        transition and LUT_WK (cmd 0x23) drives the visual K->W
+        transition. Likewise LUT_WW (0x21) drives the stable-visual-
+        black field and LUT_KK (0x24) drives the stable-visual-white
+        field. The Experiment G/H/I/J help below explains both the
+        controller-side meaning and the visual meaning under each
+        EPD_INVERT setting.
+
+        Suggested sweep (run with G, H, I, J at defaults so the
+        GxEPD2 LUT level bytes are in effect):
           0x22 = chip init value (equivalent to the old D=skip)
           0x26 = GxEPD2 partial-mode reference (current default)
           0x28 = -2.2 V (tested: asymmetric whitewash, see above)
@@ -311,24 +326,43 @@ config DRAFTLING_EPD_PARTIAL_KW_LEVEL
         TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
 
         Override the source-driver level byte at offset 0 of LUT_KW
-        (cmd 0x22, K->W transition LUT). Default 0x5A is the GxEPD2
-        reference pattern -- two VSH sub-pulses bracketing a VSL
-        relax pulse, repeating every two frames. Textbook alternative
-        is 0x80 (single-stage solid VSH drive across T1..T4).
+        (cmd 0x22, controller's K->W transition LUT). Default 0x5A is
+        the GxEPD2 reference pattern -- two VSH sub-pulses bracketing
+        a VSL relax pulse, repeating every two frames. Textbook
+        alternative is 0x80 (single-stage solid VSH drive across
+        T1..T4).
 
-        K->W transitions render correctly with the default value in
-        both small and large forms (cursor strokes, inverted-area
-        glyphs, Ctrl+A clearing), so this option is mainly a CONTROL
-        axis -- if a value here breaks K->W, it confirms the LUT
-        is actually being applied. The asymmetric failure documented
-        in Experiment D is in the OPPOSITE transition; see Experiment
-        H below for the primary investigation.
+        POLARITY MAPPING:
+          EPD_INVERT off -> drives the visual K->W transition
+                            (typed white-on-black, Ctrl+A clearing).
+          EPD_INVERT on  -> drives the visual W->K transition
+                            (typed BLACK-on-white -- the FAILING case).
 
-        Suggested sweep:
-          0x5A = GxEPD2 default (currently working)
-          0x80 = textbook single-pulse VSH
-          0x88 = lighter pull-up (one VSH frame per stage)
-          0xA0 = stronger early VSH
+        PRIMARY AXIS WHEN EPD_INVERT IS ON. The Experiment D result
+        shows visual W->K thin features whitewash while large-area
+        visual W->K works. With EPD_INVERT on, this LUT governs
+        exactly that failing transition: the embedded VSH sub-pulses
+        in 0x5A act as a charge-balance for an isolated bit-1 pixel
+        (visual black) surrounded by bit-1 stable neighbours (visual
+        white, governed by LUT_KK = 0x00, no drive). For an isolated
+        thin feature the VSH sub-pulse can pull the pixel back toward
+        the bit-1 state (visual white) before T3 finishes; for a bulk
+        flip the neighbouring pixels share the same drive and the
+        balance frame is harmless. A textbook 0x80 (solid VSH, no
+        sub-pulse) avoids the embedded charge-balance and may hold
+        the pixel.
+
+        Suggested sweep (with EPD_INVERT on, H/I/J at defaults):
+          0x5A = GxEPD2 default (currently broken: thin-feature whitewash)
+          0x80 = textbook single-pulse solid VSH
+          0x88 = solid VSH with one VSL balance frame per stage
+          0xA0 = stronger early VSH bursts
+          0xC0 = double-strength VSH bursts
+
+        Suggested sweep (with EPD_INVERT off): this becomes a control
+        axis on the visual K->W transition, which is currently
+        believed to work; sweep only to verify the LUT is being
+        applied at all.
 
 config DRAFTLING_EPD_PARTIAL_WK_LEVEL
     hex "Experiment H: LUT_WK level byte (default 0x84)"
@@ -339,27 +373,33 @@ config DRAFTLING_EPD_PARTIAL_WK_LEVEL
         TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
 
         Override the source-driver level byte at offset 0 of LUT_WK
-        (cmd 0x23, W->K transition LUT). Default 0x84 is the GxEPD2
-        reference pattern -- a VSL sub-pulse on frame 0 followed by
-        a VSH frame, repeating. Textbook alternative is 0x40 (single-
-        stage solid VSL drive across T1..T4, no charge-balance VSH
-        sub-pulse).
+        (cmd 0x23, controller's W->K transition LUT). Default 0x84
+        is the GxEPD2 reference pattern -- a VSL sub-pulse on frame 0
+        followed by a VSH frame, repeating. Textbook alternative is
+        0x40 (single-stage solid VSL drive across T1..T4, no charge-
+        balance VSH sub-pulse).
 
-        PRIMARY NEW AXIS. The Experiment D result shows that W->K
-        works for large areas (Ctrl+A inversion) but FAILS for thin
-        features on a stable white field (typed black glyphs
-        whitewash on the next partial). The 0x84 sub-pulse pattern
-        was calibrated for the bulk-pixel-flip case (large W->K
-        regions where neighboring pixels share the same drive).
-        For an isolated W->K pixel surrounded by W->W (zero-drive)
-        neighbors, the embedded VSH sub-pulse may be charge-balancing
-        the pixel back toward white before T3 finishes, since the
-        surrounding LUT_WW = 0x00 (no drive) does not anchor the
-        field. A textbook 0x40 (solid VSL, no sub-pulse) avoids the
-        embedded charge-balance and may hold the pixel black.
+        POLARITY MAPPING:
+          EPD_INVERT off -> drives the visual W->K transition
+                            (typed black-on-white -- the FAILING case).
+          EPD_INVERT on  -> drives the visual K->W transition
+                            (typing inside Ctrl+A inversion -- WORKS).
 
-        Suggested sweep (run with G at default, I at default 0x00):
-          0x84 = GxEPD2 default (currently broken: thin-feature whitewash)
+        Currently a CONTROL AXIS under EPD_INVERT on. Tested H=0x40
+        (textbook single-pulse solid VSL) with EPD_INVERT on, A/C/E
+        disabled, D=0x26, G=0x5A: visual thin-feature whitewash
+        UNCHANGED, confirming the polarity mapping above -- LUT_WK
+        does not affect the failing visual W->K transition under
+        EPD_INVERT on. Under EPD_INVERT off this would be the primary
+        suspect; if a future test runs with EPD_INVERT disabled,
+        swap H and G in the priority order.
+
+        Suggested sweep (with EPD_INVERT on): mostly a control --
+        sweep to confirm LUT_WK is being applied to the working
+        visual K->W direction, but H is not the most likely fix.
+
+        Suggested sweep (with EPD_INVERT off, G/I/J at defaults):
+          0x84 = GxEPD2 default
           0x40 = textbook single-pulse solid VSL
           0x44 = solid VSL with one VSH balance frame per stage
           0x48 = stronger pull-down pattern
@@ -374,34 +414,80 @@ config DRAFTLING_EPD_PARTIAL_WW_LEVEL
         TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
 
         Override the source-driver level byte at offset 0 of LUT_WW
-        (cmd 0x21, W->W stable-pixel LUT). Default 0x00 = no drive on
-        unchanged-white pixels, which is what suppresses the full-
-        screen border flash on every partial refresh.
+        (cmd 0x21, controller's W->W stable-pixel LUT). Default 0x00
+        = no drive on bit-0/bit-0 stable pixels.
 
-        SECONDARY NEW AXIS. The Experiment D result shows W->K thin
-        features failing on a stable white field while large-area
-        W->K works. One plausible cause: with LUT_WW = 0x00 (no
-        drive on the surrounding stable-white pixels), an isolated
-        W->K pixel has no field anchor in its neighborhood, and the
-        small but nonzero coupling capacitance to the neighbors
-        plus the LUT_WK = 0x84 sub-pulses charge-balance it back to
-        white. Adding a small pull-up drive (e.g. 0x40 = solid VSH)
-        on the stable-white field would anchor the W neighbors so
-        that the W->K pixel transitions cleanly -- at the cost of
-        reintroducing some border flash and a slower refresh.
+        POLARITY MAPPING:
+          EPD_INVERT off -> stable-visual-WHITE field anchor.
+          EPD_INVERT on  -> stable-visual-BLACK field anchor (the
+                            field that is NOT adjacent to the failing
+                            transition; see Experiment J for the
+                            stable-visual-WHITE anchor under
+                            EPD_INVERT on).
 
-        Suggested sweep (run with H at default 0x84):
+        SECONDARY AXIS, polarity-dependent. Under EPD_INVERT on (the
+        configuration currently being tested) this knob anchors the
+        wrong field for the failing thin-feature whitewash -- the
+        stable-visual-WHITE pixels surrounding a typed black character
+        are bit=1 in the framebuffer and therefore fall under LUT_KK,
+        not LUT_WW. Use Experiment J for that case. Under EPD_INVERT
+        off, this is the right knob for anchoring the stable-visual-
+        white field.
+
+        Suggested sweep (with EPD_INVERT off, G/H/J at defaults):
           0x00 = no drive (current default; thin features whitewash)
           0x40 = solid VSH on stable-white (anchor the field)
           0x44 = VSH with one VSL balance frame
           0x80 = solid VSL on stable-white (DARKENS unchanged white,
                  likely produces grey background -- diagnostic only)
 
-        If a nonzero value here fixes the thin-feature whitewash,
-        the problem is field-anchoring, not the WK pattern itself,
-        and the fix is to leave I at the working level (accepting
-        more flash) or to lengthen LUT_WK T3 instead of changing
-        WW.
+        Under EPD_INVERT on, leave I at 0x00 unless investigating
+        ghosting on the stable-visual-BLACK field; sweep J instead
+        for the thin-feature whitewash on stable-visual-WHITE.
+
+config DRAFTLING_EPD_PARTIAL_KK_LEVEL
+    hex "Experiment J: LUT_KK level byte (default 0x00)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    range 0x00 0xFF
+    default 0x00
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Override the source-driver level byte at offset 0 of LUT_KK
+        (cmd 0x24, controller's K->K stable-pixel LUT). Default 0x00
+        = no drive on bit-1/bit-1 stable pixels.
+
+        POLARITY MAPPING:
+          EPD_INVERT off -> stable-visual-BLACK field anchor.
+          EPD_INVERT on  -> stable-visual-WHITE field anchor (the
+                            field surrounding a typed black character
+                            under EPD_INVERT on -- the field that
+                            currently fails to anchor isolated
+                            visual W->K transitions).
+
+        PRIMARY ANCHOR AXIS WHEN EPD_INVERT IS ON. With EPD_INVERT on,
+        the stable-visual-white background of a normal document is
+        bit=1 in the framebuffer and is therefore governed by this
+        LUT, not by LUT_WW. Default 0x00 (no drive) means there is
+        no field anchor on the surrounding white pixels, so an
+        isolated visual W->K transition (a typed black character
+        pixel, governed by LUT_KW = 0x5A under EPD_INVERT on) can be
+        capacitively pulled back by its bit-1 neighbours which
+        receive zero drive. Adding a small drive here may anchor the
+        field and let isolated visual W->K pixels hold their
+        transition.
+
+        Suggested sweep (with EPD_INVERT on, G/H/I at defaults):
+          0x00 = no drive (current default; thin features whitewash)
+          0x40 = solid VSH on stable-visual-white (anchor the field)
+          0x44 = VSH with one VSL balance frame
+          0x80 = solid VSL on stable-visual-white (DARKENS the
+                 unchanged white background -- diagnostic only)
+
+        If a nonzero value here fixes the visual thin-feature
+        whitewash, the problem is field-anchoring under EPD_INVERT
+        and the trade-off is some border / background flash at every
+        partial.
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"

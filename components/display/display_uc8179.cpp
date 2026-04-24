@@ -240,15 +240,21 @@ static bool s_in_partial_mode = false;
  *   T4 -- optional extension of T3
  *   RP -- number of times to repeat the stage
  *
- * Critical property: LUTKK uses level byte 0x00, i.e. no drive for
- * unchanged-black pixels. LUTWW also defaults to 0x00 (no drive on
- * unchanged white) which is what suppresses the full-screen border
- * flash on each partial refresh -- only pixels that actually
- * transitioned (KW and WK) receive any pulse. LUTWW is overridable
- * via CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL (Experiment I) to test
- * whether anchoring the stable-white field with a small drive fixes
- * the W->K thin-feature whitewash; a nonzero value reintroduces some
- * border flash.
+ * Critical property: by default LUTWW and LUTKK both use level byte
+ * 0x00, i.e. no drive for unchanged pixels. That is what suppresses
+ * the full-screen border flash on each partial refresh -- only
+ * pixels that actually transitioned (KW and WK) receive any pulse.
+ * Both stable-pixel LUTs are now overridable via
+ * CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL (Experiment I) and
+ * CONFIG_DRAFTLING_EPD_PARTIAL_KK_LEVEL (Experiment J) to test
+ * whether anchoring the stable field with a small drive fixes
+ * isolated thin-feature transitions; a nonzero value reintroduces
+ * some border flash. Note that under CONFIG_DRAFTLING_EPD_INVERT
+ * the framebuffer bit polarity is flipped before reaching the
+ * controller, so LUTWW (controller's "W->W stable") drives the
+ * stable-visual-BLACK field and LUTKK (controller's "K->K stable")
+ * drives the stable-visual-WHITE field; choose the right knob for
+ * the polarity in use.
  *
  * NB: an earlier revision of this driver used T3 = 0 (no color-change
  * phase) which meant pixels never got the actual transition pulse, so
@@ -295,9 +301,15 @@ static const uint8_t LUT_WK_PARTIAL[42] = {
     EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->K (cmd 0x24) -- LUTKK. Level 0x00: no drive on unchanged black. */
+/* K->K (cmd 0x24) -- LUTKK. Default 0x00 = no drive on unchanged
+ * black (controller-side; with EPD_INVERT on, this is the stable-
+ * visual-WHITE anchor). Overridable via Experiment J to test
+ * whether anchoring the stable-visual-white field with a small
+ * drive fixes the visual W->K thin-feature whitewash that occurs
+ * under EPD_INVERT on. */
 static const uint8_t LUT_KK_PARTIAL[42] = {
-    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    CONFIG_DRAFTLING_EPD_PARTIAL_KK_LEVEL,
+    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* Border (cmd 0x25) -- LUTBD. Level 0x00: no border drive, no flash. */
