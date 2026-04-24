@@ -56,7 +56,7 @@ Git repository via the GitHub REST API.
 | Storage | MicroSD (SDMMC 1-bit) | MicroSD (SPI, shared bus with display) | Optional SD on dedicated SPI3 (off by default) | Onboard MicroSD (SPI3) |
 | Input | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard |
 | Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
-| Battery monitor | GPIO4 ADC (3:1 divider) | GPIO1 ADC (2:1, GPIO21 enable) | not present | not yet wired (fuel-gauge over I2C, TODO) |
+| Battery monitor | GPIO4 ADC (3:1 divider) | GPIO1 ADC (2:1, GPIO21 enable) | not present | GPIO3 ADC (2:1 divider) |
 | Wake from sleep | GPIO18 button | KEY0 / right green button (GPIO3) | GPIO0 (BOOT button, configurable) | Power button (GPIO21) |
 
 ## Features

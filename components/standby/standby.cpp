@@ -11,6 +11,13 @@
  *    powered down.
  *  - Waveshare E-Paper Driver HAT: wakes via EXT0 on the GPIO selected
  *    by CONFIG_DRAFTLING_HAT_WAKEUP_GPIO (default GPIO0 / BOOT button).
+ *    Unlike the other supported boards there is no guaranteed external
+ *    pull-up on this pin (the user picks an arbitrary RTC-capable GPIO
+ *    on whatever ESP32 host they wired up), so standby_enter_sleep()
+ *    enables the chip's internal RTC pull-up before arming EXT0.
+ *    Without that, the line floats LOW and EXT0 fires the moment the
+ *    MCU enters deep sleep, making the device boot back up
+ *    immediately.
  *  - M5Stack PaperS3: wakes via EXT0 on the BOOT button (GPIO0,
  *    active-low). Earlier revisions tried GPIO21 (wrong -- the on-board
  *    buzzer pin, floated low under some speaker-driver states and woke
@@ -212,6 +219,49 @@ extern "C" void standby_enter_sleep(void)
 
     if (s_pre_sleep_cb) {
         s_pre_sleep_cb();
+    }
+
+    /* Enable the internal RTC pull-up on the wake pin and disable any
+     * pull-down so the EXT0 wake-on-low source does not fire
+     * immediately on boards where the wake GPIO has no external
+     * pull-up resistor.
+     *
+     * This matters most for the Waveshare E-Paper Driver HAT, which
+     * runs on a generic ESP32 host: the default wake pin is GPIO0
+     * (BOOT button), but a user may configure any RTC-capable GPIO
+     * via CONFIG_DRAFTLING_HAT_WAKEUP_GPIO and that pin is not
+     * guaranteed to have an external pull-up. Without an internal
+     * pull-up the line floats and reads LOW, which the EXT0 wake-up
+     * source treats as "button pressed" and fires immediately on
+     * entering deep sleep -- causing the device to start up again
+     * the instant it tries to sleep.
+     *
+     * The other supported boards already have external pull-ups
+     * (RLCD-4.2 button on GPIO18, reTerminal KEY0 on GPIO3,
+     * PaperS3 BOOT on GPIO0 / strapping pin), so adding an internal
+     * pull-up there is harmless: the two pull-ups simply parallel.
+     * We always enable it so the behaviour is consistent across
+     * boards.
+     *
+     * rtc_gpio_pullup_en() routes through the RTC IO mux, so the
+     * pull-up survives into deep sleep. Errors are logged but not
+     * fatal: a non-RTC-capable GPIO will be rejected here, and we
+     * still want to attempt deep sleep with whatever wake-up
+     * configuration we can make work. */
+    if (rtc_gpio_is_valid_gpio(WAKEUP_GPIO)) {
+        esp_err_t err = rtc_gpio_pullup_en(WAKEUP_GPIO);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "rtc_gpio_pullup_en(GPIO%d) failed: %s",
+                     (int)WAKEUP_GPIO, esp_err_to_name(err));
+        }
+        err = rtc_gpio_pulldown_dis(WAKEUP_GPIO);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "rtc_gpio_pulldown_dis(GPIO%d) failed: %s",
+                     (int)WAKEUP_GPIO, esp_err_to_name(err));
+        }
+    } else {
+        ESP_LOGW(TAG, "GPIO%d is not RTC-capable; cannot enable internal pull-up",
+                 (int)WAKEUP_GPIO);
     }
 
     /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */

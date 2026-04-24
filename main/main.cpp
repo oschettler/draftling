@@ -141,7 +141,7 @@ extern "C" void app_main(void)
 
     /* Initialize battery voltage monitor before the UI so the editor
      * status bar can show the battery level immediately. battery_init
-     * is a no-op when BATT_ADC_PIN is < 0 (HAT and PaperS3 cases). */
+     * is a no-op when BATT_ADC_PIN is < 0 (HAT case). */
     ESP_LOGI(TAG, "Initializing battery monitor...");
     battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
 

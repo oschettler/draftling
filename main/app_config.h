@@ -165,11 +165,23 @@
 #define I2C_SDA_PIN     41
 #define I2C_SCL_PIN     42
 
-/* No ADC battery divider; battery state would come from the on-board
- * fuel gauge over I2C in a future revision (see components/battery). */
-#define BATT_ADC_PIN    -1
+/* Battery voltage monitor.
+ *
+ * The PaperS3 routes the LiPo cell through a 1:2 resistive divider
+ * (R_top == R_bottom, V_pin = V_bat / 2) into ADC1 channel 2 on
+ * GPIO3. There is no enable transistor -- the divider is always
+ * powered. Pin and divider ratio match the M5Unified Power_Class
+ * configuration for board_M5PaperS3 (BAT_ADC = ADC1_GPIO3,
+ * adc_ratio = 2.0). The battery component will multiply the
+ * measured pin voltage by BATT_DIVIDER (=2) to recover the actual
+ * cell voltage.
+ *
+ * GPIO4 carries the charger CHG_STAT signal on the PaperS3 (active
+ * low while charging). It is not wired through the battery API yet;
+ * the editor only displays the cell percentage. */
+#define BATT_ADC_PIN    3
 #define BATT_EN_PIN     -1
-#define BATT_DIVIDER    1
+#define BATT_DIVIDER    2
 
 /* Deep-sleep wakeup on the BOOT button (GPIO0, active-low).
  *

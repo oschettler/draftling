@@ -1,13 +1,16 @@
 /*
  * Battery voltage monitor.
  *
- * Two boards are currently supported:
+ * Three boards are currently supported:
  *
  *   - Waveshare ESP32-S3-RLCD-4.2: GPIO4 (ADC1_CH3) with a 3:1 resistive
  *     divider (200 K + 100 K), no enable pin.
  *   - Seeed reTerminal E1001: GPIO1 (ADC1_CH0) with a 2:1 resistive divider,
  *     gated by an enable transistor on GPIO21 (driven HIGH to power the
  *     divider, then released LOW to save current between samples).
+ *   - M5Stack PaperS3: GPIO3 (ADC1_CH2) with a 2:1 resistive divider, no
+ *     enable pin (matches the M5Unified Power_Class configuration for
+ *     board_M5PaperS3: BAT_ADC = ADC1_GPIO3, adc_ratio = 2.0).
  *
  * The ESP-IDF ADC oneshot driver with curve-fitting calibration converts
  * the raw ADC reading to millivolts at the pin, and the divider ratio
@@ -125,10 +128,9 @@ extern "C" int battery_init(int gpio_num, int enable_gpio, int divider)
     if (s_initialized) return 0;
 
     /* Boards with no on-board battery monitor pass gpio_num < 0 (e.g. the
-     * bare Waveshare E-Paper Driver HAT and the M5Stack PaperS3, whose
-     * battery state lives on a fuel-gauge IC over I2C). Skip ADC setup
-     * entirely; battery_read_mv()/battery_read_percent() will then return
-     * 0 / -1 and the editor UI will hide the icon. */
+     * bare Waveshare E-Paper Driver HAT). Skip ADC setup entirely;
+     * battery_read_mv()/battery_read_percent() will then return 0 / -1
+     * and the editor UI will hide the icon. */
     if (gpio_num < 0) {
         ESP_LOGI(TAG, "Battery monitor disabled (no ADC pin configured)");
         return 0;

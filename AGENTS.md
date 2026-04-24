@@ -77,10 +77,12 @@ Reads battery voltage through a resistive divider on a configurable
 ADC pin using the ESP32 ADC. Applies exponential moving average
 smoothing over 8 samples. Maps voltage to a percentage: >=4.10V is
 100%, >=3.95V is 75%, >=3.80V is 50%, >=3.60V is 25%, below 3.60V
-is 0%. Boards with no on-board battery monitor (the bare Waveshare
-EPD HAT and the M5Stack PaperS3) pass `BATT_ADC_PIN = -1`, which
-makes `battery_init()` a no-op and causes `battery_read_percent()`
-to return -1; the editor UI hides the battery icon in that case.
+is 0%. The M5Stack PaperS3 reads its cell through ADC1 on GPIO3 with
+a 1:2 divider, matching the M5Unified Power_Class configuration for
+that board. The bare Waveshare EPD HAT has no on-board battery and
+passes `BATT_ADC_PIN = -1`, which makes `battery_init()` a no-op and
+causes `battery_read_percent()` to return -1; the editor UI hides the
+battery icon in that case.
 
 Public API: `battery_init()`, `battery_read_mv()`, `battery_read_percent()`.
 
@@ -237,6 +239,17 @@ GPIO48 (the GT911 touch INT) with a light-sleep + `esp_restart()`
 workaround; both woke the device immediately, the latter because
 M5GFX initializes only the e-paper panel (not the touch controller),
 so the GT911 is left uninitialized and holds INT low.
+
+Before arming EXT0, `standby_enter_sleep()` enables the chip's
+internal RTC pull-up on the wake GPIO and disables any pull-down.
+The supported branded boards (RLCD-4.2 button, reTerminal KEY0,
+PaperS3 BOOT strapping pin) all have external pull-ups, so they
+worked without it; but the Waveshare E-Paper Driver HAT runs on a
+generic ESP32 host where the user-selected wake pin
+(`CONFIG_DRAFTLING_HAT_WAKEUP_GPIO`) may be a bare GPIO with no
+external pull-up. Without an internal pull-up that line floats LOW
+and EXT0 fires immediately, making the device boot back up the
+instant it tries to deep-sleep.
 
 In addition to the inactivity timer, `standby_init()` also arms a
 "no keyboard connected" countdown of `CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC`

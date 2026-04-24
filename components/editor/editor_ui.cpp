@@ -267,8 +267,20 @@ static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byt
  * changes and a second Esc will discard + close. */
 static bool s_esc_pending = false;
 
-/* ---- Device battery display (Waveshare RLCD42) ---- */
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+/* ---- Device battery display ----
+ *
+ * Boards that have a wired-up battery monitor (BATT_ADC_PIN >= 0)
+ * show a percentage in the status bar of both the editor and the
+ * file browser. Each board defines this in app_config.h:
+ *   - Waveshare RLCD-4.2:   GPIO4, 3:1 divider
+ *   - Seeed reTerminal E1001: GPIO1, 2:1 divider, GPIO21 enable
+ *   - M5Stack PaperS3:        GPIO3, 2:1 divider (no enable)
+ * The bare Waveshare E-Paper Driver HAT has no on-board battery and
+ * leaves the indicator out. */
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#define DRAFTLING_HAS_BATT_INDICATOR 1
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
 static lv_timer_t *s_batt_timer     = NULL;
@@ -412,7 +424,9 @@ static void cursor_blink_cb(lv_timer_t *timer)
 }
 #endif
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
 {
@@ -2461,7 +2475,9 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_status,
         "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
@@ -2533,7 +2549,9 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_color(s_lbl_br_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
+    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
     lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);
