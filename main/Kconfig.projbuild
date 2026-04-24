@@ -40,11 +40,12 @@ config DRAFTLING_MODEL_WAVESHARE_EPD_HAT
         Support for external, SPI-connected RAM" before selecting this
         board model.
 
-        Pin defaults match the ESP32-S3-DevKitC-1 wiring used by
-        Waveshare's example projects; the resolution and every control
-        pin are overridable below to support different host boards and
-        panels (4.2" 400x300, 5.83" 600x448, 7.5" 800x480, 7.5" V2 BW
-        800x480, etc.).
+        Pick the connected panel from the "E-paper panel" choice below;
+        each panel preset locks in the panel's resolution, framebuffer
+        polarity and partial-refresh waveform. Only the GPIO pinout
+        (under "Waveshare E-Paper Driver HAT pinout") remains
+        user-editable. Pin defaults match the ESP32-S3-DevKitC-1 wiring
+        used by Waveshare's example projects.
 
 config DRAFTLING_MODEL_M5STACK_PAPERS3
     bool "M5Stack PaperS3"
@@ -57,29 +58,61 @@ config DRAFTLING_MODEL_M5STACK_PAPERS3
 
 endchoice
 
+choice DRAFTLING_HAT_PANEL
+    prompt "E-paper panel (HAT)"
+    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default DRAFTLING_HAT_PANEL_GDEW075T7
+    help
+        Select the e-paper panel connected to the Waveshare E-Paper
+        Driver HAT. The choice locks in the panel's resolution,
+        framebuffer polarity, and partial-refresh waveform settings
+        (DISPLAY_WIDTH, DISPLAY_HEIGHT, EPD_INVERT, EPD_FAST_PARTIAL).
+        Only the GPIO pinout below stays user-editable.
+
+        New panels are added by appending another `config` block in
+        this choice and extending the per-panel `default` lines on the
+        derived symbols (DRAFTLING_DISPLAY_WIDTH, _HEIGHT,
+        DRAFTLING_EPD_INVERT, DRAFTLING_EPD_FAST_PARTIAL).
+
+config DRAFTLING_HAT_PANEL_GDEW075T7
+    bool "Waveshare 7.5\" V2 BW (GDEW075T7, 800x480)"
+    help
+        Waveshare 7.5-inch V2 black/white e-paper panel based on the
+        GoodDisplay GDEW075T7 (UC8179 controller). Locks in:
+
+          - 800 x 480 resolution
+          - Inverted framebuffer polarity (visual-white = bit 0)
+          - Fast register-LUT partial refreshes calibrated from the
+            GxEPD2 community library (no border flash, ~600 ms per
+            partial; periodic full refresh still uses the OTP
+            ghost-clearing waveform)
+
+        Confirmed flash-free typing on this revision.
+
+endchoice
+
 config DRAFTLING_DISPLAY_WIDTH
-    int "Display width (px)" if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    int
     range 64 1024
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
-    default 800 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default 800 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
     help
-        Display width in pixels. Editable for the Waveshare E-Paper
-        Driver HAT to support different panels; fixed for the other
-        boards. Must be a multiple of 8 for e-paper backends.
+        Display width in pixels (derived). Driven by the hardware-model
+        choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
+        Must be a multiple of 8 for e-paper backends.
 
 config DRAFTLING_DISPLAY_HEIGHT
-    int "Display height (px)" if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    int
     range 64 1024
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
-    default 480 if DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    default 480 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
     help
-        Display height in pixels. Editable for the Waveshare E-Paper
-        Driver HAT to support different panels; fixed for the other
-        boards.
+        Display height in pixels (derived). Driven by the hardware-model
+        choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
@@ -153,54 +186,43 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
         ghosting slightly more quickly.
 
 config DRAFTLING_EPD_INVERT
-    bool "Invert e-paper pixel polarity"
-    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    bool
+    default y if DRAFTLING_HAT_PANEL_GDEW075T7
     default n
     help
-        Flip the panel's data polarity in the UC8179 driver: black
-        pixels become white and vice versa at the framebuffer level.
-
-        Enable this if the panel comes up showing white-on-black with
-        DRAFTLING_EPD_BLACK_BACKGROUND disabled. Standalone Waveshare
-        7.5" panels sold for the E-Paper Driver HAT come in several
-        flavours that share the same UC8179 controller but expect
-        opposite KW data polarity from the panel soldered to the Seeed
-        reTerminal E1001 (which is the default this driver targets).
-
-        Leave disabled for the reTerminal E1001 and for HAT panels that
-        already render correctly.
+        Internal helper -- when set, the UC8179 driver flips the
+        framebuffer pixel polarity (visual-white = bit 0 instead of
+        bit 1). Derived automatically from the board model and, for the
+        HAT, from the DRAFTLING_HAT_PANEL preset. Different Waveshare
+        7.5" panels sold for the E-Paper Driver HAT use opposite KW
+        data polarity from the panel soldered to the Seeed reTerminal
+        E1001 even though the controller is the same UC8179.
 
 config DRAFTLING_EPD_FAST_PARTIAL
-    bool "Fast partial-refresh LUTs (Waveshare 7.5\" V2 / GDEW075T7)"
-    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
+    bool
+    default y if DRAFTLING_HAT_PANEL_GDEW075T7
     default n
     help
-        Load custom UC8179 partial-refresh LUTs into registers 0x20-0x25
-        and switch the panel to register-LUT mode (PSR = 0x3F) for
-        partial refreshes. The LUTs are the single-stage waveform from
-        the GxEPD2 community library for the GDEW075T7 panel: pixels
-        whose color does not change get zero drive, so the screen border
-        stops flashing on every keystroke and a partial refresh
-        completes in a single ~600 ms pulse instead of the OTP
-        waveform's three full-frame sweeps.
+        Internal helper -- when set, the UC8179 driver loads custom
+        register-mode partial-refresh LUTs (PSR = 0x3F) calibrated for
+        a specific panel revision instead of using the panel's OTP
+        partial waveform (PSR = 0x1F). Derived automatically from the
+        DRAFTLING_HAT_PANEL preset; opt-in only because the LUT level
+        bytes are panel-specific.
 
-        Periodic full refreshes still use the OTP LUT (PSR = 0x1F) for
-        proper ghost clearing; the driver flips PSR/CDI/VDCS lazily on
-        each mode transition.
+        With this set, partial refreshes complete in a single
+        ~600 ms pulse with no border flash; without it, they fall back
+        to the OTP waveform (always works on UC8179, but flashes the
+        border once per refresh and runs three full-frame sweeps per
+        partial). Periodic full refreshes still use the OTP waveform
+        either way for proper ghost clearing; the driver flips
+        PSR/CDI/VDCS lazily on each mode transition.
 
-        Works correctly under both DRAFTLING_EPD_INVERT settings: when
-        EPD_INVERT is enabled, the LUT level bytes for the K->W and
-        W->K transitions are pair-swapped at compile time
-        (0x5A <-> 0xA5, 0x84 <-> 0x48) so the GxEPD2 "kick-then-pull"
-        overdrive pattern produces the same visual transition on a
-        panel where visual-white is bit-0 instead of bit-1.
-
-        Disabled by default because the LUT timing/level bytes are
-        calibrated for the Waveshare 7.5" V2 BW panel revision.
-        Enable on that panel; for other UC8179 panels test first --
-        with this option off the driver falls back to the panel's
-        OTP partial waveform, which always works on UC8179 panels
-        but flashes the border once per refresh.
+        The driver compensates automatically for DRAFTLING_EPD_INVERT
+        polarity: the LUT level bytes for the K->W and W->K transitions
+        are pair-swapped at compile time (0x5A <-> 0xA5,
+        0x84 <-> 0x48) so the GxEPD2 "kick-then-pull" overdrive pattern
+        produces the same visual transition under either polarity.
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"

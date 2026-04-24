@@ -52,7 +52,7 @@ Git repository via the GitHub REST API.
 | Feature | Waveshare RLCD-4.2 | Seeed reTerminal E1001 | Waveshare EPD HAT (DevKitC-1) | M5Stack PaperS3 |
 |---------|--------------------|------------------------|-------------------------------|-----------------|
 | MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (XIAO module, 8 MB PSRAM) | ESP32-S3-DevKitC-1 (or any ESP32-S3 board) | ESP32-S3 (16 MB flash, 16 MB PSRAM) |
-| Display | 4.2" reflective LCD, 400x300, SPI | 7.5" e-paper UC8179, 800x480, SPI | UC8179 e-paper HAT, configurable resolution, SPI | 4.7" e-paper ED047TC1, 540x960, parallel I80 |
+| Display | 4.2" reflective LCD, 400x300, SPI | 7.5" e-paper UC8179, 800x480, SPI | UC8179 e-paper HAT, panel preset (default Waveshare 7.5" V2 / GDEW075T7, 800x480), SPI | 4.7" e-paper ED047TC1, 540x960, parallel I80 |
 | Storage | MicroSD (SDMMC 1-bit) | MicroSD (SPI, shared bus with display) | Optional SD on dedicated SPI3 (off by default) | Onboard MicroSD (SPI3) |
 | Input | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard |
 | Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |

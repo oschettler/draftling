@@ -21,7 +21,7 @@ with a remote Git repository via the GitHub REST API.
 |-------|---------|
 | Waveshare ESP32-S3-RLCD-4.2 | 4.2-inch reflective LCD, 400x300 |
 | Seeed Studio reTerminal E1001 | 7.5-inch e-paper (UC8179), 800x480 |
-| Waveshare E-Paper Driver HAT (on any BLE-capable ESP32 host, default ESP32-S3-DevKitC-1 wiring) | UC8179 e-paper, configurable resolution (default 800x480) |
+| Waveshare E-Paper Driver HAT (on any BLE-capable ESP32 host, default ESP32-S3-DevKitC-1 wiring) | UC8179 e-paper, panel preset (default Waveshare 7.5" V2 / GDEW075T7, 800x480) |
 | M5Stack PaperS3 | 4.7-inch e-paper (ED047TC1), 540x960 |
 
 ## Repository Layout
@@ -104,19 +104,26 @@ Per-board display backends behind a single C API:
 - **display_uc8179.cpp** -- UC8179 e-paper over SPI. Shared by the
   Seeed reTerminal E1001 and the Waveshare E-Paper Driver HAT;
   resolution and pinout (including BUSY) are passed in at init.
-  When `DRAFTLING_EPD_FAST_PARTIAL` is enabled (off by default; opt-in
-  on the HAT model) the driver loads custom single-stage partial-refresh
-  LUTs into UC8179 registers `0x20`-`0x25` and switches PSR to
-  register-LUT mode (`0x3F`) on the first partial after init or after
-  a periodic full refresh. Unchanged-pixel LUT entries are zero-drive
-  so the screen border stops flashing on every keystroke. Mode is
+  When `DRAFTLING_EPD_FAST_PARTIAL` is set (auto-enabled by the
+  GDEW075T7 panel preset on the HAT) the driver loads custom
+  single-stage partial-refresh LUTs into UC8179 registers
+  `0x20`-`0x25` and switches PSR to register-LUT mode (`0x3F`) on
+  the first partial after init or after a periodic full refresh.
+  Unchanged-pixel LUT entries are zero-drive so the screen border
+  stops flashing on every keystroke. Under `DRAFTLING_EPD_INVERT`
+  (also auto-enabled for the GDEW075T7 preset) the LUT level bytes
+  for the K->W and W->K transitions are pair-swapped at compile time
+  (0x5A <-> 0xA5, 0x84 <-> 0x48) so the GxEPD2 "kick-then-pull"
+  overdrive pattern produces the same visual transition on a panel
+  whose framebuffer convention has visual-white = bit 0. Mode is
   switched lazily so a burst of partials shares one upload; the
   full-refresh path restores PSR `0x1F` for the OTP ghost-clearing
-  waveform. The LUT timings are calibrated against one specific
-  GDEW075T7 panel revision and may need re-tuning for other 7.5"
-  panels -- if typing produces only cursor strokes with no letter
-  glyphs, leave this option off to use the panel's OTP waveform
-  (with border flash on every refresh).
+  waveform. The LUT timings are calibrated against the GDEW075T7
+  panel revision; other 7.5" panels added later should declare their
+  own `DRAFTLING_HAT_PANEL_*` preset and either inherit the same
+  `DRAFTLING_EPD_FAST_PARTIAL = y` if they share the waveform, or
+  leave it off and fall back to the OTP partial waveform (always
+  works on UC8179 panels but flashes the border once per refresh).
 - **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
   `m5stack/M5GFX` managed component. Unlike the other backends this
   one does not maintain its own 1-bpp framebuffer; M5GFX already
@@ -358,27 +365,49 @@ SOC_BLE_SUPPORTED`):
   ESP32-S2). **Also requires PSRAM** (`SOC_SPIRAM_SUPPORTED && SPIRAM`)
   -- the editor gap buffer, framebuffers, and LVGL buffers all live in
   external SPI RAM, so the option is hidden until PSRAM is enabled
-  under "Component config -> ESP PSRAM". Resolution and every
-  SPI/control pin are user-editable; defaults match the
-  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
+  under "Component config -> ESP PSRAM". The connected panel is picked
+  via the `DRAFTLING_HAT_PANEL` choice (see below); only the GPIO
+  pinout (sub-menu "Waveshare E-Paper Driver HAT pinout") is
+  user-editable. Pin defaults match the ESP32-S3-DevKitC-1 wiring used
+  by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
   library, on-board MicroSD on SPI3, BOOT button on GPIO0 used as
   the EXT0 deep-sleep wake source (the only RTC-capable user-input
   GPIO on the board). *Requires ESP32-S3.*
 
-The hardware model selection drives two `int` symbols consumed in
-`main/app_config.h` as `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`:
+The hardware-model selection (and, for the HAT, the
+`DRAFTLING_HAT_PANEL` panel preset) drives two non-prompted `int`
+symbols consumed in `main/app_config.h` as `DISPLAY_WIDTH` /
+`DISPLAY_HEIGHT`:
 
 - **DRAFTLING_DISPLAY_WIDTH** -- 400 (RLCD), 800 (reTerminal),
-  800 (HAT default, user-editable), 540 (PaperS3).
+  800 (HAT / GDEW075T7 preset), 960 (PaperS3).
 - **DRAFTLING_DISPLAY_HEIGHT** -- 300 (RLCD), 480 (reTerminal),
-  480 (HAT default, user-editable), 960 (PaperS3).
+  480 (HAT / GDEW075T7 preset), 540 (PaperS3).
 
-When the HAT model is selected the symbols are visible as
-`int "Display width (px)"` / `int "Display height (px)"` so the
-user can match a different Waveshare panel; for all other boards
-they remain hidden with their fixed defaults.
+Both symbols are non-prompted (no menuconfig entry); to support a
+new HAT panel with a different resolution, add a
+`DRAFTLING_HAT_PANEL_*` entry and extend the per-panel `default`
+lines on these symbols.
+
+#### E-paper panel preset (DRAFTLING_HAT_PANEL)
+
+A `choice` visible only when `DRAFTLING_MODEL_WAVESHARE_EPD_HAT` is
+selected. Each entry is a single panel preset that locks in the
+panel's resolution (`DRAFTLING_DISPLAY_WIDTH` / `_HEIGHT`),
+framebuffer polarity (`DRAFTLING_EPD_INVERT`), and partial-refresh
+waveform (`DRAFTLING_EPD_FAST_PARTIAL`).
+
+- **DRAFTLING_HAT_PANEL_GDEW075T7** -- Waveshare 7.5" V2 BW
+  (GoodDisplay GDEW075T7, UC8179): 800x480, EPD_INVERT = y,
+  EPD_FAST_PARTIAL = y. Confirmed flash-free typing on this
+  revision.
+
+To add another panel: append a `config DRAFTLING_HAT_PANEL_<NAME>`
+block inside this choice, then extend the per-panel `default` lines
+on `DRAFTLING_DISPLAY_WIDTH`, `_HEIGHT`, `DRAFTLING_EPD_INVERT`,
+and `DRAFTLING_EPD_FAST_PARTIAL` with the panel's required values.
 
 #### Waveshare E-Paper Driver HAT pinout (DRAFTLING_HAT_*)
 
@@ -408,41 +437,47 @@ between full refreshes; default 50.
 
 #### Invert e-paper pixel polarity (DRAFTLING_EPD_INVERT)
 
-`bool` shared by the reTerminal E1001 and HAT models (UC8179 backend),
-default `n`. Enable when a HAT panel comes up showing white-on-black
-with `DRAFTLING_EPD_BLACK_BACKGROUND` disabled. Some standalone
-Waveshare 7.5" panels expect the opposite KW data polarity from the
-panel soldered to the reTerminal E1001 even though the controller is
-the same UC8179; this flag flips the framebuffer convention in the
-driver without touching anything else.
+Non-prompted internal helper `bool` (no menuconfig entry). When set,
+the UC8179 driver flips the framebuffer pixel polarity: visual-white
+is bit 0 instead of bit 1. Derived automatically:
+
+- `y` for `DRAFTLING_HAT_PANEL_GDEW075T7`
+- `n` everywhere else
+
+To add a panel that needs the same flip, set `default y if
+DRAFTLING_HAT_PANEL_<NAME>` on the symbol.
 
 #### Fast partial-refresh LUTs (DRAFTLING_EPD_FAST_PARTIAL)
 
-`bool` available only on the HAT model (`DRAFTLING_MODEL_WAVESHARE_EPD_HAT`),
-default `n`. Loads custom UC8179 partial-refresh LUTs into registers
-`0x20`-`0x25` and switches the panel to register-LUT mode (PSR = `0x3F`)
-the first time a partial refresh runs. The LUTs are the single-stage
-waveform from the GxEPD2 community library for the GDEW075T7 panel
-(Waveshare 7.5" V2 BW): `KW=0x5A, WK=0x84`, timing
-`T1=30, T2=5, T3=30, T4=5, RP=1`. The key property is that the W->W
-and K->K entries use level byte `0x00`, i.e. unchanged pixels receive
-**no voltage**, so the screen border stops flashing on every keystroke
-and each partial refresh completes in a single ~600 ms pulse instead
-of the OTP waveform's three full-frame sweeps.
+Non-prompted internal helper `bool` (no menuconfig entry). When set,
+the UC8179 driver loads custom partial-refresh LUTs into registers
+`0x20`-`0x25` and switches the panel to register-LUT mode
+(PSR = `0x3F`) the first time a partial refresh runs. The LUTs are
+the single-stage waveform from the GxEPD2 community library for the
+GDEW075T7 panel: `KW=0x5A, WK=0x84` (pair-swapped to `0xA5` / `0x48`
+under `EPD_INVERT`), timing `T1=30, T2=5, T3=30, T4=5, RP=1`. The
+W->W and K->K entries use level byte `0x00`, i.e. unchanged pixels
+receive **no voltage**, so the screen border stops flashing on every
+keystroke and each partial refresh completes in a single ~600 ms
+pulse instead of the OTP waveform's three full-frame sweeps.
 
-The driver tracks current mode and switches lazily: a burst of partial
-refreshes pays the LUT-upload cost only once. The periodic full
-refresh (every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials) restores
-PSR = `0x1F` and the original CDI/VDCS so it still does a proper
-ghost-clearing OTP pass.
+The driver tracks current mode and switches lazily: a burst of
+partial refreshes pays the LUT-upload cost only once. The periodic
+full refresh (every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials)
+restores PSR = `0x1F` and the original CDI/VDCS so it still does a
+proper ghost-clearing OTP pass.
 
-Disabled by default because the LUT level/timing bytes are calibrated
-for one specific 7.5" V2 BW panel revision and have produced garbled
-output on others (only the cursor stroke renders, letter glyphs do
-not appear). With this option off the driver falls back to the panel's
-OTP partial waveform, which always works on UC8179 panels but flashes
-the border once per refresh. Enable only if your HAT panel renders
-text correctly with no border flash.
+Derived automatically:
+
+- `y` for `DRAFTLING_HAT_PANEL_GDEW075T7`
+- `n` everywhere else
+
+The LUT level/timing bytes are calibrated for the Waveshare 7.5"
+V2 BW panel revision; new HAT panel presets that share the
+GDEW075T7 waveform can opt in by adding `default y if
+DRAFTLING_HAT_PANEL_<NAME>` to the symbol. Otherwise the driver
+falls back to the panel's OTP partial waveform (always works on
+UC8179 panels but flashes the border once per refresh).
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 

@@ -68,7 +68,8 @@ static const char *TAG = "DisplayEPD";
  *   - inverted: bit = 1 is black, bit = 0 is white. Some standalone
  *     Waveshare 7.5" panels sold for the E-Paper Driver HAT use this
  *     opposite KW data polarity even though the controller is the
- *     same UC8179. Selectable via menuconfig.
+ *     same UC8179. Auto-selected by the DRAFTLING_HAT_PANEL preset
+ *     (e.g. DRAFTLING_HAT_PANEL_GDEW075T7).
  *
  * Keep all polarity-sensitive sites going through these constants so
  * the convention swap is one byte per call. */
