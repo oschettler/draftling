@@ -225,10 +225,10 @@ static void wait_busy(int timeout_ms)
  * of partial refreshes pays the mode-switch cost only once. */
 static bool s_in_partial_mode = false;
 
-/* Single-stage partial-refresh LUTs taken verbatim from the GxEPD2
- * community library's GxEPD2_750_T7 driver (GDEW075T7 panel, UC8179
- * controller). These are the exact values shipped in production by
- * GxEPD2 and known to work on the Waveshare 7.5" V2 BW panel.
+/* Single-stage partial-refresh LUTs taken from the GxEPD2 community
+ * library's GxEPD2_750_T7 driver (GDEW075T7 panel, UC8179 controller).
+ * Verified to work on the Waveshare 7.5" V2 BW panel under both
+ * polarity conventions selected by CONFIG_DRAFTLING_EPD_INVERT.
  *
  * The UC8179 expects 42 bytes per LUT (7 stages x 6 bytes); we use
  * one active stage and zero-pad the remaining six. Each stage encodes
@@ -240,21 +240,28 @@ static bool s_in_partial_mode = false;
  *   T4 -- optional extension of T3
  *   RP -- number of times to repeat the stage
  *
- * Critical property: by default LUTWW and LUTKK both use level byte
- * 0x00, i.e. no drive for unchanged pixels. That is what suppresses
- * the full-screen border flash on each partial refresh -- only
- * pixels that actually transitioned (KW and WK) receive any pulse.
- * Both stable-pixel LUTs are now overridable via
- * CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL (Experiment I) and
- * CONFIG_DRAFTLING_EPD_PARTIAL_KK_LEVEL (Experiment J) to test
- * whether anchoring the stable field with a small drive fixes
- * isolated thin-feature transitions; a nonzero value reintroduces
- * some border flash. Note that under CONFIG_DRAFTLING_EPD_INVERT
- * the framebuffer bit polarity is flipped before reaching the
- * controller, so LUTWW (controller's "W->W stable") drives the
- * stable-visual-BLACK field and LUTKK (controller's "K->K stable")
- * drives the stable-visual-WHITE field; choose the right knob for
- * the polarity in use.
+ * The level byte packs four 2-bit voltage codes, one per phase:
+ *   00 = no drive (hold)
+ *   01 = VDH (positive, drives one direction)
+ *   10 = VDL (negative, drives the opposite direction)
+ *   11 = floating
+ * Which direction is "toward black" vs "toward white" depends on the
+ * panel's framebuffer polarity. Under CONFIG_DRAFTLING_EPD_INVERT the
+ * framebuffer bit convention is flipped (visual-white = bit 0), so
+ * the controller's "K" and "W" labels now mean visual white and
+ * visual black respectively. To keep the same VISUAL transition the
+ * 01<->10 codes in each transition LUT are pair-swapped.
+ *
+ * Pair-swap mapping for the bytes used here:
+ *   0x5A = 01 01 10 10  <-->  0xA5 = 10 10 01 01
+ *   0x84 = 10 00 01 00  <-->  0x48 = 01 00 10 00
+ * 00 and 11 codes are unchanged by the swap, so the stable-pixel
+ * LUTs (LUTWW, LUTKK) at 0x00 are polarity-agnostic.
+ *
+ * Critical property: LUTWW and LUTKK both use level byte 0x00, i.e.
+ * no drive for unchanged pixels. That is what suppresses the full-
+ * screen border flash on each partial refresh -- only pixels that
+ * actually transitioned (KW and WK) receive any pulse.
  *
  * NB: an earlier revision of this driver used T3 = 0 (no color-change
  * phase) which meant pixels never got the actual transition pulse, so
@@ -265,51 +272,52 @@ static bool s_in_partial_mode = false;
 #define EPD_PART_T3 30
 #define EPD_PART_T4  5
 
+#if defined(CONFIG_DRAFTLING_EPD_INVERT)
+/* GxEPD2 reference bytes pair-swapped for inverted framebuffer
+ * polarity. Each 2-bit voltage code (01<->10) is swapped so the
+ * waveform produces the same VISUAL transition on a panel where
+ * visual-white is bit-0 ("K" in controller terms) instead of bit-1
+ * ("W"). Without this swap the GxEPD2 "kick-then-pull" overdrive
+ * pattern self-cancels under inverted polarity and typed glyphs
+ * end near their starting visual-white state (invisible). */
+#  define LUT_KW_LEVEL 0xA5  /* GxEPD2 0x5A pair-swapped */
+#  define LUT_WK_LEVEL 0x48  /* GxEPD2 0x84 pair-swapped */
+#else
+#  define LUT_KW_LEVEL 0x5A  /* GxEPD2 reference */
+#  define LUT_WK_LEVEL 0x84  /* GxEPD2 reference */
+#endif
+
 /* VCOM (cmd 0x20) -- LUTC. */
 static const uint8_t LUT_VCOM_PARTIAL[42] = {
     0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
     /* remaining 6 stages zero-padded (RP=0 -> skipped) */
 };
 
-/* W->W (cmd 0x21) -- LUTWW. Default 0x00 = no drive on unchanged
- * white (suppresses border flash). Overridable via Experiment I to
- * test whether anchoring the stable-white field with a small VSH
- * drive fixes the W->K thin-feature whitewash from Experiment H. */
+/* W->W (cmd 0x21) -- LUTWW. 0x00 = no drive on unchanged white
+ * (suppresses border flash). */
 static const uint8_t LUT_WW_PARTIAL[42] = {
-    CONFIG_DRAFTLING_EPD_PARTIAL_WW_LEVEL,
-    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->W (cmd 0x22) -- LUTKW. Default 0x5A is the GxEPD2 reference
- * "more white" pull-up pattern; textbook alternative is 0x80 (single-
- * stage solid VSH). Sweepable via Experiment G. K->W currently
- * works in both small- and large-feature forms, so this is mainly
- * a control axis. */
+/* K->W (cmd 0x22) -- LUTKW. GxEPD2 reference "kick-then-pull"
+ * pattern, polarity-swapped under CONFIG_DRAFTLING_EPD_INVERT. */
 static const uint8_t LUT_KW_PARTIAL[42] = {
-    CONFIG_DRAFTLING_EPD_PARTIAL_KW_LEVEL,
+    LUT_KW_LEVEL,
     EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* W->K (cmd 0x23) -- LUTWK. Default 0x84 is the GxEPD2 reference
- * pull-down pattern with embedded VSH balance frame; textbook
- * alternative is 0x40 (single-stage solid VSL). Sweepable via
- * Experiment H -- the primary axis under investigation, since
- * W->K thin features on a stable white field currently whitewash
- * (typed black-on-white glyphs disappear on the next partial). */
+/* W->K (cmd 0x23) -- LUTWK. GxEPD2 reference pull-down pattern with
+ * embedded VSH balance frame, polarity-swapped under
+ * CONFIG_DRAFTLING_EPD_INVERT. */
 static const uint8_t LUT_WK_PARTIAL[42] = {
-    CONFIG_DRAFTLING_EPD_PARTIAL_WK_LEVEL,
+    LUT_WK_LEVEL,
     EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->K (cmd 0x24) -- LUTKK. Default 0x00 = no drive on unchanged
- * black (controller-side; with EPD_INVERT on, this is the stable-
- * visual-WHITE anchor). Overridable via Experiment J to test
- * whether anchoring the stable-visual-white field with a small
- * drive fixes the visual W->K thin-feature whitewash that occurs
- * under EPD_INVERT on. */
+/* K->K (cmd 0x24) -- LUTKK. 0x00 = no drive on unchanged black
+ * (suppresses border flash). */
 static const uint8_t LUT_KK_PARTIAL[42] = {
-    CONFIG_DRAFTLING_EPD_PARTIAL_KK_LEVEL,
-    EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* Border (cmd 0x25) -- LUTBD. Level 0x00: no border drive, no flash. */
@@ -483,13 +491,11 @@ static void epd_enter_partial_mode(void)
     send_data(0x3F);                       /* KW, register-LUT mode */
 
     send_command(UC8179_CMD_VDCS);
-    send_data(CONFIG_DRAFTLING_EPD_PARTIAL_VCOM_BYTE);  /* VCOM_DC; default 0x26 = -2.0 V (GxEPD2 partial), see Kconfig */
+    send_data(0x26);                       /* VCOM_DC = -2.0 V (GxEPD2 partial reference) */
 
-#if !defined(CONFIG_DRAFTLING_EPD_PARTIAL_CDI_DEFAULT)
     send_command(UC8179_CMD_CDI);
     send_data(0x39);                       /* LUTBD border, N2OCP copy new->old */
     send_data(0x07);
-#endif
 
     send_lut(0x20, LUT_VCOM_PARTIAL);
     send_lut(0x21, LUT_WW_PARTIAL);
@@ -497,17 +503,6 @@ static void epd_enter_partial_mode(void)
     send_lut(0x23, LUT_WK_PARTIAL);
     send_lut(0x24, LUT_KK_PARTIAL);
     send_lut(0x25, LUT_BD_PARTIAL);
-
-#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_PWR_CYCLE)
-    /* Experiment A: some UC8179 panel revisions need a power cycle
-     * to latch the new PSR/CDI/VDCS values after switching from the
-     * OTP waveform to the register-LUT waveform. Mirrors GxEPD2's
-     * internal _PowerOn() call after every register-state change. */
-    send_command(UC8179_CMD_POF);
-    wait_busy(5000);
-    send_command(UC8179_CMD_PON);
-    wait_busy(5000);
-#endif
 
     s_in_partial_mode = true;
 }
@@ -594,29 +589,6 @@ static uint8_t *crop_window(const uint8_t *src,
  * the UC8179 PTL command). */
 static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
 {
-#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_FULL_FRAME)
-    /* Experiment C: keep the register-LUT waveform but skip the
-     * partial-window machinery -- send the entire framebuffer through
-     * DTM1/DTM2 every time. Decouples LUT correctness from PTL/PTIN
-     * handling. The window arguments are ignored. */
-    (void)px_x0; (void)px_x1; (void)y0; (void)y1;
-
-    epd_enter_partial_mode();
-
-    send_command(UC8179_CMD_DTM1);
-    send_buffer(s_prev_buf, s_disp_len);
-
-    send_command(UC8179_CMD_DTM2);
-    send_buffer(s_disp_buf, s_disp_len);
-
-    send_command(UC8179_CMD_DRF);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    wait_busy(5000);
-
-    memcpy(s_prev_buf, s_disp_buf, s_disp_len);
-    s_partial_count++;
-    return;
-#else
     int byte_x0 = px_x0 >> 3;
     int byte_x1 = px_x1 >> 3;
     int row_bytes = byte_x1 - byte_x0 + 1;
@@ -681,7 +653,6 @@ static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
                row_bytes);
     }
     s_partial_count++;
-#endif /* CONFIG_DRAFTLING_EPD_PARTIAL_FULL_FRAME */
 }
 
 extern "C" void display_flush(void)
