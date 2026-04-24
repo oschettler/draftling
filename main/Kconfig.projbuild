@@ -226,30 +226,54 @@ config DRAFTLING_EPD_PARTIAL_FULL_FRAME
         / PTOUT (0x92) and send the entire framebuffer through DTM1
         (old) and DTM2 (new) for every refresh.
 
-        PROMOTED TO PRIMARY SUSPECT. The G=0x5A/0x80 and H=0x84/0x40
-        sweeps under EPD_INVERT on produced ZERO visible change in
-        typing rendering, while Ctrl+A reveals the typed characters
-        correctly. The cause is structural: display_flush() routes
-        Ctrl+A (huge dirty bbox) through epd_full_refresh() which
-        uses the OTP waveform and bypasses our register LUTs entirely,
-        whereas typing (small dirty bbox) routes through
-        epd_partial_refresh() which uses the windowed PTL/PTIN path
-        with our custom LUTs. The fact that no LUT level byte change
-        is visible means the LUT loading or the windowed transmission
-        is fundamentally broken on this panel, not that any specific
-        level byte is wrong.
+        PROMOTED TO PRIMARY SUSPECT (refined diagnosis). The
+        G=0x5A/0x80 and H=0x84/0x40 sweeps under EPD_INVERT on
+        produced ZERO visible change in typing rendering. A follow-up
+        test on commit d01d821 (G=0x5A, J=0x40) showed that the
+        upper-left corner visibly inverts together with the typed
+        text while typing -- which proves the register-LUT path
+        DOES reach pixels (J=0x40 demonstrably moves stable-K /
+        background-white pixels) and rules out the earlier
+        "epd_enter_partial_mode broken / LUTs not loaded" hypothesis.
+        The "upper-left" region is almost certainly the editor's
+        title/status bar (cursor position / char count), which is
+        pulled into every keystroke's dirty bbox alongside the
+        typed character, making the bbox a tall thin rectangle
+        from top-left down to the typed location.
+
+        Reframed diagnosis: the typed-character pixels appear to
+        be MIS-CLASSIFIED by the controller's transition logic.
+        Under EPD_INVERT they should classify as K->W (LUT_KW = G);
+        instead they appear to classify as W->W (LUT_WW = I = 0x00,
+        no drive). That perfectly explains why typed text is
+        invisible AND why neither G nor H values shift the result:
+        the typed pixels are not routed through G or H at all.
+        The most likely root causes are now (a) a mismatch between
+        the OLD bytes we transmit via DTM1 inside the PTL window
+        and the controller's internal OLD-buffer addressing, or
+        (b) a raster-offset mismatch between the PTL window and
+        the DTM1/DTM2 byte stream so the typed-character pixels
+        land at the wrong screen address inside the controller.
+
+        Experiment C is still the right next test because it
+        bypasses both PTL window addressing AND windowed DTM
+        transmission -- if typing becomes visible with C ON, the
+        bug is somewhere in the windowing layer; if it stays
+        invisible, the bug is at a deeper layer (e.g. the OLD
+        data we feed via DTM1 doesn't match what the controller
+        thinks it currently shows).
 
         Discriminating test:
-          C ON  -> typing visible  : bug is in the PTL/PTIN window
-                                     setup (PTL byte layout, PT_SCAN
-                                     flag, byte ordering, or PSR ->
-                                     PTL ordering).
+          C ON  -> typing visible  : bug is in PTL/PTIN windowed
+                                     transmission (PTL byte layout,
+                                     PT_SCAN flag, raster offset,
+                                     or PSR -> PTL ordering).
           C ON  -> typing still
-                   invisible       : bug is in epd_enter_partial_mode
-                                     itself (PSR=0x3F not sticking,
-                                     LUTs not actually loaded, or
-                                     CDI=0x39 interaction with
-                                     register-LUT mode).
+                   invisible       : bug is in OLD-buffer tracking
+                                     -- s_prev_buf does not match
+                                     what the controller's internal
+                                     old buffer holds, so DTM1 data
+                                     mis-classifies transitions.
 
         Recommended to run with the LUT bytes at GxEPD2 defaults
         (G=0x5A, H=0x84, I=0x00, J=0x00) and D=0x26 so the only
@@ -526,6 +550,34 @@ config DRAFTLING_EPD_PARTIAL_KK_LEVEL
         whitewash, the problem is field-anchoring under EPD_INVERT
         and the trade-off is some border / background flash at every
         partial.
+
+        TEST RESULT (commit d01d821, J=0x40, G=0x5A, all others
+        defaults, EPD_INVERT on): typed text remains invisible
+        BUT the upper-left corner of the screen visibly inverts
+        together with the typed text on every keystroke. Two
+        important inferences:
+
+        1. The register-LUT path DOES reach pixels -- J=0x40
+           demonstrably moves stable-bit-1 (visual white)
+           background pixels. This rules out the earlier
+           "epd_enter_partial_mode broken / LUTs not loaded"
+           hypothesis from the G/H null sweeps.
+
+        2. The "upper-left" region is almost certainly the
+           editor's title / status bar (cursor position, char
+           count) which updates on every keystroke. Its bbox
+           is included in display_flush()'s dirty bbox along
+           with the typed character, producing a tall thin
+           PTL window from top-left down to the typed location.
+           J=0x40 then drives every stable-K pixel inside that
+           window, including the entire title-bar background.
+
+        These two inferences shift the diagnosis: the typed
+        character pixels are NOT routed through LUT_KW (= G),
+        which is why no G value made them visible. They appear
+        to be misclassified as W->W (LUT_WW = I = 0x00, no drive)
+        instead of K->W. The most likely cause is OLD/NEW data
+        misalignment inside the PTL window. See Experiment C.
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
