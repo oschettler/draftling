@@ -265,15 +265,26 @@ static const uint8_t LUT_WW_PARTIAL[42] = {
     0x00, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* K->W (cmd 0x22) -- LUTKW. 0x5A = "more white" pull-up pattern from
- * GxEPD2; gives a slightly cleaner white than the textbook 0x48. */
+/* K->W (cmd 0x22) -- LUTKW. Default 0x5A = "more white" pull-up
+ * pattern from GxEPD2; gives a slightly cleaner white than the
+ * textbook 0x48. With CONFIG_DRAFTLING_EPD_PARTIAL_CANONICAL_LUT the
+ * textbook single-pulse value 0x80 is used instead (drive VSH solidly
+ * across the entire T1..T4 window with no charge-balance sub-pulses). */
+#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_CANONICAL_LUT)
+#  define EPD_LUT_KW_LEVEL 0x80
+#  define EPD_LUT_WK_LEVEL 0x40
+#else
+#  define EPD_LUT_KW_LEVEL 0x5A
+#  define EPD_LUT_WK_LEVEL 0x84
+#endif
 static const uint8_t LUT_KW_PARTIAL[42] = {
-    0x5A, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    EPD_LUT_KW_LEVEL, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
-/* W->K (cmd 0x23) -- LUTWK. 0x84 = pull-down pattern. */
+/* W->K (cmd 0x23) -- LUTWK. Default 0x84 = pull-down pattern (GxEPD2);
+ * canonical override 0x40 = drive VSL solidly across T1..T4. */
 static const uint8_t LUT_WK_PARTIAL[42] = {
-    0x84, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
+    EPD_LUT_WK_LEVEL, EPD_PART_T1, EPD_PART_T2, EPD_PART_T3, EPD_PART_T4, 1,
 };
 
 /* K->K (cmd 0x24) -- LUTKK. Level 0x00: no drive on unchanged black. */
@@ -465,6 +476,17 @@ static void epd_enter_partial_mode(void)
     send_lut(0x24, LUT_KK_PARTIAL);
     send_lut(0x25, LUT_BD_PARTIAL);
 
+#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_PWR_CYCLE)
+    /* Experiment A: some UC8179 panel revisions need a power cycle
+     * to latch the new PSR/CDI/VDCS values after switching from the
+     * OTP waveform to the register-LUT waveform. Mirrors GxEPD2's
+     * internal _PowerOn() call after every register-state change. */
+    send_command(UC8179_CMD_POF);
+    wait_busy(5000);
+    send_command(UC8179_CMD_PON);
+    wait_busy(5000);
+#endif
+
     s_in_partial_mode = true;
 }
 
@@ -550,6 +572,29 @@ static uint8_t *crop_window(const uint8_t *src,
  * the UC8179 PTL command). */
 static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
 {
+#if defined(CONFIG_DRAFTLING_EPD_PARTIAL_FULL_FRAME)
+    /* Experiment C: keep the register-LUT waveform but skip the
+     * partial-window machinery -- send the entire framebuffer through
+     * DTM1/DTM2 every time. Decouples LUT correctness from PTL/PTIN
+     * handling. The window arguments are ignored. */
+    (void)px_x0; (void)px_x1; (void)y0; (void)y1;
+
+    epd_enter_partial_mode();
+
+    send_command(UC8179_CMD_DTM1);
+    send_buffer(s_prev_buf, s_disp_len);
+
+    send_command(UC8179_CMD_DTM2);
+    send_buffer(s_disp_buf, s_disp_len);
+
+    send_command(UC8179_CMD_DRF);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    wait_busy(5000);
+
+    memcpy(s_prev_buf, s_disp_buf, s_disp_len);
+    s_partial_count++;
+    return;
+#else
     int byte_x0 = px_x0 >> 3;
     int byte_x1 = px_x1 >> 3;
     int row_bytes = byte_x1 - byte_x0 + 1;
@@ -614,6 +659,7 @@ static void epd_partial_refresh(int px_x0, int px_x1, int y0, int y1)
                row_bytes);
     }
     s_partial_count++;
+#endif /* CONFIG_DRAFTLING_EPD_PARTIAL_FULL_FRAME */
 }
 
 extern "C" void display_flush(void)

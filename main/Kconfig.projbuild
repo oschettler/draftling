@@ -197,6 +197,58 @@ config DRAFTLING_EPD_FAST_PARTIAL
         refresh. Enable if your HAT panel renders text correctly with
         no border flash -- otherwise leave it off.
 
+config DRAFTLING_EPD_PARTIAL_PWR_CYCLE
+    bool "Experiment A: POWER_OFF / POWER_ON after partial-mode PSR switch"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    default n
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        After loading the fast-partial LUTs into registers 0x20-0x25
+        and switching PSR to register-LUT mode (0x3F), issue
+        UC8179_CMD_POF, wait BUSY, then UC8179_CMD_PON and wait BUSY
+        again before the first DRF. This mirrors what the GxEPD2
+        community library does internally in its _PowerOn() helper
+        after every register-state change: some UC8179 panel revisions
+        reportedly need a power cycle to latch the new PSR/CDI/VDCS
+        values. Enable this if FAST_PARTIAL produces garbled output
+        (e.g. only the cursor stroke renders, glyph bodies missing).
+
+config DRAFTLING_EPD_PARTIAL_CANONICAL_LUT
+    bool "Experiment B: textbook single-pulse LUT level bytes (KW=0x80, WK=0x40)"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    default n
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Replace the GxEPD2 LUT level bytes (KW=0x5A, WK=0x84 - patterns
+        with embedded sub-pulses) with the textbook single-pulse values
+        (KW=0x80, WK=0x40 - drive VSH or VSL solidly across the entire
+        T1..T4 window). The GxEPD2 patterns charge-balance during T1/T2
+        before the actual transition pulse in T3, which is calibrated
+        for one specific GDEW075T7 panel revision. On other revisions
+        the leading sub-pulses can charge-balance the pixel back toward
+        indeterminate before T3 finishes, leaving glyph bodies missing
+        even though thin features (like the cursor stroke) still
+        render. Try this if Experiment A does not help.
+
+config DRAFTLING_EPD_PARTIAL_FULL_FRAME
+    bool "Experiment C: skip PTIN/PTL, push full framebuffer per partial"
+    depends on DRAFTLING_EPD_FAST_PARTIAL
+    default n
+    help
+        TEMPORARY DIAGNOSTIC OPTION (clean up after testing).
+
+        Keep the register-LUT fast-partial waveform but bypass the
+        UC8179 partial-window machinery: skip PTIN (0x91) / PTL (0x90)
+        / PTOUT (0x92) and send the entire framebuffer through DTM1
+        (old) and DTM2 (new) for every refresh. This decouples LUT
+        correctness from partial-window handling. If the symptom
+        disappears, the bug is in the partial-window setup under
+        register-LUT mode (PTL coordinates, PT_SCAN flag, or PSR-then-
+        PTL ordering). If it persists, the bug is in the LUT data
+        itself and Experiment B is the relevant axis.
+
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
     depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
