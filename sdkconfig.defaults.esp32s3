@@ -38,3 +38,22 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 # RX BA window must be <= 2 * static_rx_buffer_num (IDF constraint).
 CONFIG_ESP_WIFI_RX_BA_WIN=6
+# Move RX-management buffers from the WiFi static internal-RAM pool to
+# the regular heap (which lands in PSRAM thanks to
+# SPIRAM_TRY_ALLOCATE_WIFI_LWIP above). Without this, esp_wifi_init()
+# fails on PaperS3 with
+#   wifi:esf_buf_setup_static: alloc eb fail(1)
+#   WiFiMgr: esp_wifi_init failed: ESP_ERR_NO_MEM
+# whenever the user starts a Git sync while the BLE keyboard is paired
+# (Bluedroid + M5GFX have already consumed most of the internal DRAM by
+# then, so even one extra static eb does not fit).
+CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUF=1
+# Minimum count for the few mgmt short buffers that remain static (the
+# IDF lower bound is 6). Default is 32, which is wasteful for a station
+# that only ever talks to one AP for HTTPS Git sync.
+CONFIG_ESP_WIFI_MGMT_SBUF_NUM=6
+# Disable A-MPDU aggregation. Each direction reserves additional
+# internal-RAM aggregation/reorder buffers, and Git sync over HTTPS
+# does not need the throughput. Saves several KB of internal DRAM.
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
