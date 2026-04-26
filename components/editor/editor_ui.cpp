@@ -1961,7 +1961,7 @@ static void handle_browser_key(const kb_event_t *ev)
         return;
     }
 
-    /* Ctrl+G triggers git sync from the file browser as well */
+    /* Ctrl+G / Ctrl+W work from the file browser as well */
     if (ctrl) {
         char ck = 0;
         if (ev->keycode >= 0x04 && ev->keycode <= 0x1D) {
@@ -1982,6 +1982,16 @@ static void handle_browser_key(const kb_event_t *ev)
                 editor_ui_set_status("Git: connect WiFi first (F1)");
             } else {
                 editor_ui_set_status("Git: not configured");
+            }
+            return;
+        }
+        if (ck == 'w') {
+            if (!wifi_manager_is_connected()) {
+                editor_ui_set_status("WiFi: connecting...");
+                wifi_connect_async();
+            } else {
+                wifi_manager_disconnect();
+                editor_ui_set_status("WiFi: disconnecting...");
             }
             return;
         }
@@ -2542,7 +2552,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_br_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_br_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_br_status, theme_fg(), 0);
-    lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git");
+    lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git  Ctrl+W:WiFi");
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
     defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
