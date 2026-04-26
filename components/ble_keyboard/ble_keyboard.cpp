@@ -212,9 +212,12 @@ static void bonded_add(const esp_bd_addr_t bda,
     }
     /* Update stored name from the current device name */
     if (s_dev_name[0]) {
-        strncpy(s_bonded[idx].name, s_dev_name,
-                sizeof(s_bonded[idx].name) - 1);
-        s_bonded[idx].name[sizeof(s_bonded[idx].name) - 1] = '\0';
+        /* Use snprintf to copy with guaranteed NUL termination and
+         * without tripping GCC's -Wstringop-truncation, which fires on
+         * the strncpy(dst, src, sizeof(dst)-1) idiom under newer
+         * toolchains (seen with ESP-IDF 5.5.4). */
+        snprintf(s_bonded[idx].name, sizeof(s_bonded[idx].name),
+                 "%s", s_dev_name);
     }
     s_last_bonded = idx;
     bonded_save();

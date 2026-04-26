@@ -112,7 +112,10 @@ can be independently enabled or disabled. By default **US-English** and
 ## Building
 
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/)
-v5.3 or later.
+v5.3 or later. ESP-IDF 6.0 and newer are **not** supported yet because
+the `m5stack/M5GFX` managed component (used by the M5Stack PaperS3
+display backend) is not compatible with ESP-IDF 6.x. Use any ESP-IDF
+v5.x release (v5.3 - v5.5 confirmed working).
 
 ```bash
 idf.py set-target esp32s3

@@ -536,7 +536,10 @@ only the enabled layout tables.
 
 ## Building
 
-Requires ESP-IDF v5.3 or later.
+Requires ESP-IDF v5.3 or later. ESP-IDF 6.0 and newer are not supported
+yet because the `m5stack/M5GFX` managed component is not compatible
+with ESP-IDF 6.x; the top-level `CMakeLists.txt` enforces this with a
+`FATAL_ERROR` on IDF major version >= 6.
 
 ```bash
 idf.py set-target esp32s3
