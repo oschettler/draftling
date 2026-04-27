@@ -23,6 +23,18 @@ static int s_sel_anchor   = -1;   /* logical byte offset, -1 = no selection */
 static char *s_clipboard  = NULL;
 static size_t s_clip_len  = 0;
 
+/* Cached line count of the flattened text. -1 means "not computed".
+ * Invalidated alongside the flat buffer in invalidate_flat(). */
+static int s_line_count_cache = -1;
+
+/* Forward-only line-lookup cache used by editor_get_line().
+ * Stores the byte offset into s_flat where line s_line_cache_num starts.
+ * editor_ui_refresh() iterates lines in increasing order, so this
+ * lets each refresh walk the flat buffer at most once instead of
+ * O(N^2). Invalidated alongside the flat buffer in invalidate_flat(). */
+static int    s_line_cache_num    = -1;
+static size_t s_line_cache_offset = 0;
+
 /* Content length (excluding gap) */
 static inline size_t content_len(void) { return s_buf_size - (s_gap_end - s_gap_start); }
 
@@ -32,7 +44,13 @@ static inline char char_at(size_t p)
     return (p < s_gap_start) ? s_buf[p] : s_buf[p + (s_gap_end - s_gap_start)];
 }
 
-static void invalidate_flat(void) { s_flat_dirty = true; }
+static void invalidate_flat(void)
+{
+    s_flat_dirty        = true;
+    s_line_count_cache  = -1;
+    s_line_cache_num    = -1;
+    s_line_cache_offset = 0;
+}
 
 static void ensure_gap(size_t need)
 {
@@ -158,11 +176,18 @@ extern "C" void editor_get_cursor_pos(int *line, int *col)
 
 extern "C" int editor_get_line_count(void)
 {
+    if (s_line_count_cache >= 0) return s_line_count_cache;
+    /* Use the flat buffer (single contiguous scan, no gap branch per
+     * byte) instead of char_at() so this is fast even for large
+     * documents. editor_get_text() also rebuilds the flat buffer if
+     * needed, keeping this and editor_get_line() in sync. */
+    size_t total;
+    const char *text = editor_get_text(&total);
     int count = 1;
-    size_t len = content_len();
-    for (size_t i = 0; i < len; i++) {
-        if (char_at(i) == '\n') count++;
+    for (size_t i = 0; i < total; i++) {
+        if (text[i] == '\n') count++;
     }
+    s_line_count_cache = count;
     return count;
 }
 
@@ -171,13 +196,29 @@ extern "C" const char *editor_get_line(int line_num, size_t *out_len)
     /* Flatten first, then find the line in the flat buffer */
     size_t total;
     const char *text = editor_get_text(&total);
-    const char *p = text;
-    int cur = 0;
+
+    /* Forward-only cache: if the requested line is at or after the
+     * cached line, walk forward from the cached offset instead of
+     * restarting from byte 0. The renderer iterates lines in order,
+     * so this collapses the per-refresh cost from O(N^2) to O(N). */
+    const char *p;
+    int cur;
+    if (line_num >= s_line_cache_num && s_line_cache_num >= 0 &&
+        s_line_cache_offset <= total) {
+        p   = text + s_line_cache_offset;
+        cur = s_line_cache_num;
+    } else {
+        p   = text;
+        cur = 0;
+    }
     while (cur < line_num && p < text + total) {
         if (*p == '\n') cur++;
         p++;
     }
     if (cur < line_num) { if (out_len) *out_len = 0; return ""; }
+    /* Update the cache to the line we just landed on. */
+    s_line_cache_num    = line_num;
+    s_line_cache_offset = (size_t)(p - text);
     const char *end = p;
     while (end < text + total && *end != '\n') end++;
     if (out_len) *out_len = end - p;
