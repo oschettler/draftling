@@ -429,7 +429,14 @@ extern "C" void display_flush(void)
 
     if (do_full) {
         s_gfx.setEpdMode(epd_mode_t::epd_quality);
-        s_gfx.display();
+        /* Pass the explicit full-panel rect: M5GFX's
+         * Panel_EPDiy::display() with no arguments early-outs when its
+         * internal _range_mod is empty, which it always is right
+         * after a flush -- so a Ctrl+R "force full refresh" issued
+         * with nothing dirty in the framebuffer would do nothing at
+         * all. Expanding _range_mod via an explicit rect makes
+         * M5GFX actually drive the panel. */
+        s_gfx.display(0, 0, s_width, s_height);
         s_partial_count = 0;
         s_force_full = false;
     } else {

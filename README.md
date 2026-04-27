@@ -13,7 +13,29 @@ with reflective displays.
 | [Waveshare E-Paper Driver HAT](https://www.waveshare.com/wiki/E-Paper_Driver_HAT) on a generic ESP32 host (any BLE-capable target: ESP32, S3, C2, C3, C6, H2) | Configurable, default 7.5" V2 BW (UC8179), 800x480 |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
 
-A demo video with the [Waveshare ESP32-S3-RLCD-4.2](https://www.youtube.com/watch?v=PgSaroeM3CE). Also, the fragile screen broke during the tests, so this device really needs a protective glass.
+A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
+
+The Waveshare ESP32-S3-RLCD-4.2 provides the smoothest and most
+responsive user interaction. But the screen is very fragile, and the
+device needs a proper enclosure, preferably with a protective
+glass. Also, the contrast is very low, so iit needs a good lighting
+for comfortable work. The screen broke during the tests.
+
+The M5Stack PaperS3 is so far the most usable option: it is compact,
+packed in a good enclosure with magnets on the back, and the contrast
+is much higher than that of the RLCD display. The reaction is
+significantly slower than with RLCD, but still acceptable.
+
+Waveshare E-Paper Driver HAT have been tested with two screens
+(Waveshare 7.5" V2 e-paper display, and a [no-name 5.83" 648x480
+display](https://www.aliexpress.us/item/3256808324502082.html) with
+built-in UC8179 driver). The overall performance is quite poor: the
+display is really slow, even with fast partial updates, and iti
+quickly becomes dirty with artefacts. Not recommended for any use, and
+will probably be deleted from the code.
+
+Seeed Studio reTerminal E1010 has not been tested yet.
+
 
 ### Hardware selection
 

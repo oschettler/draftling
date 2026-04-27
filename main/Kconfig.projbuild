@@ -89,6 +89,13 @@ config DRAFTLING_HAT_PANEL_GDEW075T7
 
         Confirmed flash-free typing on this revision.
 
+
+config DRAFTLING_NONAME_5_83_INCH648x480
+    bool "Noname 5.83\" BW e-paper display (UC8179, 648x480)"
+    help
+        No-name panel found on AliExpress
+        https://www.aliexpress.us/item/3256808324502082.html
+
 endchoice
 
 config DRAFTLING_DISPLAY_WIDTH
@@ -98,6 +105,7 @@ config DRAFTLING_DISPLAY_WIDTH
     default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
     default 800 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 648 if DRAFTLING_NONAME_5_83_INCH648x480
     help
         Display width in pixels (derived). Driven by the hardware-model
         choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
@@ -110,6 +118,7 @@ config DRAFTLING_DISPLAY_HEIGHT
     default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
     default 480 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 480 if DRAFTLING_NONAME_5_83_INCH648x480
     help
         Display height in pixels (derived). Driven by the hardware-model
         choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
@@ -188,6 +197,7 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
 config DRAFTLING_EPD_INVERT
     bool
     default y if DRAFTLING_HAT_PANEL_GDEW075T7
+    default y if DRAFTLING_NONAME_5_83_INCH648x480
     default n
     help
         Internal helper -- when set, the UC8179 driver flips the
@@ -201,6 +211,7 @@ config DRAFTLING_EPD_INVERT
 config DRAFTLING_EPD_FAST_PARTIAL
     bool
     default y if DRAFTLING_HAT_PANEL_GDEW075T7
+    default y if DRAFTLING_NONAME_5_83_INCH648x480
     default n
     help
         Internal helper -- when set, the UC8179 driver loads custom
