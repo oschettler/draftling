@@ -10,6 +10,16 @@
  * symbols instead. Without this file the build would fail with
  * undefined references to lv_malloc_core / lv_free_core / etc.
  *
+ * This translation unit is injected directly into the lvgl__lvgl
+ * managed-component library by components/display/CMakeLists.txt
+ * (idf_component_get_property + target_sources) so that the symbols
+ * end up in the same static archive (liblvgl__lvgl.a) as the
+ * lv_mem.c references. Compiling it as part of libdisplay.a turned
+ * out to be fragile: with archives in a single --start-group the
+ * linker is supposed to find it, but in practice the display archive
+ * was sometimes processed before lvgl__lvgl's unresolved lv_*_core
+ * references were scanned, leaving them undefined at final link.
+ *
  * Why this matters
  * ----------------
  * On the M5Stack PaperS3 (8 MB PSRAM) the M5GFX framebuffer (~253 KB),
