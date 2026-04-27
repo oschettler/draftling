@@ -5,6 +5,7 @@
 #include <freertos/event_groups.h>
 #include <freertos/semphr.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
 #include <esp_event.h>
@@ -147,6 +148,12 @@ extern "C" esp_err_t wifi_manager_init(void)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_LOGI(TAG, "Heap before esp_wifi_init: INTERNAL free=%u largest=%u, DMA free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    heap_caps_print_heap_info(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
