@@ -2126,6 +2126,15 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+        case 'r':
+            /* Ctrl+R: force a full e-paper refresh to clear ghosting
+             * artefacts left over from partial refreshes. */
+            display_full_refresh();
+            return;
+#endif
         default: break;
         }
         /* Ctrl+arrow / Ctrl+Home / Ctrl+End for word/doc movement */
@@ -2311,6 +2320,16 @@ static void handle_browser_key(const kb_event_t *ev)
             }
             return;
         }
+#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+        if (ck == 'r') {
+            /* Ctrl+R: force a full e-paper refresh to clear ghosting
+             * artefacts left over from partial refreshes. */
+            display_full_refresh();
+            return;
+        }
+#endif
     }
 
     /* Translate keycode to character for letter-key checks.

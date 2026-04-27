@@ -86,6 +86,7 @@ Git repository via the GitHub REST API.
 | Ctrl+W | Toggle WiFi (connect / disconnect) |
 | Ctrl+F | Find |
 | Ctrl+H | Find + Replace (Tab switches field, Enter = next match, Ctrl+Enter = replace + next) |
+| Ctrl+R | Force full e-paper refresh (clears ghosting; e-paper boards only) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
