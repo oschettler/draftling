@@ -64,11 +64,21 @@ Git repository via the GitHub REST API.
 - **WYSIWYG Markdown editing** on reflective display
 - **Bluetooth keyboard** input with auto-discovery and pairing
 - **File browser** to open and manage `.md` files on the SD card
+  (entries sorted alphabetically, directories first)
 - **Markdown rendering**: headings (H1-H4), bullet and numbered lists,
   blockquotes, code fences, horizontal rules, inline bold/italic/code
 - **Gap buffer** text engine for efficient editing (256 KB document limit)
 - **WiFi** station mode with credentials from NVS or `/sdcard/wifi.cfg`
 - **Git sync** via GitHub REST API (pull and push `.md` files)
+- **Per-file metadata sidecars**: when a `.md` file is closed (or
+  before the device enters deep sleep), the editor records the
+  current cursor position and scroll line in a hidden sidecar file
+  named `.<basename>.meta` next to the document (for example
+  `notes.md` -> `.notes.md.meta`). The next time the file is
+  opened, the cursor is restored to its previous position and the
+  view scrolls so the cursor is visible. The `.meta` files are
+  hidden from the file browser (they start with a dot) and are
+  ignored by Git sync (which only handles `*.md`).
 
 ## Keyboard Shortcuts
 

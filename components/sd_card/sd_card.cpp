@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <strings.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -221,6 +222,18 @@ extern "C" esp_err_t sd_card_mkdir(const char *path)
     return (mkdir(tmp, 0755) == 0 || errno == EEXIST) ? ESP_OK : ESP_FAIL;
 }
 
+/* qsort() comparator: directories first, then files; both groups
+ * sorted by name case-insensitively so the file browser shows a
+ * predictable, alphabetical listing regardless of FAT directory
+ * order. */
+static int sd_entry_cmp(const void *a, const void *b)
+{
+    const sd_card_file_entry_t *ea = (const sd_card_file_entry_t *)a;
+    const sd_card_file_entry_t *eb = (const sd_card_file_entry_t *)b;
+    if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
+    return strcasecmp(ea->name, eb->name);
+}
+
 extern "C" int sd_card_list_dir(const char *path, sd_card_file_entry_t *entries, int max_entries)
 {
     DIR *dir = opendir(path);
@@ -240,6 +253,9 @@ extern "C" int sd_card_list_dir(const char *path, sd_card_file_entry_t *entries,
         count++;
     }
     closedir(dir);
+    if (count > 1) {
+        qsort(entries, (size_t)count, sizeof(entries[0]), sd_entry_cmp);
+    }
     return count;
 }
 

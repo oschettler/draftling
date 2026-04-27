@@ -74,6 +74,110 @@ extern "C" void editor_init(void)
     ESP_LOGI(TAG, "Editor initialized (%d KB buffer)", EDITOR_MAX_DOC_SIZE / 1024);
 }
 
+/* ---- Per-file metadata sidecar ----
+ *
+ * Each opened .md file gets a tiny key=value text sidecar saved next
+ * to it that records the cursor position and visible scroll line so
+ * the editor can resume exactly where the user left off. The sidecar
+ * file name is derived by prefixing the basename with a dot and
+ * appending ".meta" -- e.g. /sdcard/notes.md -> /sdcard/.notes.md.meta.
+ *
+ * The leading dot keeps the sidecar hidden from sd_card_list_dir()
+ * (which already filters dotfiles), and the .meta extension keeps it
+ * out of the git_sync push/pull (which only matches *.md). The format
+ * is line-oriented "key=value" so future metadata fields can be
+ * appended without breaking older sidecars.
+ */
+static void meta_path_for(const char *file_path, char *out, size_t out_sz)
+{
+    if (!file_path || !out || out_sz == 0) { if (out_sz) out[0] = '\0'; return; }
+    const char *slash = strrchr(file_path, '/');
+    if (slash) {
+        size_t dir_len = (size_t)(slash - file_path) + 1; /* include '/' */
+        if (dir_len + 1 + strlen(slash + 1) + 5 + 1 > out_sz) {
+            out[0] = '\0';
+            return;
+        }
+        memcpy(out, file_path, dir_len);
+        snprintf(out + dir_len, out_sz - dir_len, ".%s.meta", slash + 1);
+    } else {
+        snprintf(out, out_sz, ".%s.meta", file_path);
+    }
+}
+
+static void editor_load_meta(void)
+{
+    if (s_path[0] == '\0') return;
+    char meta[320];
+    meta_path_for(s_path, meta, sizeof(meta));
+    if (meta[0] == '\0') return;
+    if (!sd_card_file_exists(meta)) return;
+
+    char *data = NULL;
+    size_t len = 0;
+    if (sd_card_read_file(meta, &data, &len) != ESP_OK || !data) return;
+
+    long cursor = -1;
+    long scroll = -1;
+    /* Parse line-oriented key=value pairs in-place. */
+    size_t i = 0;
+    while (i < len) {
+        size_t line_start = i;
+        while (i < len && data[i] != '\n' && data[i] != '\r') i++;
+        size_t line_end = i;
+        while (i < len && (data[i] == '\n' || data[i] == '\r')) i++;
+        if (line_end == line_start) continue;
+        /* Find '=' separator within the line. */
+        size_t eq = line_start;
+        while (eq < line_end && data[eq] != '=') eq++;
+        if (eq >= line_end) continue;
+        size_t key_len = eq - line_start;
+        const char *val = data + eq + 1;
+        size_t val_len = line_end - eq - 1;
+        char vbuf[32];
+        if (val_len >= sizeof(vbuf)) val_len = sizeof(vbuf) - 1;
+        memcpy(vbuf, val, val_len);
+        vbuf[val_len] = '\0';
+        if (key_len == 6 && memcmp(data + line_start, "cursor", 6) == 0) {
+            cursor = strtol(vbuf, NULL, 10);
+        } else if (key_len == 6 && memcmp(data + line_start, "scroll", 6) == 0) {
+            scroll = strtol(vbuf, NULL, 10);
+        }
+    }
+    free(data);
+
+    size_t doc_len = content_len();
+    if (cursor >= 0) {
+        if ((size_t)cursor > doc_len) cursor = (long)doc_len;
+        editor_set_cursor((size_t)cursor);
+    }
+    if (scroll >= 0) {
+        /* Clamp against the current document line count in case the
+         * file shrank since the sidecar was written (e.g. via a
+         * git pull). */
+        int lc = editor_get_line_count();
+        if (lc <= 0) lc = 1;
+        if (scroll > lc - 1) scroll = lc - 1;
+        s_scroll_line = (int)scroll;
+    }
+}
+
+extern "C" void editor_save_meta(void)
+{
+    if (s_path[0] == '\0') return;
+    char meta[320];
+    meta_path_for(s_path, meta, sizeof(meta));
+    if (meta[0] == '\0') return;
+
+    char body[96];
+    int n = snprintf(body, sizeof(body),
+                     "cursor=%zu\nscroll=%d\n",
+                     s_gap_start, s_scroll_line);
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof(body)) n = (int)sizeof(body) - 1;
+    sd_card_write_file(meta, body, (size_t)n);
+}
+
 extern "C" esp_err_t editor_open_file(const char *path)
 {
     char *data = NULL;
@@ -95,6 +199,10 @@ extern "C" esp_err_t editor_open_file(const char *path)
     s_sel_anchor = -1;
     invalidate_flat();
     s_mode = EDITOR_MODE_EDITING;
+
+    /* Restore cursor position and scroll line from the metadata
+     * sidecar (no-op if the file was never opened before). */
+    editor_load_meta();
 
     ESP_LOGI(TAG, "Opened: %s (%zu bytes)", path, len);
     return ESP_OK;
@@ -131,6 +239,9 @@ extern "C" void editor_new_file(void)
 
 extern "C" void editor_close_file(void)
 {
+    /* Persist cursor/scroll metadata before we drop the path so the
+     * next open can resume at the same position. */
+    editor_save_meta();
     s_gap_start = 0;
     s_gap_end   = s_buf_size;
     s_path[0]   = '\0';

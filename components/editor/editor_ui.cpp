@@ -2365,6 +2365,11 @@ static void handle_browser_key(const kb_event_t *ev)
                              sd_card_get_mount_point(), s_browser_entries[idx].name);
                     editor_init();
                     editor_open_file(path);
+                    /* editor_open_file restores the cursor / scroll
+                     * line from the metadata sidecar; make sure the
+                     * cursor is on screen before the first refresh
+                     * in case the saved scroll line is out of date. */
+                    ensure_cursor_visible();
                     editor_ui_show_editor();
                     return;
                 }

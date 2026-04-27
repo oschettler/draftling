@@ -31,6 +31,10 @@ static void pre_sleep_autosave(void)
             ESP_LOGE(TAG, "Auto-save failed: %s", esp_err_to_name(err));
         }
     }
+    /* Persist cursor/scroll metadata even when the document body
+     * itself is unmodified, so reopening the file resumes at the
+     * last position. No-op if no file is currently open. */
+    editor_save_meta();
 
 #if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \

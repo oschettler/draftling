@@ -21,6 +21,10 @@ esp_err_t editor_save_file(void);
 esp_err_t editor_save_file_as(const char *path);
 void editor_new_file(void);
 void editor_close_file(void);
+/* Persist per-file metadata (cursor, scroll line, ...) to the
+ * sidecar next to the currently-open file. No-op if no file is
+ * open. Safe to call repeatedly. */
+void editor_save_meta(void);
 const char *editor_get_file_path(void);
 bool editor_is_modified(void);
 const char *editor_get_text(size_t *out_len);
