@@ -84,6 +84,8 @@ Git repository via the GitHub REST API.
 | Ctrl+L | Cycle keyboard layout |
 | Ctrl+G | Git sync (pull + push) |
 | Ctrl+W | Toggle WiFi (connect / disconnect) |
+| Ctrl+F | Find |
+| Ctrl+H | Find + Replace (Tab switches field, Enter = next match, Ctrl+Enter = replace + next) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
