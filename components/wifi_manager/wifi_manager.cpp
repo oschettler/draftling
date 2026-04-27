@@ -148,12 +148,18 @@ extern "C" esp_err_t wifi_manager_init(void)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    /* Permanent budget guard: WiFi static buffers come from internal
+     * DRAM and cannot move to PSRAM, so esp_wifi_init() is the canary
+     * for internal-heap exhaustion on PSRAM-heavy boards (e.g. M5Stack
+     * PaperS3 with M5GFX framebuffer + Bluedroid + LVGL). Keep this as
+     * a single line so it is cheap enough to run on every connect
+     * attempt; if INTERNAL free or largest_free_block drop below
+     * ~32 KB esp_wifi_init() is likely to fail with ESP_ERR_NO_MEM. */
     ESP_LOGI(TAG, "Heap before esp_wifi_init: INTERNAL free=%u largest=%u, DMA free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-    heap_caps_print_heap_info(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));

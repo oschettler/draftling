@@ -19,6 +19,15 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # The editor UI uses custom Greybeard fonts exclusively.
 CONFIG_LV_FONT_MONTSERRAT_14=y
 
+# Route LVGL's internal allocator through PSRAM. Without this LVGL keeps
+# a 64 KB TLSF pool as a static array in internal DRAM (.bss) that is
+# permanently subtracted from the budget shared with WiFi static RX
+# buffers and Bluedroid. The custom hooks live in
+# components/display/lv_mem_psram.c and forward to
+# heap_caps_*(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT). Required to fit
+# WiFi + BLE keyboard + M5GFX framebuffer on the M5Stack PaperS3.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+
 # Compiler
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
@@ -30,4 +39,14 @@ CONFIG_BT_GATTC_ENABLE=y
 CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
 CONFIG_BT_BLE_SMP_ENABLE=y
 CONFIG_BT_HID_HOST_ENABLED=y
-CONFIG_BT_GATTC_NOTIF_REG_MAX=30
+# Move the Bluedroid host environment from .bss (always-resident
+# internal DRAM) into the heap, where CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST
+# (set in sdkconfig.defaults.esp32s3) can land it in PSRAM. This is
+# the largest single Bluedroid win for the internal-DRAM budget on
+# PSRAM-heavy boards (M5Stack PaperS3).
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+# A Bluetooth HID keyboard registers ~3 GATTC notifications (HID input
+# report, battery level, optional consumer/system control). The default
+# of 30 reserves space for ~10x more clients than we will ever see;
+# reducing it shrinks the per-connection GATTC tables in internal DRAM.
+CONFIG_BT_GATTC_NOTIF_REG_MAX=5
