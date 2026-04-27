@@ -184,8 +184,28 @@ The largest component. Contains:
 - **draftling_logo.c** -- embedded LVGL image for the splash screen.
 
 Public API: `editor_init()`, `editor_open_file()`, `editor_save_file()`,
-`editor_ui_init()`, `editor_ui_handle_key()`, `md_parse_line()`, and many
+`editor_ui_init()`, `editor_ui_handle_key()`, `editor_find()`,
+`editor_replace_range()`, `md_parse_line()`, and many
 cursor/selection/clipboard helpers.
+
+Editor shortcuts include `Ctrl+F` (Find) and `Ctrl+H` (Find +
+Replace). Both open a modal overlay; in Find+Replace mode, `Tab`
+switches between the Find and Replace fields, `Enter` jumps to the
+next match (wrapping at end-of-document), and `Ctrl+Enter` replaces
+the current match and advances to the next.
+
+The title bar shows `L %d/%d` (current line / total lines) on every
+build; on non-EPD targets the column counter is appended as well.
+
+The bottom status bar of both the editor and the file browser
+displays a small Wi-Fi icon (`components/editor/wifi_icon.c`) in the
+right corner whenever `wifi_manager_is_connected()` is true. The
+Greybeard fonts cover U+0020-U+04FF plus a few currency / numero
+glyphs, which excludes the U+1F6DC "wireless" pictograph, so the
+icon is rendered from a small embedded LVGL `LV_COLOR_FORMAT_I1`
+image instead of as a font glyph. Two pre-baked descriptors are
+exposed (black-on-transparent for the default theme and
+white-on-transparent for `CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND`).
 
 ### components/fonts/
 
