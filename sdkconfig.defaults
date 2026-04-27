@@ -45,8 +45,15 @@ CONFIG_BT_HID_HOST_ENABLED=y
 # the largest single Bluedroid win for the internal-DRAM budget on
 # PSRAM-heavy boards (M5Stack PaperS3).
 CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
-# A Bluetooth HID keyboard registers ~3 GATTC notifications (HID input
-# report, battery level, optional consumer/system control). The default
-# of 30 reserves space for ~10x more clients than we will ever see;
-# reducing it shrinks the per-connection GATTC tables in internal DRAM.
-CONFIG_BT_GATTC_NOTIF_REG_MAX=5
+# Maximum number of characteristic-notification registrations the
+# GATTC stack can hold across the whole BLE host. A BLE HID keyboard
+# typically registers several CCCDs (one per HID Input Report ID, the
+# Battery Level, and sometimes the Boot Keyboard Input report); NKRO
+# devices with multi-TLC report maps register more. We previously
+# tried lowering this to 5 to shave a few hundred bytes of internal
+# DRAM, but that turned out to silently break input on real keyboards
+# whose notification count after reconnection exceeded the cap (the
+# L2CAP/ATT connection stayed up but no input data ever flowed --
+# visible symptom: BLE pairs and reconnects fine but no keystrokes).
+# Keep the ESP-IDF default of 30 to leave headroom for any keyboard.
+CONFIG_BT_GATTC_NOTIF_REG_MAX=30

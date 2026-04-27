@@ -634,37 +634,12 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                  (int)param->input.length);
         /* Keyboard report: standard boot protocol (8 bytes) or
          * NKRO bitmap (variable length, typically >8 bytes).
-         * process_keyboard_report handles both formats.
-         *
-         * The usage filter intentionally accepts both
-         * ESP_HID_USAGE_KEYBOARD and ESP_HID_USAGE_GENERIC. ESP-IDF's
-         * BLE HID host derives `usage` by parsing the report map's
-         * top-level collection: only TLCs that explicitly declare
-         * "Usage Page (Generic Desktop) + Usage (Keyboard 0x06)" are
-         * tagged as KEYBOARD. Many real keyboards (NKRO devices with
-         * a multi-TLC report map, devices whose keyboard collection
-         * uses Usage (Keypad 0x07) or sits inside a vendor TLC, etc.)
-         * end up classified as ESP_HID_USAGE_GENERIC, and a strict
-         * `usage == KEYBOARD` filter silently dropped every keystroke
-         * for those devices -- the visible symptom was "BLE pairs and
-         * reconnects fine but no characters reach the editor".
-         *
-         * We still reject usages that we KNOW are not keyboard input
-         * (mouse/joystick/gamepad/tablet/consumer-control/vendor) so
-         * that mouse-movement reports from a combo device do not feed
-         * the keyboard parser. process_keyboard_report() then does its
-         * own format autodetection on the payload bytes. */
-        bool usage_is_keyboardish =
-            (param->input.usage == ESP_HID_USAGE_KEYBOARD) ||
-            (param->input.usage == ESP_HID_USAGE_GENERIC);
-        if (usage_is_keyboardish && param->input.length >= 3) {
+         * process_keyboard_report handles both formats. */
+        if (param->input.usage == ESP_HID_USAGE_KEYBOARD &&
+            param->input.length >= 3) {
             process_keyboard_report(param->input.data,
                                     (int)param->input.length,
                                     (uint8_t)param->input.report_id);
-        } else {
-            ESP_LOGD(TAG, "Ignored INPUT (usage=%d, len=%d)",
-                     (int)param->input.usage,
-                     (int)param->input.length);
         }
         break;
     }
