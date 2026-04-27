@@ -93,6 +93,19 @@ pairing with passkey authentication, connection/disconnection callbacks,
 and keyboard event dispatching. Each key event carries the HID keycode,
 ASCII character, modifier flags, and pressed/released state.
 
+The `ESP_HIDH_INPUT_EVENT` dispatcher accepts input reports tagged
+either `ESP_HID_USAGE_KEYBOARD` or `ESP_HID_USAGE_GENERIC`. The
+"generic" case is required because esp-idf's BLE HIDH classifies
+reports by the top-level collection in the report map, and many
+real keyboards (NKRO devices with multi-TLC report maps, or
+collections that use Usage(Keypad 0x07) instead of Usage(Keyboard
+0x06), or sit inside a vendor TLC) end up classified as GENERIC.
+Filtering strictly on KEYBOARD silently drops every keystroke for
+those devices -- the visible symptom is "BLE pairs and reconnects
+fine but no characters reach the editor". `process_keyboard_report`
+then auto-detects the actual report layout (boot, extended boot,
+key-array, NKRO bitmap) from the payload bytes.
+
 Public API: `ble_keyboard_init()`, `ble_keyboard_start_scan()`,
 `ble_keyboard_is_connected()`, `ble_keyboard_set_callback()`, and
 several other callback registration functions.
