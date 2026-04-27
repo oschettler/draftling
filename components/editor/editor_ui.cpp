@@ -264,6 +264,32 @@ static bool      s_save_open     = false;
 static char      s_save_buf[128] = "";     /* editable filename (no directory) */
 static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byte) */
 
+/* ---- Search / Replace overlay ----
+ * A single panel handles both Ctrl+F (find) and Ctrl+H (find +
+ * replace). When `s_search_replace_mode` is true, the panel exposes
+ * a second "Replace" field; Tab toggles focus between the two
+ * fields, Enter performs Find Next, Ctrl+Enter performs Replace +
+ * Find Next, and Esc closes the dialog. */
+static lv_obj_t *s_search_panel    = NULL;
+static lv_obj_t *s_search_hdr_lbl  = NULL;
+static lv_obj_t *s_search_find_hdr = NULL;
+static lv_obj_t *s_search_find_lbl = NULL;
+static lv_obj_t *s_search_repl_hdr = NULL;
+static lv_obj_t *s_search_repl_lbl = NULL;
+static lv_obj_t *s_search_cur      = NULL;
+static lv_obj_t *s_search_help_lbl = NULL;
+static bool      s_search_open     = false;
+static bool      s_search_replace_mode = false;
+static int       s_search_field    = 0;    /* 0 = find, 1 = replace */
+static char      s_search_buf[128] = "";
+static int       s_search_pos      = 0;    /* byte cursor into s_search_buf */
+static char      s_replace_buf[128] = "";
+static int       s_replace_pos     = 0;    /* byte cursor into s_replace_buf */
+/* Range of the most recent match in the document; used by Replace
+ * to know what to substitute. -1 means "no match selected". */
+static int       s_search_match_start = -1;
+static int       s_search_match_end   = -1;
+
 /* Escape-save-prompt: when true the user has been warned about unsaved
  * changes and a second Esc will discard + close. */
 static bool s_esc_pending = false;
@@ -1580,6 +1606,263 @@ static void handle_save_prompt_key(const kb_event_t *ev)
     refresh_save_prompt();
 }
 
+/* ---- Search / Replace overlay logic ---- */
+
+/* Render both fields and place the cursor bar in the active one. */
+static void refresh_search_prompt(void)
+{
+    if (!s_search_panel) return;
+    lv_label_set_text(s_search_find_lbl, s_search_buf);
+    if (s_search_replace_mode) {
+        lv_label_set_text(s_search_repl_lbl, s_replace_buf);
+    }
+
+    int cw = char_width_for_font(FONT_11);
+    const char *active_buf = (s_search_field == 0) ? s_search_buf : s_replace_buf;
+    int active_pos = (s_search_field == 0) ? s_search_pos : s_replace_pos;
+    int chars = 0;
+    for (int i = 0; i < active_pos; i++) {
+        if ((active_buf[i] & 0xC0) != 0x80) chars++;
+    }
+    /* Field text labels are positioned at x=14 inside the panel
+     * (the "F:" / "R:" prefix occupies the first 14 px). */
+    int cx = 14 + chars * cw;
+    /* Cursor sits at the right edge of the active field's text.
+     * Field "Find:" line is at y=20, "Replace:" line at y=36
+     * inside the panel. */
+    int cy = (s_search_field == 0) ? 20 : 36;
+    lv_obj_set_pos(s_search_cur, cx, cy);
+    lv_obj_remove_flag(s_search_cur, LV_OBJ_FLAG_HIDDEN);
+
+    /* Hide / show replace row based on the mode. */
+    if (s_search_replace_mode) {
+        lv_obj_remove_flag(s_search_repl_hdr, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(s_search_repl_lbl, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_search_repl_hdr, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_search_repl_lbl, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_label_set_text(s_search_hdr_lbl,
+                      s_search_replace_mode ? "Find / Replace:" : "Find:");
+    lv_label_set_text(s_search_help_lbl,
+                      s_search_replace_mode
+                          ? "Enter:Next Ctrl+Enter:Replace Tab:Field Esc:Close"
+                          : "Enter:Next  Esc:Close");
+}
+
+static void show_search_prompt(bool replace_mode)
+{
+    s_search_replace_mode = replace_mode;
+    s_search_open = true;
+    s_search_field = 0;
+    /* Keep the previous query buffers so re-opening the dialog
+     * remembers the user's last input. Clear stale match state
+     * so Replace cannot operate on a stale range. */
+    s_search_match_start = -1;
+    s_search_match_end = -1;
+    s_search_pos = (int)strlen(s_search_buf);
+    s_replace_pos = (int)strlen(s_replace_buf);
+    lv_obj_remove_flag(s_search_panel, LV_OBJ_FLAG_HIDDEN);
+    refresh_search_prompt();
+}
+
+static void close_search_prompt(void)
+{
+    s_search_open = false;
+    if (s_search_panel) lv_obj_add_flag(s_search_panel, LV_OBJ_FLAG_HIDDEN);
+    /* Drop any selection from the most recent match so the editor
+     * goes back to a normal cursor view. */
+    editor_clear_selection();
+    s_search_match_start = -1;
+    s_search_match_end = -1;
+    editor_ui_set_status(
+        "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+}
+
+/* Find the next occurrence of s_search_buf starting just after the
+ * current match (or from the cursor when there is none). On match,
+ * move the cursor and select the matched range so the user can see
+ * what was found. */
+static void search_find_next(void)
+{
+    if (s_search_buf[0] == '\0') return;
+    size_t from;
+    if (s_search_match_start >= 0) {
+        /* Advance past the previous match so consecutive Enter
+         * presses cycle through results. */
+        from = (size_t)s_search_match_start + 1;
+    } else {
+        from = editor_get_cursor();
+    }
+    int pos = editor_find(s_search_buf, from);
+    if (pos < 0 && from > 0) {
+        /* Wrap around to the start of the document. */
+        pos = editor_find(s_search_buf, 0);
+        if (pos >= 0) editor_ui_set_status("Search: wrapped to top");
+    }
+    if (pos < 0) {
+        s_search_match_start = -1;
+        s_search_match_end = -1;
+        editor_ui_set_status("Search: not found");
+        return;
+    }
+    size_t mlen = strlen(s_search_buf);
+    s_search_match_start = pos;
+    s_search_match_end = pos + (int)mlen;
+    /* Position the cursor at the end of the match and anchor a
+     * selection back to the start so the editor highlights the
+     * matched text. */
+    editor_clear_selection();
+    editor_set_cursor((size_t)s_search_match_start);
+    editor_set_selection_anchor();
+    editor_set_cursor((size_t)s_search_match_end);
+    ensure_cursor_visible();
+    editor_ui_refresh();
+    /* Re-show the dialog (the refresh above repaints the editor
+     * underneath). */
+    if (s_search_panel) lv_obj_move_foreground(s_search_panel);
+    refresh_search_prompt();
+}
+
+static void search_replace_current(void)
+{
+    if (!s_search_replace_mode) return;
+    if (s_search_match_start < 0) {
+        /* No active match -- treat the first Ctrl+Enter as Find Next. */
+        search_find_next();
+        return;
+    }
+    esp_err_t err = editor_replace_range((size_t)s_search_match_start,
+                                         (size_t)s_search_match_end,
+                                         s_replace_buf);
+    if (err != ESP_OK) {
+        editor_ui_set_status("Replace failed: buffer full");
+        return;
+    }
+    /* Position the cursor right after the replacement and look
+     * for the next match from there. */
+    size_t after = (size_t)s_search_match_start + strlen(s_replace_buf);
+    editor_clear_selection();
+    editor_set_cursor(after);
+    /* Reset match state so search_find_next() searches forward from
+     * the cursor (we just consumed the previous match). */
+    s_search_match_start = -1;
+    s_search_match_end = -1;
+    ensure_cursor_visible();
+    editor_ui_refresh();
+    if (s_search_panel) lv_obj_move_foreground(s_search_panel);
+    /* Auto-advance to the next occurrence so the user can repeat
+     * Ctrl+Enter through the document. */
+    search_find_next();
+}
+
+/* Forward declaration for the editor_get_cursor helper used above
+ * is provided by editor.h, which is already included at the top. */
+
+static void handle_search_prompt_key(const kb_event_t *ev)
+{
+    bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+
+    /* Pointer to the active field's buffer + length cursor */
+    char  *abuf = (s_search_field == 0) ? s_search_buf : s_replace_buf;
+    int   *apos = (s_search_field == 0) ? &s_search_pos : &s_replace_pos;
+    size_t bufsz = (s_search_field == 0) ? sizeof(s_search_buf) : sizeof(s_replace_buf);
+
+    switch (ev->keycode) {
+    case KB_KEY_ENTER:
+        if (ctrl && s_search_replace_mode) {
+            search_replace_current();
+        } else {
+            search_find_next();
+        }
+        return;
+    case KB_KEY_ESCAPE:
+        close_search_prompt();
+        editor_ui_refresh();
+        return;
+    case KB_KEY_TAB:
+        if (s_search_replace_mode) {
+            s_search_field = (s_search_field == 0) ? 1 : 0;
+        }
+        break;
+    case KB_KEY_LEFT:
+        if (*apos > 0) {
+            do { (*apos)--; }
+            while (*apos > 0 && (abuf[*apos] & 0xC0) == 0x80);
+        }
+        break;
+    case KB_KEY_RIGHT:
+        if (*apos < (int)strlen(abuf)) {
+            (*apos)++;
+            while (*apos < (int)strlen(abuf) &&
+                   (abuf[*apos] & 0xC0) == 0x80)
+                (*apos)++;
+        }
+        break;
+    case KB_KEY_HOME:
+        *apos = 0;
+        break;
+    case KB_KEY_END:
+        *apos = (int)strlen(abuf);
+        break;
+    case KB_KEY_BACKSPACE:
+        if (*apos > 0) {
+            int prev = *apos - 1;
+            while (prev > 0 && (abuf[prev] & 0xC0) == 0x80) prev--;
+            int len = (int)strlen(abuf);
+            memmove(abuf + prev, abuf + *apos,
+                    (size_t)(len - *apos + 1));
+            *apos = prev;
+            /* Editing the find query invalidates the previous match. */
+            if (s_search_field == 0) {
+                s_search_match_start = -1;
+                s_search_match_end = -1;
+            }
+        }
+        break;
+    case KB_KEY_DELETE: {
+        int len = (int)strlen(abuf);
+        if (*apos < len) {
+            int next = *apos + 1;
+            while (next < len && (abuf[next] & 0xC0) == 0x80) next++;
+            memmove(abuf + *apos, abuf + next,
+                    (size_t)(len - next + 1));
+            if (s_search_field == 0) {
+                s_search_match_start = -1;
+                s_search_match_end = -1;
+            }
+        }
+        break;
+    }
+    default: {
+        if (ctrl) break; /* swallow other ctrl combos */
+        const char *text = kb_layout_translate(ev->keycode, ev->modifier);
+        if (text && text[0]) {
+            /* Reject control characters so the buffers stay
+             * printable; embedded newlines are not supported in the
+             * search dialog. */
+            if ((unsigned char)text[0] < 0x20) break;
+            size_t tlen = strlen(text);
+            size_t cur_len = strlen(abuf);
+            if (cur_len + tlen < bufsz - 1) {
+                memmove(abuf + *apos + tlen,
+                        abuf + *apos,
+                        cur_len - (size_t)*apos + 1);
+                memcpy(abuf + *apos, text, tlen);
+                *apos += (int)tlen;
+                if (s_search_field == 0) {
+                    s_search_match_start = -1;
+                    s_search_match_end = -1;
+                }
+            }
+        }
+        break;
+    }
+    }
+    refresh_search_prompt();
+}
+
 /* ---- Keyboard handler (registered as BLE callback) ---- */
 
 #if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
@@ -1801,6 +2084,12 @@ static void handle_editor_key(const kb_event_t *ev)
             editor_select_all();
             ensure_cursor_visible();
             editor_ui_refresh();
+            return;
+        case 'f':
+            show_search_prompt(false);
+            return;
+        case 'h':
+            show_search_prompt(true);
             return;
         case 'g':
             /* Auto-save the current file so the sync task picks up
@@ -2093,6 +2382,8 @@ static void process_key_event(const kb_event_t *ev)
 
     if (s_save_open) {
         handle_save_prompt_key(e);
+    } else if (s_search_open) {
+        handle_search_prompt_key(e);
     } else if (s_settings_open) {
         handle_settings_key(e);
     } else if (s_menu_open) {
@@ -2261,6 +2552,8 @@ static void apply_pending_connect_state(void)
         s_settings_open = false;
         s_save_open = false;
         if (s_save_panel) lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+        s_search_open = false;
+        if (s_search_panel) lv_obj_add_flag(s_search_panel, LV_OBJ_FLAG_HIDDEN);
         /* Cancel any in-progress key repeat so stale keys do not
          * keep firing after reconnection. */
         s_repeat_held = false;
@@ -2795,6 +3088,74 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_radius(s_save_cur, 0, 0);
     lv_obj_set_style_pad_all(s_save_cur, 0, 0);
     lv_obj_add_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
+
+    /* ---- Search / Replace overlay (shown on the editor screen) ---- */
+    s_search_panel = lv_obj_create(s_scr);
+    lv_obj_set_size(s_search_panel, SCR_W - 20, 76);
+    lv_obj_set_pos(s_search_panel, 10, (SCR_H - 76) / 2);
+    lv_obj_set_style_bg_color(s_search_panel, theme_bg(), 0);
+    lv_obj_set_style_bg_opa(s_search_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_search_panel, theme_fg(), 0);
+    lv_obj_set_style_border_width(s_search_panel, 2, 0);
+    lv_obj_set_style_radius(s_search_panel, 4, 0);
+    lv_obj_set_style_pad_all(s_search_panel, 6, 0);
+    lv_obj_remove_flag(s_search_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_search_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_search_hdr_lbl = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_hdr_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_hdr_lbl, theme_fg(), 0);
+    lv_label_set_text(s_search_hdr_lbl, "Find:");
+    lv_obj_set_pos(s_search_hdr_lbl, 0, 0);
+
+    /* Find row */
+    s_search_find_hdr = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_find_hdr, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_find_hdr, theme_fg(), 0);
+    lv_label_set_text(s_search_find_hdr, "F:");
+    lv_obj_set_pos(s_search_find_hdr, 0, 20);
+
+    s_search_find_lbl = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_find_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_find_lbl, theme_fg(), 0);
+    lv_obj_set_width(s_search_find_lbl, SCR_W - 20 - 12 - 14);
+    lv_label_set_text(s_search_find_lbl, "");
+    lv_obj_set_pos(s_search_find_lbl, 14, 20);
+
+    /* Replace row (only shown in replace mode) */
+    s_search_repl_hdr = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_repl_hdr, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_repl_hdr, theme_fg(), 0);
+    lv_label_set_text(s_search_repl_hdr, "R:");
+    lv_obj_set_pos(s_search_repl_hdr, 0, 36);
+    lv_obj_add_flag(s_search_repl_hdr, LV_OBJ_FLAG_HIDDEN);
+
+    s_search_repl_lbl = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_repl_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_repl_lbl, theme_fg(), 0);
+    lv_obj_set_width(s_search_repl_lbl, SCR_W - 20 - 12 - 14);
+    lv_label_set_text(s_search_repl_lbl, "");
+    lv_obj_set_pos(s_search_repl_lbl, 14, 36);
+    lv_obj_add_flag(s_search_repl_lbl, LV_OBJ_FLAG_HIDDEN);
+
+    /* Help line at the bottom of the panel */
+    s_search_help_lbl = lv_label_create(s_search_panel);
+    lv_obj_set_style_text_font(s_search_help_lbl, FONT_11, 0);
+    lv_obj_set_style_text_color(s_search_help_lbl, theme_fg(), 0);
+    lv_obj_set_width(s_search_help_lbl, SCR_W - 20 - 12);
+    lv_label_set_text(s_search_help_lbl, "Enter:Next  Esc:Close");
+    lv_obj_set_pos(s_search_help_lbl, 0, 54);
+
+    /* Cursor bar shared between the find / replace fields. The
+     * refresh function repositions it to whichever row owns focus. */
+    s_search_cur = lv_obj_create(s_search_panel);
+    lv_obj_set_size(s_search_cur, 2, LINE_H);
+    lv_obj_set_style_bg_color(s_search_cur, theme_fg(), 0);
+    lv_obj_set_style_bg_opa(s_search_cur, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_search_cur, 0, 0);
+    lv_obj_set_style_radius(s_search_cur, 0, 0);
+    lv_obj_set_style_pad_all(s_search_cur, 0, 0);
+    lv_obj_add_flag(s_search_cur, LV_OBJ_FLAG_HIDDEN);
 
     /* ---- Key repeat timer ---- */
     s_repeat_timer = lv_timer_create(key_repeat_cb, KEY_REPEAT_RATE_MS, NULL);

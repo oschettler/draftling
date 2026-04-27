@@ -473,6 +473,64 @@ extern "C" void editor_set_cursor(size_t pos)
     move_gap_to(pos);
 }
 
+/* ---- Find / Replace ----
+ *
+ * Forward case-sensitive substring search starting at byte offset
+ * from_pos in the flat text. Returns the byte offset of the first
+ * match at or after from_pos, or -1 when nothing matches. An empty
+ * needle is treated as "no match" so callers can safely loop on the
+ * return value.
+ */
+extern "C" int editor_find(const char *needle, size_t from_pos)
+{
+    if (!needle || needle[0] == '\0') return -1;
+    size_t total;
+    const char *text = editor_get_text(&total);
+    size_t nlen = strlen(needle);
+    if (nlen > total) return -1;
+    if (from_pos > total - nlen) return -1;
+    /* Plain memmem-style scan over the flat buffer. */
+    for (size_t i = from_pos; i + nlen <= total; i++) {
+        if (memcmp(text + i, needle, nlen) == 0) return (int)i;
+    }
+    return -1;
+}
+
+/* Replace the byte range [start, end) with the supplied replacement
+ * text. The cursor is left positioned at the end of the replacement,
+ * any active selection is cleared, and the document is marked
+ * modified. Returns ESP_OK on success or ESP_ERR_NO_MEM if the
+ * replacement would overflow the gap buffer. */
+extern "C" esp_err_t editor_replace_range(size_t start, size_t end,
+                                          const char *replacement)
+{
+    size_t len = content_len();
+    if (start > len) start = len;
+    if (end > len) end = len;
+    if (start > end) { size_t t = start; start = end; end = t; }
+
+    size_t rlen = replacement ? strlen(replacement) : 0;
+    size_t old_span = end - start;
+    /* New content size must fit in the buffer with the editor's usual
+     * 64-byte safety margin (matches editor_open_file()). */
+    if (len - old_span + rlen > s_buf_size - 64) return ESP_ERR_NO_MEM;
+
+    /* Delete the old range, then insert the replacement at the same
+     * position. Going through the existing helpers preserves all
+     * gap/cache invariants. */
+    move_gap_to(end);
+    s_gap_start = start;
+    s_sel_anchor = -1;
+    if (rlen > 0) {
+        ensure_gap(rlen);
+        memcpy(s_buf + s_gap_start, replacement, rlen);
+        s_gap_start += rlen;
+    }
+    s_modified = true;
+    invalidate_flat();
+    return ESP_OK;
+}
+
 /* ---- Selection ---- */
 
 extern "C" bool editor_selection_active(void)

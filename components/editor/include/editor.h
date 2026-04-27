@@ -53,6 +53,10 @@ void editor_delete_line(void);
 
 void editor_set_cursor(size_t pos);
 
+/* Find / Replace */
+int editor_find(const char *needle, size_t from_pos);
+esp_err_t editor_replace_range(size_t start, size_t end, const char *replacement);
+
 /* Selection */
 bool editor_selection_active(void);
 void editor_set_selection_anchor(void);
