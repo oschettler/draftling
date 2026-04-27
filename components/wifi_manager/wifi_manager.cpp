@@ -227,7 +227,7 @@ extern "C" esp_err_t wifi_manager_connect_to(const char *ssid, const char *passw
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Connecting to %s...", ssid);
+    ESP_LOGI(TAG, "WiFi: connecting to %s", ssid);
 
     EventBits_t bits = xEventGroupWaitBits(s_event_group,
         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(30000));

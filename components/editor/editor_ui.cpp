@@ -22,6 +22,7 @@
 #include "standby.h"
 #include "greybeard.h"
 #include "battery.h"
+#include "wifi_icon.h"
 #include "freertos/task.h"
 
 /*
@@ -287,6 +288,14 @@ static lv_timer_t *s_batt_timer     = NULL;
 #define BATT_POLL_MS 30000  /* refresh battery every 30 s */
 #endif
 
+/* ---- WiFi connectivity icon ----
+ * Shown in the right corner of both status bars whenever the WiFi
+ * stack reports STATE_CONNECTED. The Greybeard fonts do not cover
+ * U+1F6DC, so we render the symbol from a small embedded LVGL
+ * image (see wifi_icon.c). */
+static lv_obj_t *s_img_wifi    = NULL;  /* editor screen */
+static lv_obj_t *s_img_br_wifi = NULL;  /* file browser screen */
+
 /* ---- Key-event input queue ----
  * The BLE callback runs on the HID host task and must not block on the
  * LVGL mutex.  Key events are enqueued here from the BLE context (ISR-
@@ -448,6 +457,21 @@ static void batt_timer_cb(lv_timer_t *timer)
 }
 #endif
 
+/* Update the WiFi connectivity icons in both status bars: shown when
+ * the WiFi stack is connected, hidden otherwise. */
+static void update_wifi_icons(void)
+{
+    bool connected = wifi_manager_is_connected();
+    if (s_img_wifi) {
+        if (connected) lv_obj_remove_flag(s_img_wifi, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_img_wifi, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_img_br_wifi) {
+        if (connected) lv_obj_remove_flag(s_img_br_wifi, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_img_br_wifi, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void update_title_bar(void)
 {
     const char *path = editor_get_file_path();
@@ -457,22 +481,25 @@ static void update_title_bar(void)
         name = slash ? slash + 1 : path;
     }
     char buf[128];
+    int line, col;
+    editor_get_cursor_pos(&line, &col);
+    int total_lines = editor_get_line_count();
 #if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
     defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-    /* On e-paper boards the cursor moves on every keystroke, so
-     * including the line/column counter in the title bar would dirty
-     * the top of the screen on every edit and double the e-paper
-     * refresh time. Skip it. */
-    snprintf(buf, sizeof(buf), "%s%s  [%s]",
+    /* On e-paper boards the cursor moves on every keystroke, so the
+     * column counter is omitted to avoid dirtying the title bar on
+     * every edit. The line counter ("L %d/%d") only changes when the
+     * cursor moves to a different line, so the s_prev_title cache
+     * below collapses no-op redraws back to a single update. */
+    snprintf(buf, sizeof(buf), "%s%s  L %d/%d  [%s]",
              name, editor_is_modified() ? " *" : "",
+             line + 1, total_lines,
              kb_layout_name(kb_layout_get()));
 #else
-    int line, col;
-    editor_get_cursor_pos(&line, &col);
-    snprintf(buf, sizeof(buf), "%s%s  L:%d C:%d  [%s]",
+    snprintf(buf, sizeof(buf), "%s%s  L %d/%d C:%d  [%s]",
              name, editor_is_modified() ? " *" : "",
-             line + 1, col + 1,
+             line + 1, total_lines, col + 1,
              kb_layout_name(kb_layout_get()));
 #endif
 
@@ -2323,6 +2350,21 @@ static void wifi_state_cb(wifi_state_t state)
         editor_ui_set_status(buf);
         break;
     }
+    case WIFI_STATE_CONNECTING:
+    {
+        /* Mirror the underlying "WiFi: connecting to <SSID>" log
+         * message in the on-screen status bar so users see which
+         * SSID we are negotiating with. */
+        char buf[80];
+        const char *ssid = wifi_manager_get_ssid();
+        if (ssid && ssid[0]) {
+            snprintf(buf, sizeof(buf), "WiFi: connecting to %s", ssid);
+        } else {
+            snprintf(buf, sizeof(buf), "WiFi: connecting...");
+        }
+        editor_ui_set_status(buf);
+        break;
+    }
     case WIFI_STATE_ERROR:
         editor_ui_set_status("WiFi: connection failed");
         break;
@@ -2333,6 +2375,7 @@ static void wifi_state_cb(wifi_state_t state)
         break;
     }
 
+    update_wifi_icons();
     lvgl_port_unlock();
 }
 
@@ -2497,7 +2540,24 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_pos(s_lbl_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
     lv_obj_set_width(s_lbl_dev_batt, 78);
     lv_label_set_text(s_lbl_dev_batt, "");
+#define WIFI_ICON_RIGHT_OFFSET 95   /* leave room for battery on its left */
+#else
+#define WIFI_ICON_RIGHT_OFFSET 15
 #endif
+
+    /* WiFi connectivity icon (right corner of editor status bar) */
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+    s_img_wifi = lv_image_create(s_scr);
+    lv_image_set_src(s_img_wifi, &wifi_icon_white);
+#else
+    s_img_wifi = lv_image_create(s_scr);
+    lv_image_set_src(s_img_wifi, &wifi_icon_black);
+#endif
+    lv_obj_set_pos(s_img_wifi,
+                   SCR_W - WIFI_ICON_RIGHT_OFFSET,
+                   SCR_H - STATUS_H + (STATUS_H - 7) / 2);
+    lv_obj_add_flag(s_img_wifi, LV_OBJ_FLAG_HIDDEN);
+#undef WIFI_ICON_RIGHT_OFFSET
 
     /* Cursor blink timer.
      *
@@ -2575,7 +2635,28 @@ extern "C" void editor_ui_init(void)
     /* Battery poll timer + first reading */
     s_batt_timer = lv_timer_create(batt_timer_cb, BATT_POLL_MS, NULL);
     batt_timer_cb(NULL);  /* show initial value immediately */
+#define WIFI_ICON_RIGHT_OFFSET 95
+#else
+#define WIFI_ICON_RIGHT_OFFSET 15
 #endif
+
+    /* WiFi connectivity icon (right corner of browser status bar) */
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+    s_img_br_wifi = lv_image_create(s_scr_browser);
+    lv_image_set_src(s_img_br_wifi, &wifi_icon_white);
+#else
+    s_img_br_wifi = lv_image_create(s_scr_browser);
+    lv_image_set_src(s_img_br_wifi, &wifi_icon_black);
+#endif
+    lv_obj_set_pos(s_img_br_wifi,
+                   SCR_W - WIFI_ICON_RIGHT_OFFSET,
+                   SCR_H - STATUS_H + (STATUS_H - 7) / 2);
+    lv_obj_add_flag(s_img_br_wifi, LV_OBJ_FLAG_HIDDEN);
+#undef WIFI_ICON_RIGHT_OFFSET
+
+    /* Reflect any pre-existing WiFi state (in case the manager
+     * fired its callback before the UI was ready). */
+    update_wifi_icons();
 
     /* Register keyboard callback */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
