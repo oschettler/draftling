@@ -2361,6 +2361,12 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
             editor_open_file(path);
             editor_ui_refresh();
         }
+        /* If the file browser is the active screen (sync was triggered
+         * from there), rebuild its file list so newly pulled files
+         * appear and deleted ones disappear. */
+        if (lv_scr_act() == s_scr_browser) {
+            refresh_file_list();
+        }
         break;
     case GIT_SYNC_ERROR:
     {
