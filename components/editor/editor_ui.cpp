@@ -1089,6 +1089,19 @@ static void status_clear_timer_cb(lv_timer_t *timer)
     restore_default_status();
 }
 
+/* Cancel any pending auto-clear timer and restore the default status
+ * bar text immediately. Safe to call when no timer is pending (no-op
+ * in that case). Used by call sites that act as the "user moved on"
+ * signal -- e.g. selecting a different file in the browser. */
+static void cancel_status_clear_and_restore(void)
+{
+    if (s_status_clear_timer) {
+        lv_timer_delete(s_status_clear_timer);
+        s_status_clear_timer = NULL;
+        restore_default_status();
+    }
+}
+
 extern "C" void editor_ui_set_status(const char *msg)
 {
     ESP_LOGI(TAG, "Status: %s", msg);
@@ -2415,19 +2428,11 @@ static void handle_browser_key(const kb_event_t *ev)
          * "File too large" error left over from a previous open
          * attempt). Cancel the auto-clear timer too so the standard
          * text we just restored is not overwritten 3 seconds later. */
-        if (s_status_clear_timer) {
-            lv_timer_delete(s_status_clear_timer);
-            s_status_clear_timer = NULL;
-            restore_default_status();
-        }
+        cancel_status_clear_and_restore();
         break;
     case KB_KEY_DOWN:
         if (s_browser_sel < (int)child_count - 1) s_browser_sel++;
-        if (s_status_clear_timer) {
-            lv_timer_delete(s_status_clear_timer);
-            s_status_clear_timer = NULL;
-            restore_default_status();
-        }
+        cancel_status_clear_and_restore();
         break;
     case KB_KEY_ENTER: {
         lv_obj_t *btn = lv_obj_get_child(s_list_files, s_browser_sel);
