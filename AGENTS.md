@@ -397,14 +397,10 @@ SOC_BLE_SUPPORTED`):
 - **DRAFTLING_MODEL_WAVESHARE_EPD_HAT** -- Waveshare E-Paper Driver
   HAT (UC8179) on any BLE-capable ESP32 host (ESP32, ESP32-S3,
   ESP32-C2/C3/C6, ESP32-H2 - i.e. anything except the BLE-less
-  ESP32-S2). **Also requires PSRAM** (`SOC_SPIRAM_SUPPORTED && SPIRAM`)
-  -- the editor gap buffer, framebuffers, and LVGL buffers all live in
-  external SPI RAM, so the option is hidden until PSRAM is enabled
-  under "Component config -> ESP PSRAM". The connected panel is picked
-  via the `DRAFTLING_HAT_PANEL` choice (see below); only the GPIO
-  pinout (sub-menu "Waveshare E-Paper Driver HAT pinout") is
-  user-editable. Pin defaults match the ESP32-S3-DevKitC-1 wiring used
-  by Waveshare's example projects.
+  ESP32-S2). The connected panel is picked via the `DRAFTLING_HAT_PANEL`
+  choice (see below); only the GPIO pinout (sub-menu "Waveshare E-Paper
+  Driver HAT pinout") is user-editable. Pin defaults match the
+  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
   library, on-board MicroSD on SPI3, BOOT button on GPIO0 used as
@@ -562,6 +558,17 @@ Requires ESP-IDF v5.3 or later. ESP-IDF 6.0 and newer are not supported
 yet because the `m5stack/M5GFX` managed component is not compatible
 with ESP-IDF 6.x; the top-level `CMakeLists.txt` enforces this with a
 `FATAL_ERROR` on IDF major version >= 6.
+
+PSRAM is required on every supported board. The editor gap buffer
+(`CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB`, default 256 KB), the display
+framebuffers, the LVGL widget heap (`CONFIG_LV_USE_CUSTOM_MALLOC` routes
+through PSRAM), the Git-sync HTTPS response buffers + task stack, and
+the Bluedroid host environment (`CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY` plus
+`CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST`) all assume `MALLOC_CAP_SPIRAM`
+is available. The top-level `CMakeLists.txt` aborts the configure step
+with a `FATAL_ERROR` if `CONFIG_SPIRAM` is not set. Targets without
+on-chip PSRAM support (e.g. ESP32-S2, bare ESP32-C3 modules without
+PSRAM) are not supported.
 
 ```bash
 idf.py set-target esp32s3

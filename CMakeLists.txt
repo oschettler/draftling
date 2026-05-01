@@ -15,3 +15,21 @@ endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(draftling)
+
+# Draftling requires PSRAM on every supported board. The editor gap
+# buffer (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB, default 256 KB), the
+# UC8179 / RLCD / M5GFX framebuffers, the LVGL display + widget heap
+# (CONFIG_LV_USE_CUSTOM_MALLOC routes through PSRAM), the Git-sync
+# response buffers and task stack, and Bluedroid's host environment
+# (CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY + BT_ALLOCATION_FROM_SPIRAM_FIRST)
+# all assume MALLOC_CAP_SPIRAM is available. Without PSRAM the device
+# runs out of internal heap during init, so refuse to configure rather
+# than produce a binary that crashes at boot.
+if(NOT CONFIG_SPIRAM)
+    message(FATAL_ERROR
+        "Draftling requires PSRAM, but CONFIG_SPIRAM is not enabled. "
+        "Run 'idf.py menuconfig' and turn on 'Component config -> ESP "
+        "PSRAM -> Support for external, SPI-connected RAM', then rebuild. "
+        "If your target chip has no PSRAM support at all (e.g. ESP32-S2, "
+        "bare ESP32-C3 modules without PSRAM), it is not supported.")
+endif()

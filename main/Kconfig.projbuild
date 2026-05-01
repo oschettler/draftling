@@ -24,7 +24,7 @@ config DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
 
 config DRAFTLING_MODEL_WAVESHARE_EPD_HAT
     bool "Waveshare E-Paper Driver HAT (generic ESP32 host)"
-    depends on SOC_BLE_SUPPORTED && SOC_SPIRAM_SUPPORTED && SPIRAM
+    depends on SOC_BLE_SUPPORTED
     help
         Waveshare E-Paper Driver HAT (UC8179 controller) connected to a
         generic ESP32 development board. Selectable for any ESP-IDF
@@ -32,13 +32,13 @@ config DRAFTLING_MODEL_WAVESHARE_EPD_HAT
         ESP32-H2 - everything except the ESP32-S2, which has no BLE
         radio and therefore cannot be paired with a Bluetooth keyboard).
 
-        PSRAM is required: the editor's gap buffer (256 KB), the UC8179
-        framebuffers (two copies, 800x480 / 8 = ~47 KB each at default
-        resolution), and the LVGL display buffers all live in external
-        SPI RAM. Without it the device runs out of internal heap almost
-        immediately. Enable it under "Component config -> ESP PSRAM ->
-        Support for external, SPI-connected RAM" before selecting this
-        board model.
+        Like every other Draftling board, the HAT host must have PSRAM
+        enabled (CONFIG_SPIRAM): the editor's gap buffer
+        (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB, default 256 KB), the
+        UC8179 framebuffers (two copies, 800x480 / 8 = ~47 KB each at
+        default resolution), and the LVGL display buffers all live in
+        external SPI RAM. The top-level CMake build refuses to
+        configure without PSRAM and prints an actionable error.
 
         Pick the connected panel from the "E-paper panel" choice below;
         each panel preset locks in the panel's resolution, framebuffer
