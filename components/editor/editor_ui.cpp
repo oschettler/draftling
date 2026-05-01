@@ -211,6 +211,13 @@ static lv_obj_t *s_list_files  = NULL;
 static lv_obj_t *s_lbl_br_status = NULL;
 static lv_obj_t *s_img_logo    = NULL;
 
+/* One-shot LVGL timer that restores the status bar to its standard
+ * text 3 seconds after a transient message (e.g. "File too large")
+ * was posted via editor_ui_set_status(). NULL when no message is
+ * currently pending auto-clear. Runs inside lv_timer_handler() and
+ * therefore does not need explicit lvgl_port_lock(). */
+static lv_timer_t *s_status_clear_timer = NULL;
+
 /* BLE connection prompt screen */
 static lv_obj_t *s_scr_ble_prompt  = NULL;
 static lv_obj_t *s_ble_prompt_lbl  = NULL;
@@ -1046,11 +1053,60 @@ extern "C" void editor_ui_show_editor(void)
     editor_ui_refresh();
 }
 
+/* Default status-bar text for the editor screen. Kept in one place
+ * so the auto-clear timer and the initial label setup agree. */
+#define EDITOR_DEFAULT_STATUS \
+    "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files"
+
+/* Restore the status bar of both screens to its standard, no-message
+ * state (the same text the screens show when they are first entered).
+ * The browser status mirrors editor_ui_show_file_browser() so that the
+ * Wi-Fi state -- if any -- is reflected. */
+static void restore_default_status(void)
+{
+    if (s_lbl_status) {
+        lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
+    }
+    if (s_lbl_br_status) {
+        if (wifi_manager_is_connected()) {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
+                     wifi_manager_get_ssid(), wifi_manager_get_ip());
+            lv_label_set_text(s_lbl_br_status, buf);
+        } else {
+            lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
+        }
+    }
+}
+
+/* One-shot LVGL timer callback: clear the transient status message. */
+static void status_clear_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    /* The timer auto-deletes after firing because we set its repeat
+     * count to 1, so just drop our reference. */
+    s_status_clear_timer = NULL;
+    restore_default_status();
+}
+
 extern "C" void editor_ui_set_status(const char *msg)
 {
     ESP_LOGI(TAG, "Status: %s", msg);
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
     if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
+    /* Auto-clear the message after 3 seconds so transient errors
+     * (e.g. "File too large") do not linger after the user has moved
+     * on to a different file or screen. The timer is one-shot and is
+     * recreated on every set_status call, so successive messages each
+     * get their own 3-second window. */
+    if (s_status_clear_timer) {
+        lv_timer_delete(s_status_clear_timer);
+        s_status_clear_timer = NULL;
+    }
+    s_status_clear_timer = lv_timer_create(status_clear_timer_cb, 3000, NULL);
+    if (s_status_clear_timer) {
+        lv_timer_set_repeat_count(s_status_clear_timer, 1);
+    }
 }
 
 /* ---- Menu system ---- */
@@ -2354,9 +2410,24 @@ static void handle_browser_key(const kb_event_t *ev)
     switch (ev->keycode) {
     case KB_KEY_UP:
         if (s_browser_sel > 0) s_browser_sel--;
+        /* Selecting a different file is one of the two conditions
+         * that clears a transient status message (e.g. the
+         * "File too large" error left over from a previous open
+         * attempt). Cancel the auto-clear timer too so the standard
+         * text we just restored is not overwritten 3 seconds later. */
+        if (s_status_clear_timer) {
+            lv_timer_delete(s_status_clear_timer);
+            s_status_clear_timer = NULL;
+            restore_default_status();
+        }
         break;
     case KB_KEY_DOWN:
         if (s_browser_sel < (int)child_count - 1) s_browser_sel++;
+        if (s_status_clear_timer) {
+            lv_timer_delete(s_status_clear_timer);
+            s_status_clear_timer = NULL;
+            restore_default_status();
+        }
         break;
     case KB_KEY_ENTER: {
         lv_obj_t *btn = lv_obj_get_child(s_list_files, s_browser_sel);
@@ -2871,8 +2942,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_width(s_lbl_status, SCR_W - 4);
     lv_obj_set_style_text_font(s_lbl_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_status, theme_fg(), 0);
-    lv_label_set_text(s_lbl_status,
-        "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+    lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
     defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
