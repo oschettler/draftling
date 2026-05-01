@@ -64,7 +64,7 @@ Git repository via the GitHub REST API.
 | Input | BLE HID keyboard | BLE HID keyboard |
 | Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
 | Battery monitor | GPIO4 ADC (3:1 divider) | GPIO3 ADC (2:1 divider) |
-| Wake from sleep | GPIO18 button | Power button (GPIO21) |
+| Wake from sleep | GPIO18 button | BOOT button (GPIO0) |
 
 ## Features
 
