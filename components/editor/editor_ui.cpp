@@ -2076,7 +2076,8 @@ static void handle_editor_key(const kb_event_t *ev)
             editor_ui_refresh();
             return;
         case 'v':
-            editor_paste();
+            if (!editor_paste())
+                editor_ui_set_status("Buffer full -- paste truncated");
             ensure_cursor_visible();
             editor_ui_refresh();
             return;
@@ -2227,11 +2228,13 @@ static void handle_editor_key(const kb_event_t *ev)
         break;
     case KB_KEY_ENTER:
         editor_delete_selection();
-        editor_insert_newline();
+        if (!editor_insert_newline())
+            editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
         break;
     case KB_KEY_TAB:
         editor_delete_selection();
-        editor_insert_text("    ", 4);
+        if (!editor_insert_text("    ", 4))
+            editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
         break;
     case KB_KEY_ESCAPE:
         if (editor_is_modified()) {
@@ -2256,7 +2259,8 @@ static void handle_editor_key(const kb_event_t *ev)
         if (text) {
             bool had_sel = editor_selection_active();
             editor_delete_selection();
-            editor_insert_text(text, strlen(text));
+            if (!editor_insert_text(text, strlen(text)))
+                editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
 #if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
             /* The fast-path clip only handles edits that started
              * without a selection -- replacing a selection
@@ -2364,7 +2368,24 @@ static void handle_browser_key(const kb_event_t *ev)
                     snprintf(path, sizeof(path), "%s/%s",
                              sd_card_get_mount_point(), s_browser_entries[idx].name);
                     editor_init();
-                    editor_open_file(path);
+                    esp_err_t oerr = editor_open_file(path);
+                    if (oerr == ESP_ERR_NO_MEM) {
+                        /* File too large for the editor buffer.
+                         * Stay on the file browser and tell the user
+                         * how big the limit is so they can decide to
+                         * raise CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB
+                         * in menuconfig. */
+                        char msg[96];
+                        snprintf(msg, sizeof(msg),
+                                 "File too large (limit %u KB)",
+                                 (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
+                        editor_ui_set_status(msg);
+                        return;
+                    }
+                    if (oerr != ESP_OK) {
+                        editor_ui_set_status("Open failed");
+                        return;
+                    }
                     /* editor_open_file restores the cursor / scroll
                      * line from the metadata sidecar; make sure the
                      * cursor is on screen before the first refresh
@@ -2718,7 +2739,14 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
          * so the user sees any changes that were pulled from the remote. */
         if (editor_get_mode() == EDITOR_MODE_EDITING && editor_get_file_path()) {
             const char *path = editor_get_file_path();
-            editor_open_file(path);
+            esp_err_t rerr = editor_open_file(path);
+            if (rerr == ESP_ERR_NO_MEM) {
+                char msg[96];
+                snprintf(msg, sizeof(msg),
+                         "Reload failed: file too large (limit %u KB)",
+                         (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
+                editor_ui_set_status(msg);
+            }
             editor_ui_refresh();
         }
         /* If the file browser is the active screen (sync was triggered

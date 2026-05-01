@@ -173,7 +173,9 @@ Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
 
 The largest component. Contains:
 
-- **editor.cpp** -- gap-buffer text engine (256 KB document limit) with
+- **editor.cpp** -- gap-buffer text engine (default 256 KB document
+  limit, configurable via `CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB` in
+  menuconfig; the gap buffer and flat cache both live in PSRAM) with
   cursor movement, selection, clipboard, insert/delete, and file I/O.
 - **editor_ui.cpp** -- LVGL-based user interface: title bar with battery
   and layout indicators, scrollable text area with Markdown rendering,

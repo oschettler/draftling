@@ -62,16 +62,23 @@ static void ensure_gap(size_t need)
 
 extern "C" void editor_init(void)
 {
-    s_buf_size = EDITOR_MAX_DOC_SIZE;
-    s_buf  = (char *)heap_caps_malloc(s_buf_size, MALLOC_CAP_SPIRAM);
-    s_flat = (char *)heap_caps_malloc(s_buf_size + 1, MALLOC_CAP_SPIRAM);
-    assert(s_buf && s_flat);
+    /* Idempotent: the gap buffer and flat cache are large PSRAM
+     * allocations and should be made exactly once for the lifetime
+     * of the process. Subsequent calls (e.g. from the file-browser
+     * "open" handler) only reset the in-memory document state. */
+    if (s_buf == NULL) {
+        s_buf_size = EDITOR_MAX_DOC_SIZE;
+        s_buf  = (char *)heap_caps_malloc(s_buf_size, MALLOC_CAP_SPIRAM);
+        s_flat = (char *)heap_caps_malloc(s_buf_size + 1, MALLOC_CAP_SPIRAM);
+        assert(s_buf && s_flat);
+        ESP_LOGI(TAG, "Editor initialized (%u KB buffer, PSRAM)",
+                 (unsigned)(s_buf_size / 1024));
+    }
     s_gap_start = 0;
     s_gap_end   = s_buf_size;
     s_modified  = false;
     s_path[0]   = '\0';
     invalidate_flat();
-    ESP_LOGI(TAG, "Editor initialized (%d KB buffer)", EDITOR_MAX_DOC_SIZE / 1024);
 }
 
 /* ---- Per-file metadata sidecar ----
@@ -180,6 +187,16 @@ extern "C" void editor_save_meta(void)
 
 extern "C" esp_err_t editor_open_file(const char *path)
 {
+    /* Cheap size pre-check: avoid loading hundreds of KB into a
+     * temporary heap allocation just to discover that the file does
+     * not fit in the editor buffer. */
+    long fsize = sd_card_file_size(path);
+    if (fsize >= 0 && (size_t)fsize > s_buf_size - 64) {
+        ESP_LOGW(TAG, "Refusing to open %s: %ld bytes > editor buffer (%u KB)",
+                 path, fsize, (unsigned)(s_buf_size / 1024));
+        return ESP_ERR_NO_MEM;
+    }
+
     char *data = NULL;
     size_t len = 0;
     esp_err_t ret = sd_card_read_file(path, &data, &len);
@@ -524,23 +541,40 @@ extern "C" void editor_move_word_right(void)
 
 /* ---- Editing ---- */
 
-extern "C" void editor_insert_char(char c)
+extern "C" bool editor_insert_char(char c)
 {
+    /* Reserve a small safety margin so we never completely fill the
+     * buffer (matches editor_open_file() / editor_replace_range()). */
+    if (content_len() + 1 > s_buf_size - 64) {
+        ESP_LOGW(TAG, "Editor buffer full (%u KB), rejecting insert",
+                 (unsigned)(s_buf_size / 1024));
+        return false;
+    }
     ensure_gap(1);
-    if (s_gap_start >= s_gap_end) return;
+    if (s_gap_start >= s_gap_end) return false;
     s_buf[s_gap_start++] = c;
     s_modified = true;
     invalidate_flat();
+    return true;
 }
 
-extern "C" void editor_insert_text(const char *text, size_t len)
+extern "C" bool editor_insert_text(const char *text, size_t len)
 {
-    for (size_t i = 0; i < len; i++) editor_insert_char(text[i]);
+    if (!text || len == 0) return true;
+    if (content_len() + len > s_buf_size - 64) {
+        ESP_LOGW(TAG, "Editor buffer full (%u KB), rejecting %zu-byte insert",
+                 (unsigned)(s_buf_size / 1024), len);
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (!editor_insert_char(text[i])) return false;
+    }
+    return true;
 }
 
-extern "C" void editor_insert_newline(void)
+extern "C" bool editor_insert_newline(void)
 {
-    editor_insert_char('\n');
+    return editor_insert_char('\n');
 }
 
 extern "C" void editor_delete_back(void)
@@ -718,11 +752,11 @@ extern "C" bool editor_cut(void)
     return true;
 }
 
-extern "C" void editor_paste(void)
+extern "C" bool editor_paste(void)
 {
-    if (!s_clipboard || s_clip_len == 0) return;
+    if (!s_clipboard || s_clip_len == 0) return true;
     editor_delete_selection();
-    editor_insert_text(s_clipboard, s_clip_len);
+    return editor_insert_text(s_clipboard, s_clip_len);
 }
 
 extern "C" bool editor_has_clipboard(void)

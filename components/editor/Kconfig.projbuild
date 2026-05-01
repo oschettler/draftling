@@ -1,5 +1,22 @@
 menu "DRAFTLING Editor"
 
+config DRAFTLING_EDITOR_BUFFER_SIZE_KB
+    int "Editor document buffer size (KB)"
+    range 32 4096
+    default 256
+    help
+        Maximum size of a document (in kilobytes) that the editor can
+        hold in memory. The gap buffer and the flattened text cache are
+        each allocated at this size from PSRAM at startup, so the actual
+        SPIRAM cost is roughly 2x this value. Files on disk larger than
+        this limit cannot be opened (an error is shown in the status
+        bar), and editing operations that would grow the document past
+        the limit are refused with a "Buffer full" warning.
+
+        Defaults to 256 KB. Increase only if you need to edit very
+        large Markdown files and your target board has enough free
+        PSRAM (the editor needs roughly 2x this value).
+
 config DRAFTLING_KEY_QUEUE_LEN
     int "Key event queue length"
     range 4 256

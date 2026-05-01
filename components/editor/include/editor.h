@@ -7,8 +7,12 @@ extern "C" {
 #include <stddef.h>
 #include <stdbool.h>
 #include <esp_err.h>
+#include <sdkconfig.h>
 
-#define EDITOR_MAX_DOC_SIZE  (256 * 1024)
+/* Maximum document size held in the in-memory gap buffer, in bytes.
+ * Configured via menuconfig (DRAFTLING -> Editor -> Editor document
+ * buffer size). The buffer itself lives in PSRAM. */
+#define EDITOR_MAX_DOC_SIZE  (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB * 1024)
 
 typedef enum {
     EDITOR_MODE_NORMAL,
@@ -48,9 +52,11 @@ void editor_move_doc_end(void);
 void editor_move_word_left(void);
 void editor_move_word_right(void);
 
-void editor_insert_char(char c);
-void editor_insert_text(const char *text, size_t len);
-void editor_insert_newline(void);
+/* Editing primitives. Return true on success, false if the operation
+ * was rejected because the document would exceed the editor buffer. */
+bool editor_insert_char(char c);
+bool editor_insert_text(const char *text, size_t len);
+bool editor_insert_newline(void);
 void editor_delete_back(void);
 void editor_delete_forward(void);
 void editor_delete_line(void);
@@ -72,7 +78,7 @@ void editor_select_all(void);
 /* Clipboard */
 bool editor_copy(void);
 bool editor_cut(void);
-void editor_paste(void);
+bool editor_paste(void);
 bool editor_has_clipboard(void);
 
 editor_mode_t editor_get_mode(void);
