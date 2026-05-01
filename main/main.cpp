@@ -3,6 +3,7 @@
 #include <freertos/task.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <driver/spi_common.h>
 #include "sdkconfig.h"
 
 #include "app_config.h"
