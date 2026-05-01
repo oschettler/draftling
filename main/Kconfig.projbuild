@@ -13,40 +13,6 @@ config DRAFTLING_MODEL_WAVESHARE_RLCD42
         Waveshare ESP32-S3-RLCD-4.2 board with 400x300 reflective LCD
         and GPIO18 deep-sleep wakeup button.
 
-config DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
-    bool "Seeed Studio reTerminal E1001"
-    depends on IDF_TARGET_ESP32S3
-    help
-        Seeed Studio reTerminal E1001 board with an 800x480 e-paper
-        display driven by a UC8179 controller. The SD card shares the
-        SPI bus with the e-paper. Wakeup from deep sleep is via the
-        right (green) KEY0 button on GPIO3.
-
-config DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-    bool "Waveshare E-Paper Driver HAT (generic ESP32 host)"
-    depends on SOC_BLE_SUPPORTED
-    help
-        Waveshare E-Paper Driver HAT (UC8179 controller) connected to a
-        generic ESP32 development board. Selectable for any ESP-IDF
-        target that supports BLE (ESP32, ESP32-S3, ESP32-C2/C3/C6,
-        ESP32-H2 - everything except the ESP32-S2, which has no BLE
-        radio and therefore cannot be paired with a Bluetooth keyboard).
-
-        Like every other Draftling board, the HAT host must have PSRAM
-        enabled (CONFIG_SPIRAM): the editor's gap buffer
-        (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB, default 256 KB), the
-        UC8179 framebuffers (two copies, 800x480 / 8 = ~47 KB each at
-        default resolution), and the LVGL display buffers all live in
-        external SPI RAM. The top-level CMake build refuses to
-        configure without PSRAM and prints an actionable error.
-
-        Pick the connected panel from the "E-paper panel" choice below;
-        each panel preset locks in the panel's resolution, framebuffer
-        polarity and partial-refresh waveform. Only the GPIO pinout
-        (under "Waveshare E-Paper Driver HAT pinout") remains
-        user-editable. Pin defaults match the ESP32-S3-DevKitC-1 wiring
-        used by Waveshare's example projects.
-
 config DRAFTLING_MODEL_M5STACK_PAPERS3
     bool "M5Stack PaperS3"
     depends on IDF_TARGET_ESP32S3
@@ -58,70 +24,23 @@ config DRAFTLING_MODEL_M5STACK_PAPERS3
 
 endchoice
 
-choice DRAFTLING_HAT_PANEL
-    prompt "E-paper panel (HAT)"
-    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-    default DRAFTLING_HAT_PANEL_GDEW075T7
-    help
-        Select the e-paper panel connected to the Waveshare E-Paper
-        Driver HAT. The choice locks in the panel's resolution,
-        framebuffer polarity, and partial-refresh waveform settings
-        (DISPLAY_WIDTH, DISPLAY_HEIGHT, EPD_INVERT, EPD_FAST_PARTIAL).
-        Only the GPIO pinout below stays user-editable.
-
-        New panels are added by appending another `config` block in
-        this choice and extending the per-panel `default` lines on the
-        derived symbols (DRAFTLING_DISPLAY_WIDTH, _HEIGHT,
-        DRAFTLING_EPD_INVERT, DRAFTLING_EPD_FAST_PARTIAL).
-
-config DRAFTLING_HAT_PANEL_GDEW075T7
-    bool "Waveshare 7.5\" V2 BW (GDEW075T7, 800x480)"
-    help
-        Waveshare 7.5-inch V2 black/white e-paper panel based on the
-        GoodDisplay GDEW075T7 (UC8179 controller). Locks in:
-
-          - 800 x 480 resolution
-          - Inverted framebuffer polarity (visual-white = bit 0)
-          - Fast register-LUT partial refreshes calibrated from the
-            GxEPD2 community library (no border flash, ~600 ms per
-            partial; periodic full refresh still uses the OTP
-            ghost-clearing waveform)
-
-        Confirmed flash-free typing on this revision.
-
-
-config DRAFTLING_NONAME_5_83_INCH648x480
-    bool "Noname 5.83\" BW e-paper display (UC8179, 648x480)"
-    help
-        No-name panel found on AliExpress
-        https://www.aliexpress.us/item/3256808324502082.html
-
-endchoice
-
 config DRAFTLING_DISPLAY_WIDTH
     int
     range 64 1024
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
-    default 800 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
-    default 800 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
-    default 648 if DRAFTLING_NONAME_5_83_INCH648x480
     help
         Display width in pixels (derived). Driven by the hardware-model
-        choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
-        Must be a multiple of 8 for e-paper backends.
+        choice. Must be a multiple of 8 for e-paper backends.
 
 config DRAFTLING_DISPLAY_HEIGHT
     int
     range 64 1024
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
-    default 480 if DRAFTLING_MODEL_SEEED_RETERMINAL_E1001
-    default 480 if DRAFTLING_HAT_PANEL_GDEW075T7
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
-    default 480 if DRAFTLING_NONAME_5_83_INCH648x480
     help
         Display height in pixels (derived). Driven by the hardware-model
-        choice and, for the HAT, by the DRAFTLING_HAT_PANEL preset.
+        choice.
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
@@ -180,7 +99,7 @@ config DRAFTLING_DISPLAY_SCALE
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
-    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
+    depends on DRAFTLING_MODEL_M5STACK_PAPERS3
     range 1 1000
     default 30
     help
@@ -194,50 +113,9 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
         faster than the older two-pass epd_text but accumulates
         ghosting slightly more quickly.
 
-config DRAFTLING_EPD_INVERT
-    bool
-    default y if DRAFTLING_HAT_PANEL_GDEW075T7
-    default y if DRAFTLING_NONAME_5_83_INCH648x480
-    default n
-    help
-        Internal helper -- when set, the UC8179 driver flips the
-        framebuffer pixel polarity (visual-white = bit 0 instead of
-        bit 1). Derived automatically from the board model and, for the
-        HAT, from the DRAFTLING_HAT_PANEL preset. Different Waveshare
-        7.5" panels sold for the E-Paper Driver HAT use opposite KW
-        data polarity from the panel soldered to the Seeed reTerminal
-        E1001 even though the controller is the same UC8179.
-
-config DRAFTLING_EPD_FAST_PARTIAL
-    bool
-    default y if DRAFTLING_HAT_PANEL_GDEW075T7
-    default y if DRAFTLING_NONAME_5_83_INCH648x480
-    default n
-    help
-        Internal helper -- when set, the UC8179 driver loads custom
-        register-mode partial-refresh LUTs (PSR = 0x3F) calibrated for
-        a specific panel revision instead of using the panel's OTP
-        partial waveform (PSR = 0x1F). Derived automatically from the
-        DRAFTLING_HAT_PANEL preset; opt-in only because the LUT level
-        bytes are panel-specific.
-
-        With this set, partial refreshes complete in a single
-        ~600 ms pulse with no border flash; without it, they fall back
-        to the OTP waveform (always works on UC8179, but flashes the
-        border once per refresh and runs three full-frame sweeps per
-        partial). Periodic full refreshes still use the OTP waveform
-        either way for proper ghost clearing; the driver flips
-        PSR/CDI/VDCS lazily on each mode transition.
-
-        The driver compensates automatically for DRAFTLING_EPD_INVERT
-        polarity: the LUT level bytes for the K->W and W->K transitions
-        are pair-swapped at compile time (0x5A <-> 0xA5,
-        0x84 <-> 0x48) so the GxEPD2 "kick-then-pull" overdrive pattern
-        produces the same visual transition under either polarity.
-
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
-    depends on DRAFTLING_MODEL_SEEED_RETERMINAL_E1001 || DRAFTLING_MODEL_WAVESHARE_EPD_HAT || DRAFTLING_MODEL_M5STACK_PAPERS3
+    depends on DRAFTLING_MODEL_M5STACK_PAPERS3
     default n
     help
         When enabled, the editor renders white text on a black
@@ -268,198 +146,5 @@ config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
 
         Default is 180 seconds (3 minutes).
 
-menu "Waveshare E-Paper Driver HAT pinout"
-    depends on DRAFTLING_MODEL_WAVESHARE_EPD_HAT
-
-config DRAFTLING_HAT_EPD_MOSI_PIN
-    int "EPD MOSI / DIN pin (GPIO)"
-    range 0 48
-    default 11
-    help
-        SPI MOSI (DIN on the HAT header) GPIO. Default matches the
-        ESP32-S3-DevKitC-1 wiring used by Waveshare's example.
-
-config DRAFTLING_HAT_EPD_SCK_PIN
-    int "EPD SCK / CLK pin (GPIO)"
-    range 0 48
-    default 12
-
-config DRAFTLING_HAT_EPD_DC_PIN
-    int "EPD DC pin (GPIO)"
-    range 0 48
-    default 13
-
-config DRAFTLING_HAT_EPD_CS_PIN
-    int "EPD CS pin (GPIO)"
-    range 0 48
-    default 10
-
-config DRAFTLING_HAT_EPD_RST_PIN
-    int "EPD RST pin (GPIO)"
-    range 0 48
-    default 14
-
-config DRAFTLING_HAT_EPD_BUSY_PIN
-    int "EPD BUSY pin (GPIO)"
-    range 0 48
-    default 9
-
-config DRAFTLING_HAT_EPD_PWR_PIN
-    int "EPD PWR pin (GPIO, -1 to disable)"
-    range -1 48
-    default 7
-    help
-        GPIO that gates power to the e-paper panel on the Waveshare
-        E-Paper Driver HAT. Driven HIGH at boot (before display_init)
-        to enable the panel, and driven LOW just before deep sleep so
-        the panel draws no current while the MCU is asleep. Default is
-        GPIO7, which matches Waveshare's ESP32-S3-DevKitC-1 reference
-        wiring. Set to -1 if your wiring ties PWR permanently high
-        (e.g. directly to the 3V3 rail) and no MCU pin is needed.
-
-config DRAFTLING_HAT_WAKEUP_GPIO
-    int "Deep-sleep wakeup GPIO (active-low)"
-    range 0 48
-    default 0
-    help
-        GPIO pin used as the EXT0 wakeup source when the board enters
-        deep sleep. Default is GPIO0 (BOOT button on most ESP32-S3 dev
-        kits).
-
-choice DRAFTLING_HAT_SD_INTERFACE
-    prompt "SD card interface"
-    default DRAFTLING_HAT_SD_NONE
-    help
-        Select how (if at all) the HAT host board talks to a MicroSD
-        card. The HAT itself has no SD slot, so the card is wired to
-        free GPIOs on the host MCU. When set to "None" the editor runs
-        without persistent storage (the editor UI displays an
-        SD-not-ready status and Git sync is unavailable).
-
-config DRAFTLING_HAT_SD_NONE
-    bool "None (no SD card)"
-
-config DRAFTLING_HAT_SD_SPI
-    bool "SPI (separate SPI3 bus)"
-    help
-        Drive the SD card over a dedicated SPI host (SPI3) with its
-        own CS/MOSI/MISO/SCK pins. Works on every supported ESP32
-        target.
-
-config DRAFTLING_HAT_SD_SDMMC
-    bool "SDMMC 1-bit"
-    depends on SOC_SDMMC_HOST_SUPPORTED
-    help
-        Drive the SD card over the dedicated SDMMC peripheral in
-        1-bit mode (CLK / CMD / D0). Faster than SPI but only
-        available on chips with an SDMMC host (ESP32 and ESP32-S3).
-        On the ESP32-S3 the SDMMC slot uses the GPIO matrix, so the
-        pins are freely assignable below; the defaults match the
-        Freenove ESP32-S3 example wiring referenced in the project
-        README.
-
-endchoice
-
-config DRAFTLING_HAT_HAS_SD
-    bool
-    default y if DRAFTLING_HAT_SD_SPI || DRAFTLING_HAT_SD_SDMMC
-    default n
-    help
-        Internal helper symbol -- selected automatically when any SD
-        interface is chosen above. Existing code paths that only need
-        to know "is there an SD card at all" can continue to test
-        CONFIG_DRAFTLING_HAT_HAS_SD.
-
-config DRAFTLING_HAT_SD_MOSI_PIN
-    int "SD MOSI pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SPI
-    range 0 48
-    default 35
-
-config DRAFTLING_HAT_SD_MISO_PIN
-    int "SD MISO pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SPI
-    range 0 48
-    default 37
-
-config DRAFTLING_HAT_SD_SCK_PIN
-    int "SD SCK pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SPI
-    range 0 48
-    default 36
-
-config DRAFTLING_HAT_SD_CS_PIN
-    int "SD CS pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SPI
-    range 0 48
-    default 34
-
-config DRAFTLING_HAT_SD_SDMMC_CLK_PIN
-    int "SD SDMMC CLK pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SDMMC
-    range 0 48
-    default 39
-
-config DRAFTLING_HAT_SD_SDMMC_CMD_PIN
-    int "SD SDMMC CMD pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SDMMC
-    range 0 48
-    default 38
-
-config DRAFTLING_HAT_SD_SDMMC_D0_PIN
-    int "SD SDMMC D0 pin (GPIO)"
-    depends on DRAFTLING_HAT_SD_SDMMC
-    range 0 48
-    default 40
-
-config DRAFTLING_HAT_BATT_ADC_PIN
-    int "Battery ADC pin (GPIO, -1 to disable)"
-    range -1 48
-    default -1
-    help
-        Optional analog input on the host MCU used to measure the
-        battery voltage through a resistive divider. Set to -1 (the
-        default) when the host has no battery wiring; the editor will
-        then hide the battery icon and the editor's bottom-right
-        battery readout stays empty.
-
-        Must be an ADC1 channel on the host chip (e.g. GPIO1..GPIO10
-        on ESP32-S3, GPIO32..GPIO39 on the original ESP32, GPIO0..
-        GPIO4 on ESP32-C3 -- check your chip's datasheet). The driver
-        currently only knows the ESP32-S3 ADC1 pin map; on other
-        targets unsupported pins fall back to a default channel and
-        log a warning. Pick a pin that is not otherwise in use by the
-        EPD/SD pinout above.
-
-        Wire the cell through a resistive divider (so the pin sees no
-        more than ~3.1 V at full charge) and set
-        DRAFTLING_HAT_BATT_DIVIDER to the divider ratio.
-
-config DRAFTLING_HAT_BATT_EN_PIN
-    int "Battery divider enable GPIO (-1 to disable)"
-    depends on DRAFTLING_HAT_BATT_ADC_PIN >= 0
-    range -1 48
-    default -1
-    help
-        Optional GPIO that gates power to the battery resistive
-        divider. When set (>= 0) the driver pulses this pin HIGH
-        before each ADC read and releases it LOW between samples to
-        save the few microamps the divider would otherwise burn
-        continuously. Set to -1 if the divider is wired directly to
-        the cell with no enable transistor.
-
-config DRAFTLING_HAT_BATT_DIVIDER
-    int "Battery voltage divider ratio (cell V / pin V)"
-    depends on DRAFTLING_HAT_BATT_ADC_PIN >= 0
-    range 1 10
-    default 2
-    help
-        Ratio of the resistive divider between the battery and the
-        ADC pin. For example, two equal resistors give a ratio of 2
-        (the pin sees half the cell voltage); 200K + 100K gives a
-        ratio of 3. The driver multiplies the measured pin voltage
-        by this number to recover the real cell voltage.
-
-endmenu
 
 endmenu

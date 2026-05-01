@@ -1,20 +1,20 @@
 /*
  * Battery voltage monitor.
  *
- * Three boards are currently supported:
+ * Two boards are currently supported:
  *
  *   - Waveshare ESP32-S3-RLCD-4.2: GPIO4 (ADC1_CH3) with a 3:1 resistive
  *     divider (200 K + 100 K), no enable pin.
- *   - Seeed reTerminal E1001: GPIO1 (ADC1_CH0) with a 2:1 resistive divider,
- *     gated by an enable transistor on GPIO21 (driven HIGH to power the
- *     divider, then released LOW to save current between samples).
  *   - M5Stack PaperS3: GPIO3 (ADC1_CH2) with a 2:1 resistive divider, no
  *     enable pin (matches the M5Unified Power_Class configuration for
  *     board_M5PaperS3: BAT_ADC = ADC1_GPIO3, adc_ratio = 2.0).
  *
  * The ESP-IDF ADC oneshot driver with curve-fitting calibration converts
  * the raw ADC reading to millivolts at the pin, and the divider ratio
- * recovers the actual cell voltage.
+ * recovers the actual cell voltage. An optional active-high enable GPIO
+ * is supported for boards that gate the divider through a transistor
+ * (none of the currently supported boards do, but the wiring is kept
+ * for forward compatibility).
  */
 
 #include "battery.h"
@@ -109,7 +109,7 @@ static bool enable_divider(void)
 {
     if (s_enable_gpio < 0) return false;
     gpio_set_level((gpio_num_t)s_enable_gpio, 1);
-    /* The reTerminal divider needs a few ms to settle once powered. */
+    /* Allow the divider a few ms to settle once powered. */
     vTaskDelay(pdMS_TO_TICKS(5));
     return true;
 }

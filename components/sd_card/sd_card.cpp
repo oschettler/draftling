@@ -58,8 +58,10 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     strncpy(s_mount, mount_point, sizeof(s_mount) - 1);
     s_spi_host = spi_host;
 
-    /* Power-enable GPIO (active-high). The reTerminal E1001 needs this
-     * driven HIGH to feed VBUS to the MicroSD slot. */
+    /* Optional power-enable GPIO (active-high) for boards that gate
+     * VBUS to the MicroSD slot through a transistor. None of the
+     * currently supported boards use it (PaperS3 wires VBUS
+     * directly), but the wiring is kept for forward compatibility. */
     if (enable_gpio >= 0) {
         gpio_config_t en_cfg = {};
         en_cfg.intr_type    = GPIO_INTR_DISABLE;

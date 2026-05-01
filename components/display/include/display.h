@@ -14,10 +14,6 @@ extern "C" {
  *  Waveshare RLCD (display_rlcd.cpp):
  *      mosi, sck, dc, cs, rst, busy=-1, width, height
  *
- *  UC8179 e-paper (display_uc8179.cpp) - covers both the Seeed
- *  reTerminal E1001 and the Waveshare E-Paper Driver HAT:
- *      mosi, sck, dc, cs, rst, busy, width, height
- *
  *  M5Stack PaperS3 (display_eds3.cpp):
  *      all pin parameters are ignored - the m5stack/M5GFX library
  *      configures the parallel-bus and control GPIOs internally
@@ -33,12 +29,12 @@ void display_set_pixel(uint16_t x, uint16_t y, uint8_t color);
 /*
  * Push the framebuffer to the panel.
  *
- * On the e-paper model (UC8179) this performs an automatic frame diff
- * against the last displayed frame and uses a partial refresh
- * (~300 ms) when only a small region changed, falling back to a full
- * refresh once every N partials to clear residual ghosting (the
- * threshold is configurable via Kconfig). On the RLCD model it always
- * pushes the entire framebuffer.
+ * On the M5Stack PaperS3 backend this performs an automatic frame
+ * diff against the last displayed frame and uses a partial refresh
+ * when only a small region changed, falling back to a full refresh
+ * once every N partials to clear residual ghosting (the threshold
+ * is configurable via Kconfig). On the RLCD model it always pushes
+ * the entire framebuffer.
  */
 void display_flush(void);
 

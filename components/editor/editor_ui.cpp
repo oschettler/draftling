@@ -237,9 +237,7 @@ static bool      s_menu_open    = false;
 /* Number of menu items */
 #define MENU_ITEM_COUNT 8
 
-#if !(defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-      defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-      defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3))
+#if !defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 static lv_timer_t *s_blink_timer = NULL;
 #endif
 static bool s_cursor_visible = true;
@@ -307,12 +305,8 @@ static bool s_esc_pending = false;
  * show a percentage in the status bar of both the editor and the
  * file browser. Each board defines this in app_config.h:
  *   - Waveshare RLCD-4.2:   GPIO4, 3:1 divider
- *   - Seeed reTerminal E1001: GPIO1, 2:1 divider, GPIO21 enable
- *   - M5Stack PaperS3:        GPIO3, 2:1 divider (no enable)
- * The bare Waveshare E-Paper Driver HAT has no on-board battery and
- * leaves the indicator out. */
+ *   - M5Stack PaperS3:      GPIO3, 2:1 divider (no enable) */
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 #define DRAFTLING_HAS_BATT_INDICATOR 1
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
@@ -452,9 +446,7 @@ static void init_styles(void)
     invalidate_render_cache();
 }
 
-#if !(defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-      defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-      defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3))
+#if !defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 static void cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -467,7 +459,6 @@ static void cursor_blink_cb(lv_timer_t *timer)
 #endif
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
@@ -517,9 +508,7 @@ static void update_title_bar(void)
     int line, col;
     editor_get_cursor_pos(&line, &col);
     int total_lines = editor_get_line_count();
-#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* On e-paper boards the cursor moves on every keystroke, so the
      * column counter is omitted to avoid dirtying the title bar on
      * every edit. The line counter ("L %d/%d") only changes when the
@@ -2196,9 +2185,7 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
-#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
         case 'r':
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
              * artefacts left over from partial refreshes. */
@@ -2393,9 +2380,7 @@ static void handle_browser_key(const kb_event_t *ev)
             }
             return;
         }
-#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
         if (ck == 'r') {
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
              * artefacts left over from partial refreshes. */
@@ -2689,10 +2674,9 @@ static void apply_pending_connect_state(void)
 
 /* Runs in the BLE/Bluedroid host task. We deliberately do NOT take
  * the LVGL mutex here: on the e-paper boards, display_flush() can
- * hold the mutex for several seconds during a panel refresh (the
- * OTP partial waveform on the UC8179 takes ~3 s), which would
- * exceed any reasonable callback-side timeout and leave the user
- * stuck on the "Reconnecting..." prompt screen even after the
+ * hold the mutex for several seconds during a panel refresh, which
+ * would exceed any reasonable callback-side timeout and leave the
+ * user stuck on the "Reconnecting..." prompt screen even after the
  * keyboard is connected. Instead, set a flag that the LVGL task
  * (key_drain_cb) drains on its next tick, where the mutex is
  * already held. */
@@ -2950,7 +2934,6 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
@@ -2985,9 +2968,7 @@ extern "C" void editor_ui_init(void)
      * twice per second, which is both visually distracting and bad
      * for the panel. Keep the cursor solid (always visible) on EPD
      * targets; only the reflective LCD blinks. */
-#if defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
-    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     s_cursor_visible = true;
     if (s_cursor) lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 #else
@@ -3041,7 +3022,6 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git  Ctrl+W:WiFi");
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001) || \
     defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);

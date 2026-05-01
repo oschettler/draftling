@@ -29,7 +29,7 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
     /* Fast path: if the backend supports it, push the LVGL RGB565
      * framebuffer directly to the panel without going through our
      * per-pixel 1-bpp conversion. The PaperS3 (M5GFX) backend uses
-     * this; RLCD and UC8179 return false and we fall back to the
+     * this; the RLCD backend returns false and we fall back to the
      * legacy per-pixel path below. */
     if (display_push_rgb565(area->x1, area->y1, w, h, color_map)) {
         /* LVGL may slice a single dirty region into multiple

@@ -6,18 +6,6 @@
  *
  *  - Waveshare ESP32-S3-RLCD-4.2: wakes via EXT0 on GPIO18 (active-low).
  *    The RLCD is reflective, so screen content is retained visually.
- *  - Seeed reTerminal E1001: wakes via EXT0 on GPIO3 (KEY0, the right
- *    green button, active-low).  The e-paper retains its image while
- *    powered down.
- *  - Waveshare E-Paper Driver HAT: wakes via EXT0 on the GPIO selected
- *    by CONFIG_DRAFTLING_HAT_WAKEUP_GPIO (default GPIO0 / BOOT button).
- *    Unlike the other supported boards there is no guaranteed external
- *    pull-up on this pin (the user picks an arbitrary RTC-capable GPIO
- *    on whatever ESP32 host they wired up), so standby_enter_sleep()
- *    enables the chip's internal RTC pull-up before arming EXT0.
- *    Without that, the line floats LOW and EXT0 fires the moment the
- *    MCU enters deep sleep, making the device boot back up
- *    immediately.
  *  - M5Stack PaperS3: wakes via EXT0 on the BOOT button (GPIO0,
  *    active-low). Earlier revisions tried GPIO21 (wrong -- the on-board
  *    buzzer pin, floated low under some speaker-driver states and woke
@@ -32,7 +20,7 @@
  *    board-level pull-up -- is guaranteed high while idle.
  *
  * The wake-up GPIO comes from app_config.h's WAKEUP_GPIO_NUM macro,
- * which is set per board (and may be Kconfig-driven for the HAT).
+ * which is set per board.
  *
  * The editor state lives in PSRAM/heap so it is lost on wake;
  * callers should auto-save before sleep.  The timeout value is persisted
@@ -65,12 +53,6 @@ static const char *TAG = "Standby";
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
 /* GPIO used as EXT0 wake-up source (active-low) -- matches app_config.h */
 #define WAKEUP_GPIO    ((gpio_num_t)18)
-#elif defined(CONFIG_DRAFTLING_MODEL_SEEED_RETERMINAL_E1001)
-/* KEY0 / right green button (active-low) -- matches app_config.h */
-#define WAKEUP_GPIO    ((gpio_num_t)3)
-#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_EPD_HAT)
-/* HAT model: pin selected by Kconfig (default GPIO0 / BOOT button) */
-#define WAKEUP_GPIO    ((gpio_num_t)CONFIG_DRAFTLING_HAT_WAKEUP_GPIO)
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* PaperS3 BOOT button (active-low, RTC-capable). See header comment
  * for why GPIO48 (touch INT) and GPIO21 (buzzer) were rejected. */
@@ -223,25 +205,11 @@ extern "C" void standby_enter_sleep(void)
 
     /* Enable the internal RTC pull-up on the wake pin and disable any
      * pull-down so the EXT0 wake-on-low source does not fire
-     * immediately on boards where the wake GPIO has no external
-     * pull-up resistor.
-     *
-     * This matters most for the Waveshare E-Paper Driver HAT, which
-     * runs on a generic ESP32 host: the default wake pin is GPIO0
-     * (BOOT button), but a user may configure any RTC-capable GPIO
-     * via CONFIG_DRAFTLING_HAT_WAKEUP_GPIO and that pin is not
-     * guaranteed to have an external pull-up. Without an internal
-     * pull-up the line floats and reads LOW, which the EXT0 wake-up
-     * source treats as "button pressed" and fires immediately on
-     * entering deep sleep -- causing the device to start up again
-     * the instant it tries to sleep.
-     *
-     * The other supported boards already have external pull-ups
-     * (RLCD-4.2 button on GPIO18, reTerminal KEY0 on GPIO3,
-     * PaperS3 BOOT on GPIO0 / strapping pin), so adding an internal
-     * pull-up there is harmless: the two pull-ups simply parallel.
-     * We always enable it so the behaviour is consistent across
-     * boards.
+     * immediately. The supported boards (RLCD-4.2 button on GPIO18
+     * and PaperS3 BOOT on GPIO0 / strapping pin) already have
+     * external pull-ups, so adding an internal pull-up here is
+     * harmless: the two pull-ups simply parallel. We always enable
+     * it so the behaviour is consistent across boards.
      *
      * rtc_gpio_pullup_en() routes through the RTC IO mux, so the
      * pull-up survives into deep sleep. Errors are logged but not

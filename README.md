@@ -9,8 +9,6 @@ with reflective displays.
 | Board | Display |
 |-------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
-| [Seeed Studio reTerminal E1001](https://wiki.seeedstudio.com/getting_started_with_reterminal_e1001/) | 7.5" e-paper (UC8179), 800x480 |
-| [Waveshare E-Paper Driver HAT](https://www.waveshare.com/wiki/E-Paper_Driver_HAT) on a generic ESP32 host (any BLE-capable target: ESP32, S3, C2, C3, C6, H2) | Configurable, default 7.5" V2 BW (UC8179), 800x480 |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
@@ -26,15 +24,14 @@ packed in a good enclosure with magnets on the back, and the contrast
 is much higher than that of the RLCD display. The reaction is
 significantly slower than with RLCD, but still acceptable.
 
-Waveshare E-Paper Driver HAT have been tested with two screens
-(Waveshare 7.5" V2 e-paper display, and a [no-name 5.83" 648x480
-display](https://www.aliexpress.us/item/3256808324502082.html) with
-built-in UC8179 driver). The overall performance is quite poor: the
-display is really slow, even with fast partial updates, and iti
-quickly becomes dirty with artefacts. Not recommended for any use, and
-will probably be deleted from the code.
-
-Seeed Studio reTerminal E1010 has not been tested yet.
+UC8179-based e-paper displays (such as those used by the Seeed
+Studio reTerminal E1001 and the Waveshare E-Paper Driver HAT, which
+were tested with both the Waveshare 7.5" V2 panel and a no-name
+5.83" 648x480 panel with a built-in UC8179 driver) have been tested
+and proved too slow for an interactive Markdown editor: even with
+fast partial updates the panel cannot keep up with typing and
+quickly accumulates ghosting artefacts. Support for UC8179 has
+therefore been removed from the codebase.
 
 
 ### Hardware selection
@@ -44,25 +41,13 @@ Navigate to **DRAFTLING Configuration > Hardware Model** and choose
 the board you are building for:
 
 - **Waveshare ESP32-S3-RLCD-4.2** -- 4.2" reflective LCD (400x300)
-- **Seeed Studio reTerminal E1001** -- 7.5" e-paper, UC8179 (800x480)
-- **Waveshare E-Paper Driver HAT** -- UC8179 SPI HAT on any
-  BLE-capable ESP32 host (ESP32, ESP32-S3, ESP32-C2/C3/C6, ESP32-H2;
-  the ESP32-S2 is not supported because it has no BLE radio).
-  **PSRAM is required** -- enable "ESP PSRAM" in menuconfig before
-  selecting this model, since the editor buffer, framebuffers, and
-  LVGL display buffers all live in external SPI RAM.
-  Display resolution and every SPI/control pin are user-editable in
-  the same menu (see the **Waveshare E-Paper Driver HAT pinout**
-  sub-menu); defaults match the ESP32-S3-DevKitC-1 wiring used by
-  Waveshare's example projects.
 - **M5Stack PaperS3** -- 4.7" e-paper (ED047TC1, 540x960). Driver is
   a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
   component; partial refresh and grayscale are not implemented yet.
 
 The display resolution and driver are configured automatically based
-on the selected model (with the HAT-specific overrides described
-above). You can also adjust the **Display rotation angle** in the
-same menu.
+on the selected model. You can also adjust the **Display rotation
+angle** in the same menu.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.
@@ -71,15 +56,15 @@ Git repository via the GitHub REST API.
 
 ## Hardware
 
-| Feature | Waveshare RLCD-4.2 | Seeed reTerminal E1001 | Waveshare EPD HAT (DevKitC-1) | M5Stack PaperS3 |
-|---------|--------------------|------------------------|-------------------------------|-----------------|
-| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (XIAO module, 8 MB PSRAM) | ESP32-S3-DevKitC-1 (or any ESP32-S3 board) | ESP32-S3 (16 MB flash, 16 MB PSRAM) |
-| Display | 4.2" reflective LCD, 400x300, SPI | 7.5" e-paper UC8179, 800x480, SPI | UC8179 e-paper HAT, panel preset (default Waveshare 7.5" V2 / GDEW075T7, 800x480), SPI | 4.7" e-paper ED047TC1, 540x960, parallel I80 |
-| Storage | MicroSD (SDMMC 1-bit) | MicroSD (SPI, shared bus with display) | Optional SD on dedicated SPI3 (off by default) | Onboard MicroSD (SPI3) |
-| Input | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard | BLE HID keyboard |
-| Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
-| Battery monitor | GPIO4 ADC (3:1 divider) | GPIO1 ADC (2:1, GPIO21 enable) | not present | GPIO3 ADC (2:1 divider) |
-| Wake from sleep | GPIO18 button | KEY0 / right green button (GPIO3) | GPIO0 (BOOT button, configurable) | Power button (GPIO21) |
+| Feature | Waveshare RLCD-4.2 | M5Stack PaperS3 |
+|---------|--------------------|-----------------|
+| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (16 MB flash, 16 MB PSRAM) |
+| Display | 4.2" reflective LCD, 400x300, SPI | 4.7" e-paper ED047TC1, 540x960, parallel I80 |
+| Storage | MicroSD (SDMMC 1-bit) | Onboard MicroSD (SPI3) |
+| Input | BLE HID keyboard | BLE HID keyboard |
+| Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
+| Battery monitor | GPIO4 ADC (3:1 divider) | GPIO3 ADC (2:1 divider) |
+| Wake from sleep | GPIO18 button | Power button (GPIO21) |
 
 ## Features
 
@@ -182,39 +167,16 @@ Found at the top-level **DRAFTLING Configuration** menu.
 |--------|------|---------|-------------|
 | **Hardware Model** | choice | Waveshare ESP32-S3-RLCD-4.2 | Select the target board. Display resolution and driver are set automatically. |
 | -- Waveshare ESP32-S3-RLCD-4.2 | | | 4.2" reflective LCD, 400x300 |
-| -- Seeed Studio reTerminal E1001 | | | 7.5" e-paper, UC8179, 800x480 |
-| -- Waveshare E-Paper Driver HAT | | | UC8179 SPI HAT on any BLE-capable ESP32 host (resolution and pinout configurable; not available on ESP32-S2) |
 | -- M5Stack PaperS3 | | | 4.7" e-paper, ED047TC1, 540x960 (driver via m5stack/M5GFX) |
-| **Display width / height (px)** | int | depends on model | Editable for the HAT model only; fixed for all other boards. |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
-| **E-paper full-refresh interval** | int | 50 | UC8179-only: number of partial refreshes between full refreshes. |
+| **E-paper full-refresh interval** | int | 30 | M5Stack PaperS3 only: number of partial refreshes between full refreshes. |
 
-#### Waveshare E-Paper Driver HAT pinout sub-menu
-
-Visible only when the HAT model is selected. Defaults match the
-ESP32-S3-DevKitC-1 wiring used in Waveshare's example projects, but
-every option can be changed to match a different host board.
-
-| Option | Default GPIO | Description |
-|--------|--------------|-------------|
-| EPD MOSI / DIN | 11 | SPI MOSI |
-| EPD SCK / CLK | 12 | SPI clock |
-| EPD DC | 13 | Data / command |
-| EPD CS | 10 | Chip select |
-| EPD RST | 14 | Reset |
-| EPD BUSY | 9 | Busy input from the panel |
-| Wakeup GPIO | 0 | EXT0 wakeup pin (default GPIO0 = BOOT button) |
-| Enable SD card on a separate SPI bus | n | Opt in to an optional SD card on SPI3 |
-| SD MOSI / MISO / SCK / CS | 35 / 37 / 36 / 34 | Visible only when SD support is enabled |
-
-> **Note about the e-paper models:** the UC8179 driver (used by the
-> reTerminal E1001 and the Waveshare HAT) uses partial refresh by
-> default. Small changes (typing, cursor blink, status-bar updates)
-> take roughly 300 ms; a full refresh (3-5 s) is performed
+> **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the
+> single-pulse `epd_fast` waveform for partial refreshes (one visible
+> flash, ~80-150 ms per update). A full refresh (3-5 s) is performed
 > automatically every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
-> (default 50) to clear residual ghosting. Tune the interval in
-> `idf.py menuconfig`. The PaperS3 driver currently performs a full
-> refresh on every flush (partial-refresh support is a TODO).
+> (default 30) to clear residual ghosting; tune the interval in
+> `idf.py menuconfig`.
 
 ### DRAFTLING Keyboard Layouts
 

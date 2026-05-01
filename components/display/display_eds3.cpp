@@ -14,7 +14,7 @@
  *
  * Architecture
  * ------------
- * Unlike the RLCD and UC8179 backends, the PaperS3 backend does NOT
+ * Unlike the RLCD backend, the PaperS3 backend does NOT
  * keep its own 1-bpp framebuffer. M5GFX already maintains a 4-bpp
  * grayscale framebuffer internally, so an extra 1-bpp buffer would
  * be redundant. We expose the optional display_push_rgb565() fast

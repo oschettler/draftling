@@ -20,9 +20,13 @@ with a remote Git repository via the GitHub REST API.
 | Board | Display |
 |-------|---------|
 | Waveshare ESP32-S3-RLCD-4.2 | 4.2-inch reflective LCD, 400x300 |
-| Seeed Studio reTerminal E1001 | 7.5-inch e-paper (UC8179), 800x480 |
-| Waveshare E-Paper Driver HAT (on any BLE-capable ESP32 host, default ESP32-S3-DevKitC-1 wiring) | UC8179 e-paper, panel preset (default Waveshare 7.5" V2 / GDEW075T7, 800x480) |
 | M5Stack PaperS3 | 4.7-inch e-paper (ED047TC1), 540x960 |
+
+UC8179-based panels (Seeed Studio reTerminal E1001 and the Waveshare
+E-Paper Driver HAT) were previously supported but have been removed:
+the controller proved too slow for an interactive Markdown editor
+even with fast partial updates and accumulated ghosting too quickly
+to be usable.
 
 ## Repository Layout
 
@@ -62,14 +66,12 @@ document before entering deep sleep.
 
 `app_config.h` maps Kconfig hardware model selections to concrete GPIO pin
 numbers and display dimensions. Each supported board has its own `#if`
-block defining SPI pins (MOSI, SCK, DC, CS, RST, TE/BUSY), SD card pins
+block defining SPI pins (MOSI, SCK, DC, CS, RST, TE), SD card pins
 (CLK, CMD, D0 for SDMMC, or MOSI/MISO/SCK/CS for SPI), I2C pins, the
-battery ADC pin, and the deep-sleep wakeup GPIO. The Waveshare E-Paper
-Driver HAT block resolves all of its pin macros from `CONFIG_DRAFTLING_HAT_*`
-Kconfig values so users can adapt the HAT to a different ESP32-S3 host
-board without editing source. The M5Stack PaperS3 block omits the panel
-data-bus and control-line pins because the `m5stack/M5GFX` library
-configures them internally based on the board id.
+battery ADC pin, and the deep-sleep wakeup GPIO. The M5Stack PaperS3
+block omits the panel data-bus and control-line pins because the
+`m5stack/M5GFX` library configures them internally based on the board
+id.
 
 ### components/battery/
 
@@ -79,10 +81,9 @@ smoothing over 8 samples. Maps voltage to a percentage: >=4.10V is
 100%, >=3.95V is 75%, >=3.80V is 50%, >=3.60V is 25%, below 3.60V
 is 0%. The M5Stack PaperS3 reads its cell through ADC1 on GPIO3 with
 a 1:2 divider, matching the M5Unified Power_Class configuration for
-that board. The bare Waveshare EPD HAT has no on-board battery and
-passes `BATT_ADC_PIN = -1`, which makes `battery_init()` a no-op and
-causes `battery_read_percent()` to return -1; the editor UI hides the
-battery icon in that case.
+that board. When `BATT_ADC_PIN < 0`, `battery_init()` is a no-op and
+`battery_read_percent()` returns -1; the editor UI hides the battery
+icon in that case.
 
 Public API: `battery_init()`, `battery_read_mv()`, `battery_read_percent()`.
 
@@ -103,29 +104,6 @@ Per-board display backends behind a single C API:
 
 - **display_rlcd.cpp** -- Waveshare ESP32-S3-RLCD-4.2 reflective LCD
   over SPI.
-- **display_uc8179.cpp** -- UC8179 e-paper over SPI. Shared by the
-  Seeed reTerminal E1001 and the Waveshare E-Paper Driver HAT;
-  resolution and pinout (including BUSY) are passed in at init.
-  When `DRAFTLING_EPD_FAST_PARTIAL` is set (auto-enabled by the
-  GDEW075T7 panel preset on the HAT) the driver loads custom
-  single-stage partial-refresh LUTs into UC8179 registers
-  `0x20`-`0x25` and switches PSR to register-LUT mode (`0x3F`) on
-  the first partial after init or after a periodic full refresh.
-  Unchanged-pixel LUT entries are zero-drive so the screen border
-  stops flashing on every keystroke. Under `DRAFTLING_EPD_INVERT`
-  (also auto-enabled for the GDEW075T7 preset) the LUT level bytes
-  for the K->W and W->K transitions are pair-swapped at compile time
-  (0x5A <-> 0xA5, 0x84 <-> 0x48) so the GxEPD2 "kick-then-pull"
-  overdrive pattern produces the same visual transition on a panel
-  whose framebuffer convention has visual-white = bit 0. Mode is
-  switched lazily so a burst of partials shares one upload; the
-  full-refresh path restores PSR `0x1F` for the OTP ghost-clearing
-  waveform. The LUT timings are calibrated against the GDEW075T7
-  panel revision; other 7.5" panels added later should declare their
-  own `DRAFTLING_HAT_PANEL_*` preset and either inherit the same
-  `DRAFTLING_EPD_FAST_PARTIAL = y` if they share the waveform, or
-  leave it off and fall back to the OTP partial waveform (always
-  works on UC8179 panels but flashes the border once per refresh).
 - **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
   `m5stack/M5GFX` managed component. Unlike the other backends this
   one does not maintain its own 1-bpp framebuffer; M5GFX already
@@ -264,14 +242,10 @@ so the GT911 is left uninitialized and holds INT low.
 
 Before arming EXT0, `standby_enter_sleep()` enables the chip's
 internal RTC pull-up on the wake GPIO and disables any pull-down.
-The supported branded boards (RLCD-4.2 button, reTerminal KEY0,
-PaperS3 BOOT strapping pin) all have external pull-ups, so they
-worked without it; but the Waveshare E-Paper Driver HAT runs on a
-generic ESP32 host where the user-selected wake pin
-(`CONFIG_DRAFTLING_HAT_WAKEUP_GPIO`) may be a bare GPIO with no
-external pull-up. Without an internal pull-up that line floats LOW
-and EXT0 fires immediately, making the device boot back up the
-instant it tries to deep-sleep.
+The supported boards (RLCD-4.2 button on GPIO18 and PaperS3 BOOT on
+GPIO0 / strapping pin) already have external pull-ups, so this is
+harmless: the two pull-ups simply parallel. The internal pull-up is
+always enabled so the behaviour is consistent across boards.
 
 In addition to the inactivity timer, `standby_init()` also arms a
 "no keyboard connected" countdown of `CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC`
@@ -383,132 +357,33 @@ options:
 
 #### Hardware Model (DRAFTLING_HARDWARE_MODEL)
 
-A `choice` that selects the target board. The first three options are
-ESP32-S3-only (`depends on IDF_TARGET_ESP32S3`); the Waveshare HAT is
-selectable on any ESP-IDF target with a BLE radio (`depends on
-SOC_BLE_SUPPORTED`):
+A `choice` that selects the target board. Both options are
+ESP32-S3-only (`depends on IDF_TARGET_ESP32S3`):
 
 - **DRAFTLING_MODEL_WAVESHARE_RLCD42** -- Waveshare ESP32-S3-RLCD-4.2
   with a 400x300 reflective LCD and GPIO18 deep-sleep wakeup button.
   *Requires ESP32-S3.*
-- **DRAFTLING_MODEL_SEEED_RETERMINAL_E1001** -- Seeed reTerminal E1001
-  with a 7.5" 800x480 UC8179 e-paper, SD card on the same SPI bus,
-  GPIO3 (KEY0) deep-sleep wakeup. *Requires ESP32-S3.*
-- **DRAFTLING_MODEL_WAVESHARE_EPD_HAT** -- Waveshare E-Paper Driver
-  HAT (UC8179) on any BLE-capable ESP32 host (ESP32, ESP32-S3,
-  ESP32-C2/C3/C6, ESP32-H2 - i.e. anything except the BLE-less
-  ESP32-S2). The connected panel is picked via the `DRAFTLING_HAT_PANEL`
-  choice (see below); only the GPIO pinout (sub-menu "Waveshare E-Paper
-  Driver HAT pinout") is user-editable. Pin defaults match the
-  ESP32-S3-DevKitC-1 wiring used by Waveshare's example projects.
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
   4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
   library, on-board MicroSD on SPI3, BOOT button on GPIO0 used as
   the EXT0 deep-sleep wake source (the only RTC-capable user-input
   GPIO on the board). *Requires ESP32-S3.*
 
-The hardware-model selection (and, for the HAT, the
-`DRAFTLING_HAT_PANEL` panel preset) drives two non-prompted `int`
-symbols consumed in `main/app_config.h` as `DISPLAY_WIDTH` /
-`DISPLAY_HEIGHT`:
+The hardware-model selection drives two non-prompted `int` symbols
+consumed in `main/app_config.h` as `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`:
 
-- **DRAFTLING_DISPLAY_WIDTH** -- 400 (RLCD), 800 (reTerminal),
-  800 (HAT / GDEW075T7 preset), 960 (PaperS3).
-- **DRAFTLING_DISPLAY_HEIGHT** -- 300 (RLCD), 480 (reTerminal),
-  480 (HAT / GDEW075T7 preset), 540 (PaperS3).
+- **DRAFTLING_DISPLAY_WIDTH** -- 400 (RLCD), 960 (PaperS3).
+- **DRAFTLING_DISPLAY_HEIGHT** -- 300 (RLCD), 540 (PaperS3).
 
 Both symbols are non-prompted (no menuconfig entry); to support a
-new HAT panel with a different resolution, add a
-`DRAFTLING_HAT_PANEL_*` entry and extend the per-panel `default`
-lines on these symbols.
-
-#### E-paper panel preset (DRAFTLING_HAT_PANEL)
-
-A `choice` visible only when `DRAFTLING_MODEL_WAVESHARE_EPD_HAT` is
-selected. Each entry is a single panel preset that locks in the
-panel's resolution (`DRAFTLING_DISPLAY_WIDTH` / `_HEIGHT`),
-framebuffer polarity (`DRAFTLING_EPD_INVERT`), and partial-refresh
-waveform (`DRAFTLING_EPD_FAST_PARTIAL`).
-
-- **DRAFTLING_HAT_PANEL_GDEW075T7** -- Waveshare 7.5" V2 BW
-  (GoodDisplay GDEW075T7, UC8179): 800x480, EPD_INVERT = y,
-  EPD_FAST_PARTIAL = y. Confirmed flash-free typing on this
-  revision.
-
-To add another panel: append a `config DRAFTLING_HAT_PANEL_<NAME>`
-block inside this choice, then extend the per-panel `default` lines
-on `DRAFTLING_DISPLAY_WIDTH`, `_HEIGHT`, `DRAFTLING_EPD_INVERT`,
-and `DRAFTLING_EPD_FAST_PARTIAL` with the panel's required values.
-
-#### Waveshare E-Paper Driver HAT pinout (DRAFTLING_HAT_*)
-
-A sub-menu that is visible only when `DRAFTLING_MODEL_WAVESHARE_EPD_HAT`
-is selected. Each option is an `int` GPIO number with a sensible default
-for the ESP32-S3-DevKitC-1:
-
-| Symbol | Default | Use |
-|--------|---------|-----|
-| `DRAFTLING_HAT_EPD_MOSI_PIN` | 11 | SPI MOSI / DIN |
-| `DRAFTLING_HAT_EPD_SCK_PIN`  | 12 | SPI clock |
-| `DRAFTLING_HAT_EPD_DC_PIN`   | 13 | Data/command |
-| `DRAFTLING_HAT_EPD_CS_PIN`   | 10 | Chip select |
-| `DRAFTLING_HAT_EPD_RST_PIN`  | 14 | Reset |
-| `DRAFTLING_HAT_EPD_BUSY_PIN` | 9  | BUSY input |
-| `DRAFTLING_HAT_EPD_PWR_PIN`  | 7  | Panel power-enable (HIGH = on; driven LOW before deep sleep). -1 if PWR is wired permanently high. |
-| `DRAFTLING_HAT_WAKEUP_GPIO`  | 0  | EXT0 deep-sleep wakeup pin |
-| `DRAFTLING_HAT_SD_INTERFACE` | None | SD card interface: None / SPI / SDMMC 1-bit. SDMMC is gated to chips with an SDMMC host (ESP32, ESP32-S3). Auto-selects the internal `DRAFTLING_HAT_HAS_SD` symbol when not None. |
-| `DRAFTLING_HAT_SD_MOSI/MISO/SCK/CS_PIN` | 35 / 37 / 36 / 34 | SPI pinout, visible only when SPI is selected |
-| `DRAFTLING_HAT_SD_SDMMC_CLK/CMD/D0_PIN` | 39 / 38 / 40 | SDMMC 1-bit pinout, visible only when SDMMC is selected |
+new board with a different resolution, add a model `config` block
+inside the `DRAFTLING_HARDWARE_MODEL` choice and extend the
+per-model `default` lines on these symbols.
 
 #### E-paper full-refresh interval (DRAFTLING_EPD_FULL_REFRESH_INTERVAL)
 
-`int` shared by the reTerminal E1001 and HAT models (UC8179 backend)
-and the M5Stack PaperS3 (M5GFX backend). Number of partial refreshes
-between full refreshes; default 50.
-
-#### Invert e-paper pixel polarity (DRAFTLING_EPD_INVERT)
-
-Non-prompted internal helper `bool` (no menuconfig entry). When set,
-the UC8179 driver flips the framebuffer pixel polarity: visual-white
-is bit 0 instead of bit 1. Derived automatically:
-
-- `y` for `DRAFTLING_HAT_PANEL_GDEW075T7`
-- `n` everywhere else
-
-To add a panel that needs the same flip, set `default y if
-DRAFTLING_HAT_PANEL_<NAME>` on the symbol.
-
-#### Fast partial-refresh LUTs (DRAFTLING_EPD_FAST_PARTIAL)
-
-Non-prompted internal helper `bool` (no menuconfig entry). When set,
-the UC8179 driver loads custom partial-refresh LUTs into registers
-`0x20`-`0x25` and switches the panel to register-LUT mode
-(PSR = `0x3F`) the first time a partial refresh runs. The LUTs are
-the single-stage waveform from the GxEPD2 community library for the
-GDEW075T7 panel: `KW=0x5A, WK=0x84` (pair-swapped to `0xA5` / `0x48`
-under `EPD_INVERT`), timing `T1=30, T2=5, T3=30, T4=5, RP=1`. The
-W->W and K->K entries use level byte `0x00`, i.e. unchanged pixels
-receive **no voltage**, so the screen border stops flashing on every
-keystroke and each partial refresh completes in a single ~600 ms
-pulse instead of the OTP waveform's three full-frame sweeps.
-
-The driver tracks current mode and switches lazily: a burst of
-partial refreshes pays the LUT-upload cost only once. The periodic
-full refresh (every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials)
-restores PSR = `0x1F` and the original CDI/VDCS so it still does a
-proper ghost-clearing OTP pass.
-
-Derived automatically:
-
-- `y` for `DRAFTLING_HAT_PANEL_GDEW075T7`
-- `n` everywhere else
-
-The LUT level/timing bytes are calibrated for the Waveshare 7.5"
-V2 BW panel revision; new HAT panel presets that share the
-GDEW075T7 waveform can opt in by adding `default y if
-DRAFTLING_HAT_PANEL_<NAME>` to the symbol. Otherwise the driver
-falls back to the panel's OTP partial waveform (always works on
-UC8179 panels but flashes the border once per refresh).
+`int` used by the M5Stack PaperS3 (M5GFX backend) only. Number of
+partial refreshes between full refreshes; default 30.
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 
@@ -527,8 +402,8 @@ display backend deals in physical panel pixels. Defaults: 2 for the
 M5Stack PaperS3 (so the high-density 540x960 panel renders Greybeard
 text at a comfortably readable size), 1 for every other board.
 Currently only the `display_eds3` backend implements the up-scaling;
-on the RLCD and UC8179 backends a value > 1 has no visible effect
-because their LVGL framebuffers already match their panel sizes.
+on the RLCD backend a value > 1 has no visible effect because the
+LVGL framebuffer already matches the panel size.
 
 Because the symbol is prompted, its value is sticky in `sdkconfig`:
 switching `DRAFTLING_HARDWARE_MODEL` does NOT re-apply the per-model

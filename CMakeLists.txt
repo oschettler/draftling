@@ -18,7 +18,10 @@ project(draftling)
 
 # Draftling requires PSRAM on every supported board. The editor gap
 # buffer (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB, default 256 KB), the
-# UC8179 / RLCD / M5GFX framebuffers, the LVGL display + widget heap
+# UC8179 was previously supported (Seeed reTerminal E1001 and Waveshare
+# E-Paper Driver HAT) but proved too slow for an interactive editor and
+# was removed.
+# RLCD / M5GFX framebuffers, the LVGL display + widget heap
 # (CONFIG_LV_USE_CUSTOM_MALLOC routes through PSRAM), the Git-sync
 # response buffers and task stack, and Bluedroid's host environment
 # (CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY + BT_ALLOCATION_FROM_SPIRAM_FIRST)
