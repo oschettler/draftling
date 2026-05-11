@@ -24,12 +24,10 @@ packed in a good enclosure with magnets on the back, and the contrast
 is much higher than that of the RLCD display. The reaction is
 significantly slower than with RLCD, but still acceptable.
 
-UC8179-based e-paper displays (such as those used by the Seeed
-Studio reTerminal E1001 and the Waveshare E-Paper Driver HAT, which
-were tested with both the Waveshare 7.5" V2 panel and a no-name
-5.83" 648x480 panel with a built-in UC8179 driver) have been tested
-and proved too slow for an interactive Markdown editor: even with
-fast partial updates the panel cannot keep up with typing and
+I also tried UC8179-based e-paper displays (such as those used by the Seeed
+Studio reTerminal E1001 and the Waveshare E-Paper Driver HAT) and they proved 
+to be too slow for an interactive Markdown editor: even with
+fast partial updates, the panel cannot keep up with typing and
 quickly accumulates ghosting artefacts. Support for UC8179 has
 therefore been removed from the codebase.
 
