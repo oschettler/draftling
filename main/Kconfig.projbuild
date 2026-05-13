@@ -2,7 +2,7 @@ menu "DRAFTLING Configuration"
 
 choice DRAFTLING_HARDWARE_MODEL
     prompt "Hardware Model"
-    default DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default DRAFTLING_MODEL_M5STACK_PAPERS3
     help
         Select the target hardware platform for Draftling.
 
@@ -23,7 +23,7 @@ config DRAFTLING_MODEL_M5STACK_PAPERS3
         only; partial refresh and grayscale are TODO.
 
 config DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
-    bool "Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49 (AXS15231B 640x172)"
+    bool "Waveshare ESP32-S3-Touch-LCD-3.49 (AXS15231B, 3.49\" color LCD, 640x172)"
     depends on IDF_TARGET_ESP32S3
     help
         Waveshare ESP32-S3-Touch-LCD-3.49 development board: 3.49"
@@ -31,7 +31,7 @@ config DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
         Touch input is not used (Draftling is keyboard-driven).
 
 config DRAFTLING_MODEL_JC3248W535
-    bool "Generic ESP32 + color LCD: JC3248W535 (AXS15231B 480x320)"
+    bool "Guition JC3248W535 (ESP32-S3, AXS15231B, 3.5\" color LCD, 480x320)"
     depends on IDF_TARGET_ESP32S3
     help
         Guition JC3248W535 development board: 3.5" IPS color LCD,
