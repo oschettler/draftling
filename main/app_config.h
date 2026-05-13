@@ -199,6 +199,70 @@
 /* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin). */
 #define WAKEUP_GPIO_NUM     0
 
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+/* ----- LilyGO T-Display-S3 -----
+ *
+ * 1.9" IPS color LCD, 320 x 170 (landscape), ST7789V controller
+ * driven by an 8-bit parallel (Intel 8080 / i80) bus on the
+ * ESP32-S3 LCD_CAM peripheral.
+ *
+ * Pin assignments below match the LilyGO T-Display-S3 schematic
+ * shipped on the manufacturer's repository
+ * (https://github.com/Xinyuan-LilyGO/T-Display-S3). The panel data
+ * bus claims GPIO 39-42 and 45-48; control lines use 5-9 plus a
+ * power-enable gate on GPIO15 (must be driven HIGH before the LCD
+ * powers up). The on-board buttons map BOOT to GPIO0 and KEY to
+ * GPIO14; we use BOOT as the EXT0 deep-sleep wake source for
+ * consistency with the other boards.
+ *
+ * There is no on-board MicroSD slot. To use Draftling on this board
+ * the user must wire an external SD module to a free SPI bus; the
+ * pin slots below are placeholders for a recommended wiring on the
+ * unused GPIO 10/11/12/13 group. Adjust to taste; sd_card_init_spi
+ * will fail gracefully if no SD is connected and the editor falls
+ * back to read-only with the "ERROR: SD card not ready" status.
+ */
+
+/* ST7789 8-bit parallel (i80) display interface */
+#define LCD_PWR_EN_PIN  15  /* gates the LCD's 3V3 rail; must be HIGH */
+#define LCD_BL_PIN      38
+#define LCD_RST_PIN     5
+#define LCD_CS_PIN      6
+#define LCD_DC_PIN      7
+#define LCD_WR_PIN      8
+#define LCD_RD_PIN      9   /* tie HIGH; the i80 driver does not read */
+
+#define LCD_D0_PIN      39
+#define LCD_D1_PIN      40
+#define LCD_D2_PIN      41
+#define LCD_D3_PIN      42
+#define LCD_D4_PIN      45
+#define LCD_D5_PIN      46
+#define LCD_D6_PIN      47
+#define LCD_D7_PIN      48
+
+/* External MicroSD on a dedicated SPI bus (none on-board; recommended
+ * wiring on the back GPIO header). Set any pin to -1 to disable. */
+#define SD_SPI_MOSI_PIN 11
+#define SD_SPI_MISO_PIN 13
+#define SD_SPI_SCK_PIN  12
+#define SD_SPI_CS_PIN   10
+#define SD_EN_PIN       -1
+
+/* I2C bus (exposed on the GROVE / STEMMA QT connector) */
+#define I2C_SDA_PIN     43
+#define I2C_SCL_PIN     44
+
+/* Battery voltage monitor: cell -> 100k:100k divider -> GPIO4 (ADC1).
+ * Matches the T-Display-S3 schematic. */
+#define BATT_ADC_PIN    4
+#define BATT_EN_PIN     -1
+#define BATT_DIVIDER    2
+
+/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin with
+ * board-level pull-up; RTC-capable). */
+#define WAKEUP_GPIO_NUM 0
+
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."
 #endif

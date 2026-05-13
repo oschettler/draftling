@@ -12,6 +12,7 @@ with reflective displays.
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
 | [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" color IPS (AXS15231B), 640x172 |
 | Guition JC3248W535 | 3.5" color IPS (AXS15231B), 480x320 |
+| [LilyGO T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3) | 1.9" color IPS (ST7789), 320x170 |
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
 
@@ -49,6 +50,11 @@ the board you are building for:
   used.
 - **Generic ESP32 + color LCD: Guition JC3248W535** -- 3.5" IPS
   color LCD (AXS15231B, 480x320, QSPI). Touch input is not used.
+- **LilyGO T-Display-S3** -- 1.9" IPS color LCD (ST7789, 320x170,
+  8-bit i80 parallel). On-board battery monitor and BOOT button for
+  deep-sleep wake; no on-board MicroSD slot, so an external SD must
+  be wired to a free SPI bus (default pins documented in
+  `main/app_config.h`).
 
 On color LCD boards, the editor offers a runtime-selectable color
 theme (F1 -> Settings -> Color theme): dark green on black (default),

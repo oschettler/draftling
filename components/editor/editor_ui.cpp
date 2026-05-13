@@ -3026,7 +3026,8 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
@@ -3119,7 +3120,8 @@ extern "C" void editor_ui_init(void)
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git  Ctrl+W:WiFi");
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
     lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);

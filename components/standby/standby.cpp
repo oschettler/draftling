@@ -58,10 +58,11 @@ static const char *TAG = "Standby";
  * for why GPIO48 (touch INT) and GPIO21 (buzzer) were rejected. */
 #define WAKEUP_GPIO    ((gpio_num_t)0)
 #elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349) || \
-      defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
-/* AXS15231B color-LCD boards: BOOT button on GPIO0 (active-low,
- * RTC-capable strapping pin with board-level pull-up). Matches
- * WAKEUP_GPIO_NUM in main/app_config.h for these models. */
+      defined(CONFIG_DRAFTLING_MODEL_JC3248W535) || \
+      defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+/* Color-LCD boards (AXS15231B and ST7789): BOOT button on GPIO0
+ * (active-low, RTC-capable strapping pin with board-level pull-up).
+ * Matches WAKEUP_GPIO_NUM in main/app_config.h for these models. */
 #define WAKEUP_GPIO    ((gpio_num_t)0)
 #else
 #error "Unsupported hardware model: WAKEUP_GPIO not defined"

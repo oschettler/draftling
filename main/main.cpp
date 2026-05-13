@@ -4,6 +4,7 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <driver/spi_common.h>
+#include <driver/gpio.h>
 #include "sdkconfig.h"
 
 #include "app_config.h"
@@ -75,6 +76,8 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-Touch-LCD-3.49");
 #elif defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
     ESP_LOGI(TAG, "Draftling - Guition JC3248W535");
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+    ESP_LOGI(TAG, "Draftling - LilyGO T-Display-S3");
 #endif
 
     /* Initialize NVS - required for WiFi and BT */
@@ -116,6 +119,61 @@ extern "C" void app_main(void)
         cfg.height = DISPLAY_HEIGHT;
         display_axs15231b_init(&cfg);
     }
+#elif defined(CONFIG_DRAFTLING_DISPLAY_ST7789)
+    /* ST7789 over an 8-bit i80 parallel bus. The LilyGO T-Display-S3
+     * gates the LCD's 3V3 rail with a power-enable transistor on
+     * GPIO15: it must be driven HIGH before the controller will
+     * respond, otherwise the panel-init reset pulse times out. */
+#if defined(LCD_PWR_EN_PIN) && (LCD_PWR_EN_PIN >= 0)
+    {
+        gpio_config_t pwr = {};
+        pwr.intr_type    = GPIO_INTR_DISABLE;
+        pwr.mode         = GPIO_MODE_OUTPUT;
+        pwr.pin_bit_mask = (1ULL << LCD_PWR_EN_PIN);
+        gpio_config(&pwr);
+        gpio_set_level((gpio_num_t)LCD_PWR_EN_PIN, 1);
+    }
+#endif
+#if defined(LCD_RD_PIN) && (LCD_RD_PIN >= 0)
+    /* The i80 driver does not toggle RD, but the panel samples it on
+     * reset and will NACK if it is left floating low. Drive it HIGH. */
+    {
+        gpio_config_t rd = {};
+        rd.intr_type    = GPIO_INTR_DISABLE;
+        rd.mode         = GPIO_MODE_OUTPUT;
+        rd.pin_bit_mask = (1ULL << LCD_RD_PIN);
+        gpio_config(&rd);
+        gpio_set_level((gpio_num_t)LCD_RD_PIN, 1);
+    }
+#endif
+    {
+        display_st7789_config_t cfg = {};
+        cfg.data[0] = LCD_D0_PIN;
+        cfg.data[1] = LCD_D1_PIN;
+        cfg.data[2] = LCD_D2_PIN;
+        cfg.data[3] = LCD_D3_PIN;
+        cfg.data[4] = LCD_D4_PIN;
+        cfg.data[5] = LCD_D5_PIN;
+        cfg.data[6] = LCD_D6_PIN;
+        cfg.data[7] = LCD_D7_PIN;
+        cfg.wr      = LCD_WR_PIN;
+        cfg.dc      = LCD_DC_PIN;
+        cfg.cs      = LCD_CS_PIN;
+        cfg.rst     = LCD_RST_PIN;
+        cfg.bl      = LCD_BL_PIN;
+        cfg.width   = DISPLAY_WIDTH;
+        cfg.height  = DISPLAY_HEIGHT;
+        /* T-Display-S3: 240x320 panel cropped to 170x320 with a
+         * 35-pixel column gap; landscape orientation swaps XY and
+         * mirrors X. ST7789 panels need INVON for correct colors. */
+        cfg.x_gap        = 0;
+        cfg.y_gap        = 35;
+        cfg.swap_xy      = true;
+        cfg.mirror_x     = true;
+        cfg.mirror_y     = false;
+        cfg.invert_color = true;
+        display_st7789_init(&cfg);
+    }
 #endif
 
     /* Initialize LVGL.
@@ -155,6 +213,17 @@ extern "C" void app_main(void)
     /* The AXS15231B color-LCD boards (Waveshare 3.49, JC3248W535)
      * carry the SD card on a SPI bus separate from the QSPI display
      * bus (the display owns SPI2_HOST, so the SD slot uses SPI3). */
+    sd_ret = sd_card_init_spi(SPI3_HOST,
+                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
+                              SD_SPI_CS_PIN, SD_EN_PIN,
+                              SD_MOUNT_POINT);
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+    /* T-Display-S3 has no on-board MicroSD slot. The SD_SPI_* pins
+     * defined in app_config.h describe a *recommended* external SD
+     * wiring on the back GPIO header (10/11/12/13). If no SD module
+     * is connected the call below fails harmlessly and the editor
+     * runs in read-only mode with the "ERROR: SD card not ready"
+     * status banner. */
     sd_ret = sd_card_init_spi(SPI3_HOST,
                               SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
                               SD_SPI_CS_PIN, SD_EN_PIN,
