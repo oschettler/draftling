@@ -161,10 +161,12 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
      * full-screen flush goes through in one DMA chain. */
     bus_cfg.max_transfer_bytes = (size_t)s_width * s_height * sizeof(uint16_t) + 16;
     /* Allow the i80 bus's DMA descriptors to address PSRAM (the LVGL
-     * draw buffers and our s_fb live there). Setting both to 64 keeps
-     * the cache-line alignment requirement satisfied. */
-    bus_cfg.psram_trans_align   = 64;
-    bus_cfg.sram_trans_align    = 4;
+     * draw buffers and our s_fb live there). The legacy
+     * psram_trans_align / sram_trans_align fields were deprecated in
+     * ESP-IDF 5.3 in favour of a single dma_burst_size value (in
+     * bytes); 64 keeps the cache-line alignment requirement for
+     * PSRAM-backed buffers satisfied. */
+    bus_cfg.dma_burst_size      = 64;
     ESP_ERROR_CHECK(esp_lcd_new_i80_bus(&bus_cfg, &bus));
 
     /* ---- panel-IO ---- */
