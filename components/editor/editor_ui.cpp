@@ -1427,7 +1427,7 @@ static void settings_activate_item(int idx)
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     } else if (idx == SETTINGS_IDX_THEME) {
         /* Cycle to next color theme. The theme affects the
-         * background colour of every screen and the text colour of
+         * background color of every screen and the text color of
          * dozens of widgets that are configured at create time, so
          * the simplest reliable way to apply the new palette is to
          * persist the choice and reboot. The screen briefly going

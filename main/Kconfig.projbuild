@@ -43,9 +43,9 @@ endchoice
 # ---- Derived: display category (driven by hardware-model choice) ----
 #
 # DRAFTLING_DISPLAY_COLOR is set automatically when the selected board
-# has a color (RGB565) panel. Other code (the editor color-theme
-# selector, lvgl_port render mode, etc.) keys off this symbol instead
-# of testing every individual board id.
+# has a color (RGB565) panel. Other code (the color-theme selection in
+# the editor UI, lvgl_port render mode, etc.) keys off this symbol
+# instead of testing every individual board id.
 config DRAFTLING_DISPLAY_COLOR
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349

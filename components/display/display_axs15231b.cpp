@@ -169,7 +169,12 @@ static void axs15231b_init_sequence(void)
     };
     spi_send_cmd(0xA0, init_a0, sizeof(init_a0));
 
-    /* Memory Access Control (MADCTL): default landscape, BGR off. */
+    /* Memory Access Control (MADCTL). 0x00 selects portrait mode
+     * with RGB pixel order (no row/column swaps, no mirroring). The
+     * Waveshare 3.49" board's "640x172" landscape orientation will
+     * need this byte tuned (typically 0x60 or similar to set MV/MX);
+     * we leave the default here and expect the per-board init to
+     * override once the orientation is verified on hardware. */
     static const uint8_t madctl[] = { 0x00 };
     spi_send_cmd(0x36, madctl, sizeof(madctl));
 
