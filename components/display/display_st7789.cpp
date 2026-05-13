@@ -142,7 +142,10 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
      * first display_flush() doesn't block. The DMA-done callback
      * registered below gives it from ISR after each draw_bitmap. */
     s_trans_done = xSemaphoreCreateBinary();
-    assert(s_trans_done);
+    if (!s_trans_done) {
+        ESP_LOGE(TAG, "Failed to create trans-done semaphore (out of memory)");
+        abort();
+    }
     xSemaphoreGive(s_trans_done);
 
     /* ---- i80 bus ---- */
@@ -212,7 +215,11 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
     s_fb_pixels = (size_t)s_width * s_height;
     s_fb = (uint16_t *)heap_caps_malloc(s_fb_pixels * sizeof(uint16_t),
                                         MALLOC_CAP_SPIRAM);
-    assert(s_fb);
+    if (!s_fb) {
+        ESP_LOGE(TAG, "Framebuffer alloc failed (%u bytes from PSRAM)",
+                 (unsigned)(s_fb_pixels * sizeof(uint16_t)));
+        abort();
+    }
     memset(s_fb, 0, s_fb_pixels * sizeof(uint16_t));
 
     /* Pre-allocate a DMA-capable scratch buffer in PSRAM matching the
@@ -226,7 +233,11 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
         s_dma_buf_pixels = s_width;
         s_dma_buf = (uint16_t *)heap_caps_malloc(s_dma_buf_pixels * sizeof(uint16_t),
                                                  MALLOC_CAP_SPIRAM);
-        assert(s_dma_buf);
+        if (!s_dma_buf) {
+            ESP_LOGE(TAG, "Single-row scratch alloc failed (%u bytes); cannot continue",
+                     (unsigned)(s_dma_buf_pixels * sizeof(uint16_t)));
+            abort();
+        }
     }
 
     /* Backlight on (after panel init so we don't show a black flash). */
