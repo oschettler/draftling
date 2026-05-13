@@ -155,8 +155,12 @@ typedef struct {
 
 #define COLOR_THEME_COUNT 3
 static const color_theme_t COLOR_THEMES[COLOR_THEME_COUNT] = {
-    { "Dark green on black", 0x33CC33, 0x000000 },
-    { "Orange on black",     0xFF8000, 0x000000 },
+    /* Foreground hexes match the eye-friendly palette used by the
+     * companion clackups/smart-keyboard project (theme_darkgreen_on_black
+     * and a slightly-darkened amber) so the two devices look
+     * consistent when used side by side. */
+    { "Dark green on black", 0x15631A, 0x000000 },
+    { "Orange on black",     0xCC6600, 0x000000 },
     { "White on black",      0xFFFFFF, 0x000000 },
 };
 
@@ -314,6 +318,14 @@ static int       s_settings_sel  = 0;
 static int       s_settings_sel_prev = -1;
 static bool      s_settings_open = false;
 static bool      s_factory_reset_confirm = false; /* awaiting second Enter */
+
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+/* Theme picker overlay (shares s_scr_settings / s_settings_list,
+ * shown in place of the regular settings list while open). */
+static bool s_theme_picker_open      = false;
+static int  s_theme_picker_sel       = 0;
+static int  s_theme_picker_sel_prev  = -1;
+#endif
 
 /* Passkey overlay objects */
 static lv_obj_t *s_passkey_panel = NULL;
@@ -1387,12 +1399,50 @@ static void update_settings_highlight(void)
     s_settings_sel_prev = s_settings_sel;
 }
 
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+/* ---- Color-theme picker ----
+ * Renders the available themes into the same s_settings_list widget
+ * while s_theme_picker_open is true, so we do not need a second
+ * screen. The current selection is highlighted on entry. */
+static void refresh_theme_picker_items(void)
+{
+    lv_obj_clean(s_settings_list);
+    char buf[80];
+    for (int i = 0; i < COLOR_THEME_COUNT; i++) {
+        snprintf(buf, sizeof(buf), "%s%s",
+                 (i == s_theme_idx) ? "* " : "  ",
+                 COLOR_THEMES[i].name);
+        lv_list_add_btn(s_settings_list, NULL, buf);
+    }
+    lv_list_add_btn(s_settings_list, NULL, "  Cancel (Esc)");
+    apply_list_selection_styles(s_settings_list, s_theme_picker_sel);
+    s_theme_picker_sel_prev = s_theme_picker_sel;
+}
+
+static void update_theme_picker_highlight(void)
+{
+    update_list_highlight(s_settings_list, s_theme_picker_sel,
+                          s_theme_picker_sel_prev);
+    s_theme_picker_sel_prev = s_theme_picker_sel;
+}
+
+/* Cancel the picker and re-render the regular settings list. */
+static void close_theme_picker(void)
+{
+    s_theme_picker_open = false;
+    refresh_settings_items();
+}
+#endif
+
 static void show_settings(void)
 {
     s_settings_open = true;
     s_menu_open = false;
     s_settings_sel = 0;
     s_factory_reset_confirm = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    s_theme_picker_open = false;
+#endif
     refresh_settings_items();
     lv_scr_load(s_scr_settings);
 }
@@ -1400,6 +1450,9 @@ static void show_settings(void)
 static void close_settings(void)
 {
     s_settings_open = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    s_theme_picker_open = false;
+#endif
     show_menu();
 }
 
@@ -1428,17 +1481,13 @@ static void settings_activate_item(int idx)
         refresh_settings_items();
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     } else if (idx == SETTINGS_IDX_THEME) {
-        /* Cycle to next color theme. The theme affects the
-         * background color of every screen and the text color of
-         * dozens of widgets that are configured at create time, so
-         * the simplest reliable way to apply the new palette is to
-         * persist the choice and reboot. The screen briefly going
-         * black + reinitialising is itself a clear visual signal
-         * that the change was registered. */
-        s_theme_idx = (s_theme_idx + 1) % COLOR_THEME_COUNT;
-        save_theme_to_nvs();
-        esp_restart();
-        /* does not return */
+        /* Open the theme picker sub-list. The user navigates with
+         * Up/Down and confirms with Enter; only on Enter is the new
+         * theme persisted and the device restarted to re-style every
+         * widget. Esc returns to the settings list without changes. */
+        s_theme_picker_open = true;
+        s_theme_picker_sel = s_theme_idx;
+        refresh_theme_picker_items();
 #endif
     } else if (idx == SETTINGS_IDX_SLEEP) {
         /* Sleep now -- auto-save first */
@@ -1464,6 +1513,49 @@ static void settings_activate_item(int idx)
 
 static void handle_settings_key(const kb_event_t *ev)
 {
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    if (s_theme_picker_open) {
+        /* Total picker rows: COLOR_THEME_COUNT themes + 1 "Cancel" row. */
+        const int picker_count = COLOR_THEME_COUNT + 1;
+        switch (ev->keycode) {
+        case KB_KEY_UP:
+            if (s_theme_picker_sel > 0) s_theme_picker_sel--;
+            update_theme_picker_highlight();
+            break;
+        case KB_KEY_DOWN:
+            if (s_theme_picker_sel < picker_count - 1) s_theme_picker_sel++;
+            update_theme_picker_highlight();
+            break;
+        case KB_KEY_ENTER:
+            if (s_theme_picker_sel >= 0 &&
+                s_theme_picker_sel < COLOR_THEME_COUNT) {
+                /* Apply the selected theme. The theme drives the bg
+                 * colour of every screen and the text colour of dozens
+                 * of widgets configured at create time, so the simplest
+                 * reliable way to repaint is to persist + reboot. */
+                if (s_theme_picker_sel != s_theme_idx) {
+                    s_theme_idx = s_theme_picker_sel;
+                    save_theme_to_nvs();
+                    esp_restart();
+                    /* does not return */
+                }
+                /* No change -> just close the picker. */
+                close_theme_picker();
+            } else {
+                /* Cancel row */
+                close_theme_picker();
+            }
+            break;
+        case KB_KEY_ESCAPE:
+            close_theme_picker();
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+#endif
+
     switch (ev->keycode) {
     case KB_KEY_UP:
         if (s_settings_sel > 0) s_settings_sel--;
@@ -2747,6 +2839,9 @@ static void apply_pending_connect_state(void)
          * editor_close_file() -- preserve the user's work. */
         s_menu_open = false;
         s_settings_open = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+        s_theme_picker_open = false;
+#endif
         s_save_open = false;
         if (s_save_panel) lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
         s_search_open = false;

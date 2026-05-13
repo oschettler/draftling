@@ -194,6 +194,45 @@ config DRAFTLING_EPD_BLACK_BACKGROUND
         white before deep sleep regardless of this setting, so the
         panel is left in a clean state while the MCU is asleep.
 
+menu "LilyGO T-Display-S3 external SD card"
+    depends on DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
+
+comment "There is no on-board MicroSD slot on the T-Display-S3."
+comment "Wire an external SD module to a free SPI bus and set its pins below."
+comment "Set MOSI / MISO / SCK / CS to -1 to disable SD card support."
+
+config DRAFTLING_LILYGO_SD_MOSI_PIN
+    int "SD card MOSI / DI GPIO"
+    range -1 48
+    default 11
+    help
+        GPIO connected to the external SD card module's MOSI (DI) pin.
+        Set to -1 to disable SD support entirely.
+
+config DRAFTLING_LILYGO_SD_MISO_PIN
+    int "SD card MISO / DO GPIO"
+    range -1 48
+    default 13
+    help
+        GPIO connected to the external SD card module's MISO (DO) pin.
+
+config DRAFTLING_LILYGO_SD_SCK_PIN
+    int "SD card SCK / CLK GPIO"
+    range -1 48
+    default 12
+    help
+        GPIO connected to the external SD card module's SCK (CLK) pin.
+
+config DRAFTLING_LILYGO_SD_CS_PIN
+    int "SD card CS / SS GPIO"
+    range -1 48
+    default 10
+    help
+        GPIO connected to the external SD card module's CS (chip select)
+        pin.
+
+endmenu
+
 config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
     int "Deep-sleep timeout when no keyboard connects (s)"
     range 0 3600

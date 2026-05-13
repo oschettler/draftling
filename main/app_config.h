@@ -242,11 +242,14 @@
 #define LCD_D7_PIN      48
 
 /* External MicroSD on a dedicated SPI bus (none on-board; recommended
- * wiring on the back GPIO header). Set any pin to -1 to disable. */
-#define SD_SPI_MOSI_PIN 11
-#define SD_SPI_MISO_PIN 13
-#define SD_SPI_SCK_PIN  12
-#define SD_SPI_CS_PIN   10
+ * wiring on the back GPIO header). The pin numbers are user-editable
+ * in menuconfig under "LilyGO T-Display-S3 external SD card"; defaults
+ * map to the unused GPIO 10/11/12/13 group. Set any pin to -1 to
+ * disable SD support. */
+#define SD_SPI_MOSI_PIN CONFIG_DRAFTLING_LILYGO_SD_MOSI_PIN
+#define SD_SPI_MISO_PIN CONFIG_DRAFTLING_LILYGO_SD_MISO_PIN
+#define SD_SPI_SCK_PIN  CONFIG_DRAFTLING_LILYGO_SD_SCK_PIN
+#define SD_SPI_CS_PIN   CONFIG_DRAFTLING_LILYGO_SD_CS_PIN
 #define SD_EN_PIN       -1
 
 /* I2C bus (exposed on the GROVE / STEMMA QT connector) */
