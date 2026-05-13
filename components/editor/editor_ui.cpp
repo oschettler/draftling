@@ -1530,7 +1530,7 @@ static void handle_settings_key(const kb_event_t *ev)
             if (s_theme_picker_sel >= 0 &&
                 s_theme_picker_sel < COLOR_THEME_COUNT) {
                 /* Apply the selected theme. The theme drives the bg
-                 * colour of every screen and the text colour of dozens
+                 * color of every screen and the text color of dozens
                  * of widgets configured at create time, so the simplest
                  * reliable way to repaint is to persist + reboot. */
                 if (s_theme_picker_sel != s_theme_idx) {
