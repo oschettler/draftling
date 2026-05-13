@@ -22,13 +22,53 @@ config DRAFTLING_MODEL_M5STACK_PAPERS3
         v1 uses a 1-bit black/white waveform with full-screen refresh
         only; partial refresh and grayscale are TODO.
 
+config DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    bool "Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49 (AXS15231B 640x172)"
+    depends on IDF_TARGET_ESP32S3
+    help
+        Waveshare ESP32-S3-Touch-LCD-3.49 development board: 3.49"
+        IPS color LCD, 640x172, AXS15231B controller over QSPI.
+        Touch input is not used (Draftling is keyboard-driven).
+
+config DRAFTLING_MODEL_JC3248W535
+    bool "Generic ESP32 + color LCD: JC3248W535 (AXS15231B 480x320)"
+    depends on IDF_TARGET_ESP32S3
+    help
+        Guition JC3248W535 development board: 3.5" IPS color LCD,
+        480x320, AXS15231B controller over QSPI. Touch input is
+        not used (Draftling is keyboard-driven).
+
 endchoice
+
+# ---- Derived: display category (driven by hardware-model choice) ----
+#
+# DRAFTLING_DISPLAY_COLOR is set automatically when the selected board
+# has a color (RGB565) panel. Other code (the editor color-theme
+# selector, lvgl_port render mode, etc.) keys off this symbol instead
+# of testing every individual board id.
+config DRAFTLING_DISPLAY_COLOR
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default y if DRAFTLING_MODEL_JC3248W535
+    default n
+
+# DRAFTLING_DISPLAY_AXS15231B is set automatically when the selected
+# board uses an AXS15231B QSPI controller. The display backend
+# (components/display/display_axs15231b.cpp) is compiled in only for
+# these boards.
+config DRAFTLING_DISPLAY_AXS15231B
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default y if DRAFTLING_MODEL_JC3248W535
+    default n
 
 config DRAFTLING_DISPLAY_WIDTH
     int
     range 64 1024
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 640 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default 480 if DRAFTLING_MODEL_JC3248W535
     help
         Display width in pixels (derived). Driven by the hardware-model
         choice. Must be a multiple of 8 for e-paper backends.
@@ -38,6 +78,8 @@ config DRAFTLING_DISPLAY_HEIGHT
     range 64 1024
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 172 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default 320 if DRAFTLING_MODEL_JC3248W535
     help
         Display height in pixels (derived). Driven by the hardware-model
         choice.

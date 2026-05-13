@@ -86,6 +86,34 @@ bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
  */
 void display_set_partial_clip(int x, int y, int w, int h);
 
+/*
+ * AXS15231B QSPI color-LCD driver init.
+ *
+ * Used by boards with CONFIG_DRAFTLING_DISPLAY_AXS15231B (Waveshare
+ * ESP32-S3-Touch-LCD-3.49 and Guition JC3248W535). The driver needs
+ * 9 GPIOs -- more than display_init()'s 6 pin slots can carry --
+ * so it has its own struct-based init. Call this *instead of*
+ * display_init() on AXS15231B boards.
+ *
+ * After this returns, display_clear/display_set_pixel/
+ * display_push_rgb565/display_flush behave like on any other backend.
+ */
+typedef struct {
+    int cs;
+    int sck;
+    int d0;
+    int d1;
+    int d2;
+    int d3;
+    int rst;
+    int te;       /* tearing-effect input, -1 if unused */
+    int bl;       /* backlight enable, -1 if always-on */
+    int width;
+    int height;
+} display_axs15231b_config_t;
+
+void display_axs15231b_init(const display_axs15231b_config_t *cfg);
+
 #ifdef __cplusplus
 }
 #endif

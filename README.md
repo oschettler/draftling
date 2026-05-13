@@ -10,6 +10,8 @@ with reflective displays.
 |-------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
+| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" color IPS (AXS15231B), 640x172 |
+| Guition JC3248W535 | 3.5" color IPS (AXS15231B), 480x320 |
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
 
@@ -42,6 +44,15 @@ the board you are building for:
 - **M5Stack PaperS3** -- 4.7" e-paper (ED047TC1, 540x960). Driver is
   a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
   component; partial refresh and grayscale are not implemented yet.
+- **Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49** --
+  3.49" IPS color LCD (AXS15231B, 640x172, QSPI). Touch input is not
+  used.
+- **Generic ESP32 + color LCD: Guition JC3248W535** -- 3.5" IPS
+  color LCD (AXS15231B, 480x320, QSPI). Touch input is not used.
+
+On color LCD boards, the editor offers a runtime-selectable color
+theme (F1 -> Settings -> Color theme): dark green on black (default),
+amber/orange on black, or white on black.
 
 The display resolution and driver are configured automatically based
 on the selected model. You can also adjust the **Display rotation

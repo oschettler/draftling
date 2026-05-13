@@ -134,12 +134,69 @@ static const lv_font_t *h3_font(void)
  * Inverted highlights (selection rectangles, active list rows) draw
  * the foreground color as their background and vice-versa.
  *
- * On e-paper boards the user can opt into a black background via
- * CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND, which simply swaps the two
- * colors returned by these helpers. The Kconfig symbol is gated to
- * the e-paper models, so on every other build it is undefined and
- * theme_fg/theme_bg compile down to plain black/white.
+ * On monochrome boards (RLCD, e-paper) the palette is fixed:
+ * black-on-white by default, optionally inverted via
+ * CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND on the e-paper boards.
+ *
+ * On color LCDs (CONFIG_DRAFTLING_DISPLAY_COLOR) the user can pick
+ * one of several preset themes from F1 -> Settings. The selection
+ * is persisted in NVS. All themes use a black background; the three
+ * foreground choices are dark green (default), amber/orange, and
+ * white -- a familiar "monochrome terminal" palette appropriate for
+ * a distraction-free Markdown editor.
  */
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+
+typedef struct {
+    const char *name;       /* shown in Settings menu */
+    uint32_t    fg_rgb;     /* 0xRRGGBB */
+    uint32_t    bg_rgb;
+} color_theme_t;
+
+#define COLOR_THEME_COUNT 3
+static const color_theme_t COLOR_THEMES[COLOR_THEME_COUNT] = {
+    { "Dark green on black", 0x33CC33, 0x000000 },
+    { "Orange on black",     0xFF8000, 0x000000 },
+    { "White on black",      0xFFFFFF, 0x000000 },
+};
+
+#define NVS_KEY_THEME "theme"
+static int s_theme_idx = 0;
+
+static void load_theme_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, NVS_KEY_THEME, &v) == ESP_OK && v < COLOR_THEME_COUNT) {
+            s_theme_idx = v;
+        }
+        nvs_close(h);
+    }
+}
+
+static void save_theme_to_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_THEME, (uint8_t)s_theme_idx);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static inline lv_color_t theme_fg(void)
+{
+    return lv_color_hex(COLOR_THEMES[s_theme_idx].fg_rgb);
+}
+
+static inline lv_color_t theme_bg(void)
+{
+    return lv_color_hex(COLOR_THEMES[s_theme_idx].bg_rgb);
+}
+
+#else  /* monochrome */
+
 static inline lv_color_t theme_fg(void)
 {
 #if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
@@ -157,6 +214,8 @@ static inline lv_color_t theme_bg(void)
     return lv_color_white();
 #endif
 }
+
+#endif  /* CONFIG_DRAFTLING_DISPLAY_COLOR */
 
 /* Recalculate derived layout values from the current body font. */
 static void recalc_layout(void)
@@ -1249,6 +1308,27 @@ static int find_timeout_option(uint32_t sec)
     return 2; /* default to 10 min */
 }
 
+/* ---- Settings menu items ----
+ * Indices vary slightly between monochrome and color builds; on
+ * color LCDs an extra "Color theme" item is inserted after the font
+ * size. Use the SETTINGS_IDX_* constants instead of bare integers
+ * everywhere downstream so the two layouts stay in lock-step. */
+#define SETTINGS_IDX_TIMEOUT  0
+#define SETTINGS_IDX_FONTSZ   1
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+#define SETTINGS_IDX_THEME    2
+#define SETTINGS_IDX_SLEEP    3
+#define SETTINGS_IDX_RESET    4
+#define SETTINGS_IDX_BACK     5
+#define SETTINGS_ITEM_COUNT   6
+#else
+#define SETTINGS_IDX_THEME    (-1)
+#define SETTINGS_IDX_SLEEP    2
+#define SETTINGS_IDX_RESET    3
+#define SETTINGS_IDX_BACK     4
+#define SETTINGS_ITEM_COUNT   5
+#endif
+
 static void refresh_settings_items(void)
 {
     lv_obj_clean(s_settings_list);
@@ -1260,11 +1340,11 @@ static void refresh_settings_items(void)
     if (idx >= 0 && idx < TIMEOUT_OPTION_COUNT)
         cur_label = TIMEOUT_LABELS[idx];
 
-    /* 0: Standby timeout */
+    /* Standby timeout */
     snprintf(buf, sizeof(buf), "Standby timeout: %s", cur_label);
     lv_list_add_btn(s_settings_list, NULL, buf);
 
-    /* 1: Base font size */
+    /* Base font size */
     {
         int fi = find_font_size_option(s_font_size);
         snprintf(buf, sizeof(buf), "Base font size: %s",
@@ -1272,10 +1352,17 @@ static void refresh_settings_items(void)
         lv_list_add_btn(s_settings_list, NULL, buf);
     }
 
-    /* 2: Sleep now */
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    /* Color theme (color LCDs only) */
+    snprintf(buf, sizeof(buf), "Color theme: %s",
+             COLOR_THEMES[s_theme_idx].name);
+    lv_list_add_btn(s_settings_list, NULL, buf);
+#endif
+
+    /* Sleep now */
     lv_list_add_btn(s_settings_list, NULL, "Sleep now");
 
-    /* 3: Factory reset */
+    /* Factory reset */
     if (s_factory_reset_confirm) {
         lv_list_add_btn(s_settings_list, NULL,
                         "Factory reset -- ENTER again to confirm");
@@ -1283,7 +1370,7 @@ static void refresh_settings_items(void)
         lv_list_add_btn(s_settings_list, NULL, "Factory reset");
     }
 
-    /* 4: Back */
+    /* Back */
     lv_list_add_btn(s_settings_list, NULL, "Back (Esc)");
 
     /* Highlight selection */
@@ -1317,22 +1404,19 @@ static void close_settings(void)
 static void settings_activate_item(int idx)
 {
     /* Moving away from the factory-reset item cancels confirmation */
-    if (idx != 3 && s_factory_reset_confirm) {
+    if (idx != SETTINGS_IDX_RESET && s_factory_reset_confirm) {
         s_factory_reset_confirm = false;
         refresh_settings_items();
     }
 
-    switch (idx) {
-    case 0: {
+    if (idx == SETTINGS_IDX_TIMEOUT) {
         /* Cycle to next timeout option */
         uint32_t cur = standby_get_timeout();
         int opt = find_timeout_option(cur);
         opt = (opt + 1) % TIMEOUT_OPTION_COUNT;
         standby_set_timeout(TIMEOUT_OPTIONS[opt]);
         refresh_settings_items();
-        break;
-    }
-    case 1: {
+    } else if (idx == SETTINGS_IDX_FONTSZ) {
         /* Cycle to next font size option */
         int fi = find_font_size_option(s_font_size);
         fi = (fi + 1) % FONT_SIZE_COUNT;
@@ -1340,16 +1424,27 @@ static void settings_activate_item(int idx)
         save_font_size_to_nvs();
         init_styles();
         refresh_settings_items();
-        break;
-    }
-    case 2:
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    } else if (idx == SETTINGS_IDX_THEME) {
+        /* Cycle to next color theme. The theme affects the
+         * background colour of every screen and the text colour of
+         * dozens of widgets that are configured at create time, so
+         * the simplest reliable way to apply the new palette is to
+         * persist the choice and reboot. The screen briefly going
+         * black + reinitialising is itself a clear visual signal
+         * that the change was registered. */
+        s_theme_idx = (s_theme_idx + 1) % COLOR_THEME_COUNT;
+        save_theme_to_nvs();
+        esp_restart();
+        /* does not return */
+#endif
+    } else if (idx == SETTINGS_IDX_SLEEP) {
         /* Sleep now -- auto-save first */
         if (editor_get_mode() == EDITOR_MODE_EDITING && editor_is_modified()) {
             editor_save_file();
         }
         standby_enter_sleep();
-        break;
-    case 3:
+    } else if (idx == SETTINGS_IDX_RESET) {
         /* Factory reset -- requires double-press confirmation */
         if (s_factory_reset_confirm) {
             ESP_LOGW(TAG, "Factory reset: erasing NVS and restarting");
@@ -1360,16 +1455,10 @@ static void settings_activate_item(int idx)
             s_factory_reset_confirm = true;
             refresh_settings_items();
         }
-        break;
-    case 4:
+    } else if (idx == SETTINGS_IDX_BACK) {
         close_settings();
-        break;
-    default:
-        break;
     }
 }
-
-#define SETTINGS_ITEM_COUNT 5
 
 static void handle_settings_key(const kb_event_t *ev)
 {
@@ -2836,6 +2925,9 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
 extern "C" void editor_ui_init(void)
 {
     load_font_size_from_nvs();
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    load_theme_from_nvs();
+#endif
     init_styles();
 
     /* Create key-event queue (must exist before BLE callback is set) */
@@ -2948,8 +3040,13 @@ extern "C" void editor_ui_init(void)
 #define WIFI_ICON_RIGHT_OFFSET 15
 #endif
 
-    /* WiFi connectivity icon (right corner of editor status bar) */
-#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+    /* WiFi connectivity icon (right corner of editor status bar).
+     * Pick the foreground variant that contrasts with the active
+     * background: the EPD inverted theme and every color-LCD theme
+     * use a dark background, so the white-on-transparent variant
+     * applies. Other (default mono) builds use the black variant. */
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND) || \
+    defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     s_img_wifi = lv_image_create(s_scr);
     lv_image_set_src(s_img_wifi, &wifi_icon_white);
 #else
@@ -3041,7 +3138,8 @@ extern "C" void editor_ui_init(void)
 #endif
 
     /* WiFi connectivity icon (right corner of browser status bar) */
-#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND) || \
+    defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     s_img_br_wifi = lv_image_create(s_scr_browser);
     lv_image_set_src(s_img_br_wifi, &wifi_icon_white);
 #else

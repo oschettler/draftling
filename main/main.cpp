@@ -71,6 +71,10 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-RLCD-4.2");
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     ESP_LOGI(TAG, "Draftling - M5Stack PaperS3");
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
+    ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-Touch-LCD-3.49");
+#elif defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
+    ESP_LOGI(TAG, "Draftling - Guition JC3248W535");
 #endif
 
     /* Initialize NVS - required for WiFi and BT */
@@ -93,6 +97,25 @@ extern "C" void app_main(void)
      * still call display_init for API parity; pin parameters are
      * ignored by the M5GFX backend. */
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_DISPLAY_AXS15231B)
+    /* AXS15231B QSPI color LCD. Needs 9 GPIOs (CS/SCK/D0..D3/RST/TE/BL),
+     * which do not fit in display_init()'s 6 pin slots, so the backend
+     * exposes a dedicated struct-based init. */
+    {
+        display_axs15231b_config_t cfg = {};
+        cfg.cs     = LCD_QSPI_CS_PIN;
+        cfg.sck    = LCD_QSPI_SCK_PIN;
+        cfg.d0     = LCD_QSPI_D0_PIN;
+        cfg.d1     = LCD_QSPI_D1_PIN;
+        cfg.d2     = LCD_QSPI_D2_PIN;
+        cfg.d3     = LCD_QSPI_D3_PIN;
+        cfg.rst    = LCD_RST_PIN;
+        cfg.te     = LCD_TE_PIN;
+        cfg.bl     = LCD_BL_PIN;
+        cfg.width  = DISPLAY_WIDTH;
+        cfg.height = DISPLAY_HEIGHT;
+        display_axs15231b_init(&cfg);
+    }
 #endif
 
     /* Initialize LVGL.
@@ -124,6 +147,14 @@ extern "C" void app_main(void)
     sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
     /* PaperS3 has an on-board MicroSD on its own SPI3 bus. */
+    sd_ret = sd_card_init_spi(SPI3_HOST,
+                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
+                              SD_SPI_CS_PIN, SD_EN_PIN,
+                              SD_MOUNT_POINT);
+#elif defined(CONFIG_DRAFTLING_DISPLAY_AXS15231B)
+    /* The AXS15231B color-LCD boards (Waveshare 3.49, JC3248W535)
+     * carry the SD card on a SPI bus separate from the QSPI display
+     * bus (the display owns SPI2_HOST, so the SD slot uses SPI3). */
     sd_ret = sd_card_init_spi(SPI3_HOST,
                               SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
                               SD_SPI_CS_PIN, SD_EN_PIN,

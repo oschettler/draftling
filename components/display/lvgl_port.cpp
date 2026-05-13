@@ -50,8 +50,18 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
     uint16_t *buf = (uint16_t *)color_map;
     for (int y = area->y1; y <= area->y2; y++) {
         for (int x = area->x1; x <= area->x2; x++) {
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+            /* Color backends should always have handled the push via
+             * display_push_rgb565() above; reaching here means the
+             * backend declined a region we cannot otherwise convert
+             * faithfully (we have no per-pixel color setter). Drop
+             * the per-pixel call so we do not collapse the color
+             * image to monochrome. */
+            (void)x; (void)y; (void)buf;
+#else
             uint8_t color = (*buf < 0x7FFF) ? 0x00 : 0xFF;
             display_set_pixel(x, y, color);
+#endif
             buf++;
         }
     }
@@ -114,7 +124,8 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     }
     lv_display_set_rotation(disp, rot);
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+    defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     /* PaperS3 / M5GFX path: use PARTIAL render mode so flush_cb is
      * called once per invalidated rectangle with a tightly-packed
      * pixel buffer. This lets the display backend issue a partial
@@ -122,6 +133,11 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
      * cursor or a single edited line) instead of repainting all
      * 540x960 pixels and running the full grayscale waveform on
      * every keystroke.
+     *
+     * AXS15231B color LCDs use the same PARTIAL mode: the backend
+     * keeps an RGB565 framebuffer in PSRAM and streams just the
+     * dirty rectangle over QSPI on every flush, avoiding a full
+     * panel repaint per keystroke.
      *
      * A draw buffer sized to ~1/8 of the screen is enough to hold any
      * single LVGL invalidated region the editor produces (status bar,

@@ -117,6 +117,88 @@
  * + esp_restart() workaround. */
 #define WAKEUP_GPIO_NUM 0
 
+#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
+/* ----- Waveshare ESP32-S3-Touch-LCD-3.49 -----
+ *
+ * 3.49" IPS color LCD, 640 x 172, AXS15231B controller over QSPI.
+ * Pin assignments below match the Waveshare wiki schematic
+ * (https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49); they
+ * may need adjustment if Waveshare revises the board.
+ *
+ * Touch input (CST816 / I2C) is not used by Draftling.
+ */
+
+/* AXS15231B QSPI display interface */
+#define LCD_QSPI_CS_PIN     10
+#define LCD_QSPI_SCK_PIN    12
+#define LCD_QSPI_D0_PIN     11
+#define LCD_QSPI_D1_PIN     13
+#define LCD_QSPI_D2_PIN     14
+#define LCD_QSPI_D3_PIN     9
+#define LCD_RST_PIN         17
+#define LCD_TE_PIN          18
+#define LCD_BL_PIN          2
+
+/* SD card on a dedicated SPI bus */
+#define SD_SPI_MOSI_PIN     6
+#define SD_SPI_MISO_PIN     5
+#define SD_SPI_SCK_PIN      4
+#define SD_SPI_CS_PIN       7
+#define SD_EN_PIN           -1
+
+/* I2C bus (touch controller and other peripherals) */
+#define I2C_SDA_PIN         15
+#define I2C_SCL_PIN         16
+
+/* No on-board battery monitor on this dev board */
+#define BATT_ADC_PIN        -1
+#define BATT_EN_PIN         -1
+#define BATT_DIVIDER        1
+
+/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin). */
+#define WAKEUP_GPIO_NUM     0
+
+#elif defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
+/* ----- Guition JC3248W535 -----
+ *
+ * 3.5" IPS color LCD, 480 x 320, AXS15231B controller over QSPI.
+ * Pin assignments below come from the JC3248W535 reference schematic
+ * widely shared in the LovyanGFX / LVGL community for this board;
+ * verify against the actual silk-screen of your unit if init fails.
+ *
+ * Touch input (AXS5106L / I2C) is not used by Draftling.
+ */
+
+/* AXS15231B QSPI display interface */
+#define LCD_QSPI_CS_PIN     45
+#define LCD_QSPI_SCK_PIN    47
+#define LCD_QSPI_D0_PIN     21
+#define LCD_QSPI_D1_PIN     48
+#define LCD_QSPI_D2_PIN     40
+#define LCD_QSPI_D3_PIN     39
+#define LCD_RST_PIN         4
+#define LCD_TE_PIN          38
+#define LCD_BL_PIN          1
+
+/* SD card on a dedicated SPI bus */
+#define SD_SPI_MOSI_PIN     11
+#define SD_SPI_MISO_PIN     13
+#define SD_SPI_SCK_PIN      12
+#define SD_SPI_CS_PIN       10
+#define SD_EN_PIN           -1
+
+/* I2C bus (touch controller, optional) */
+#define I2C_SDA_PIN         8
+#define I2C_SCL_PIN         9
+
+/* No on-board battery monitor on this dev board */
+#define BATT_ADC_PIN        -1
+#define BATT_EN_PIN         -1
+#define BATT_DIVIDER        1
+
+/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin). */
+#define WAKEUP_GPIO_NUM     0
+
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."
 #endif
