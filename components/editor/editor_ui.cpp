@@ -366,7 +366,8 @@ static bool s_esc_pending = false;
  *   - Waveshare RLCD-4.2:   GPIO4, 3:1 divider
  *   - M5Stack PaperS3:      GPIO3, 2:1 divider (no enable) */
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
 #define DRAFTLING_HAS_BATT_INDICATOR 1
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
@@ -518,7 +519,8 @@ static void cursor_blink_cb(lv_timer_t *timer)
 #endif
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
 /* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
 {
