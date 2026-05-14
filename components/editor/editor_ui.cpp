@@ -1169,6 +1169,47 @@ extern "C" void editor_ui_show_editor(void)
     editor_ui_refresh();
 }
 
+/* Available pixel width for the editor's bottom status label.
+ * Reserves room on the right for the battery percentage (when the
+ * board has a battery) and the small WiFi icon, so the status text
+ * never overlaps them and -- importantly -- never wraps to a second
+ * line (which would extend past SCR_H and cause LVGL to draw a
+ * screen scrollbar). The numbers mirror the layout in build_screens()
+ * for s_lbl_dev_batt and s_img_wifi. */
+static int status_avail_width(void)
+{
+    int right_reserved;
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
+    /* Battery occupies SCR_W-80..SCR_W-2; WiFi icon sits at SCR_W-95.
+     * Leave a 2 px gap to the wifi icon. */
+    right_reserved = 95 + 2;
+#else
+    /* No battery; only the wifi icon at SCR_W-15. */
+    right_reserved = 15 + 2;
+#endif
+    int avail = SCR_W - 2 /* left margin */ - right_reserved;
+    if (avail < 0) avail = 0;
+    return avail;
+}
+
+/* Hide the editor's status label when its current text is wider than
+ * the available area (so only the battery percentage remains visible
+ * in the bottom bar); show it otherwise. Greybeard is monospaced, so
+ * the rendered width is utf8_chars * char_width(FONT_11). */
+static void update_status_visibility(void)
+{
+    if (!s_lbl_status) return;
+    const char *text = lv_label_get_text(s_lbl_status);
+    if (!text) text = "";
+    int chars = utf8_chars_in_bytes(text, strlen(text));
+    int text_w = chars * char_width_for_font(FONT_11);
+    if (text_w > status_avail_width()) {
+        lv_obj_add_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(s_lbl_status, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 /* Default status-bar text for the editor screen. Kept in one place
  * so the auto-clear timer and the initial label setup agree. */
 #define EDITOR_DEFAULT_STATUS \
@@ -1183,6 +1224,7 @@ static void restore_default_status(void)
     if (s_lbl_status) {
         lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
     }
+    update_status_visibility();
     if (s_lbl_br_status) {
         if (wifi_manager_is_connected()) {
             char buf[80];
@@ -1223,6 +1265,7 @@ extern "C" void editor_ui_set_status(const char *msg)
     ESP_LOGI(TAG, "Status: %s", msg);
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
     if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
+    update_status_visibility();
     /* Auto-clear the message after 3 seconds so transient errors
      * (e.g. "File too large") do not linger after the user has moved
      * on to a different file or screen. The timer is one-shot and is
@@ -3122,12 +3165,6 @@ static void build_screens(void)
     /* ---- Editor screen ---- */
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, theme_bg(), 0);
-    /* Hide the scrollbar that LVGL would otherwise draw on the right
-     * edge of the screen when content (e.g. line labels) extends past
-     * the visible area. The editor manages its own scrolling via
-     * editor_set_scroll_line(), so the bar adds no value and is most
-     * visible on color LCDs that render it in the theme accent colour. */
-    lv_obj_set_scrollbar_mode(s_scr, LV_SCROLLBAR_MODE_OFF);
 
     /* Title bar */
     s_lbl_title = lv_label_create(s_scr);
@@ -3208,10 +3245,16 @@ static void build_screens(void)
 
     s_lbl_status = lv_label_create(s_scr);
     lv_obj_set_pos(s_lbl_status, 2, SCR_H - STATUS_H + 2);
-    lv_obj_set_width(s_lbl_status, SCR_W - 4);
+    /* Width is constrained below (see status_avail_width()) so the
+     * label never reaches the battery / wifi icon on the right and
+     * never wraps to a second line (which would extend past SCR_H
+     * and trigger LVGL's screen scrollbar on narrow color LCDs). */
+    lv_label_set_long_mode(s_lbl_status, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_lbl_status, status_avail_width());
     lv_obj_set_style_text_font(s_lbl_status, FONT_11, 0);
     lv_obj_set_style_text_color(s_lbl_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
+    update_status_visibility();
 
 #if defined(CONFIG_DRAFTLING_HAS_BATTERY)
     /* Device battery label (right-aligned in editor status bar) */
