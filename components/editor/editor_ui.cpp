@@ -3555,8 +3555,12 @@ static void build_screens(void)
 static void teardown_screens(void)
 {
     /* Stop and forget the screen-bound timers first. */
+#if !defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     if (s_blink_timer)     { lv_timer_delete(s_blink_timer);     s_blink_timer     = NULL; }
+#endif
+#if defined(DRAFTLING_HAS_BATT_INDICATOR)
     if (s_batt_timer)      { lv_timer_delete(s_batt_timer);      s_batt_timer      = NULL; }
+#endif
     if (s_repeat_timer)    { lv_timer_delete(s_repeat_timer);    s_repeat_timer    = NULL; }
     if (s_status_clear_timer) {
         lv_timer_delete(s_status_clear_timer);
@@ -3578,7 +3582,9 @@ static void teardown_screens(void)
     s_lbl_title = s_cont_edit = s_lbl_status = s_cursor = NULL;
     s_img_logo = s_img_wifi = s_img_br_wifi = NULL;
     s_list_files = s_lbl_br_status = NULL;
+#if defined(DRAFTLING_HAS_BATT_INDICATOR)
     s_lbl_dev_batt = s_lbl_br_dev_batt = NULL;
+#endif
     s_menu_list = s_lbl_menu_hdr = NULL;
     s_settings_list = NULL;
     s_ble_prompt_lbl = NULL;
