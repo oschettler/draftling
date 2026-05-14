@@ -3551,7 +3551,9 @@ static void build_screens(void)
 /* Tear down every screen, overlay and screen-bound timer that was
  * created by build_screens() so the next build_screens() call can
  * recreate them in a fresh theme. Runs on the LVGL task with the
- * port lock held (caller is a key-event handler). */
+ * port lock held (caller is a key-event handler). Only used by the
+ * color-theme picker, which is gated on CONFIG_DRAFTLING_DISPLAY_COLOR. */
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
 static void teardown_screens(void)
 {
     /* Stop and forget the screen-bound timers first. */
@@ -3616,6 +3618,7 @@ static void teardown_screens(void)
      * wipe it so the next refresh re-creates fresh slots. */
     invalidate_render_cache();
 }
+#endif /* CONFIG_DRAFTLING_DISPLAY_COLOR */
 
 /* Apply a freshly-selected color theme without rebooting. Recreates
  * every LVGL screen and widget under the new palette and restores
