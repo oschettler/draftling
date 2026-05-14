@@ -3122,6 +3122,12 @@ static void build_screens(void)
     /* ---- Editor screen ---- */
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, theme_bg(), 0);
+    /* Hide the scrollbar that LVGL would otherwise draw on the right
+     * edge of the screen when content (e.g. line labels) extends past
+     * the visible area. The editor manages its own scrolling via
+     * editor_set_scroll_line(), so the bar adds no value and is most
+     * visible on color LCDs that render it in the theme accent colour. */
+    lv_obj_set_scrollbar_mode(s_scr, LV_SCROLLBAR_MODE_OFF);
 
     /* Title bar */
     s_lbl_title = lv_label_create(s_scr);
