@@ -1,5 +1,5 @@
 #include "sdkconfig.h"
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
 
 /*
  * M5Stack PaperS3 e-paper display driver (thin shim over M5GFX).
@@ -517,4 +517,9 @@ extern "C" int display_get_buffer_size(void)
     return 0;
 }
 
-#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
+extern "C" void display_set_backlight(int /*percent*/)
+{
+    /* E-paper has no backlight. No-op. */
+}
+
+#endif /* CONFIG_DRAFTLING_DISPLAY_EPD */

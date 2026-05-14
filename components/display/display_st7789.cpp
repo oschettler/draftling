@@ -68,12 +68,9 @@ static const char *TAG = "DisplayST7789";
 #define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
 #define BL_LEDC_FREQ_HZ     5000
 
-static void backlight_pwm_init(int bl_pin, int percent)
+static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
 
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_LEDC_MODE;
@@ -89,9 +86,19 @@ static void backlight_pwm_init(int bl_pin, int percent)
     c.channel    = BL_LEDC_CHANNEL;
     c.timer_sel  = BL_LEDC_TIMER;
     c.intr_type  = LEDC_INTR_DISABLE;
-    c.duty       = duty;
+    c.duty       = 0;
     c.hpoint     = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&c));
+}
+
+extern "C" void display_set_backlight(int percent)
+{
+    if (s_bl_pin < 0) return;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+    ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
 }
 
 /* The i80 driver's PCLK ceiling depends on the GPIOs in use; 20 MHz
@@ -280,11 +287,12 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
         }
     }
 
-    /* Backlight on (after panel init so we don't show a black flash).
-     * Driven by LEDC PWM so DRAFTLING_BACKLIGHT_PERCENT controls the
-     * brightness. */
+    /* Backlight LEDC channel is configured here with duty 0 (off);
+     * the editor calls display_set_backlight() with the user-
+     * configured (NVS-persisted) percent after this returns, so we
+     * do not show a black/garbage flash. */
     if (s_bl_pin >= 0) {
-        backlight_pwm_init(s_bl_pin, CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
+        backlight_pwm_init(s_bl_pin);
     }
 
     /* Initial blank to avoid showing whatever junk was in panel RAM. */

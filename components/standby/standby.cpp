@@ -1,30 +1,15 @@
 /*
  * Standby / deep-sleep manager.
  *
- * Tracks user inactivity via an esp_timer.  When the configured
- * timeout expires the board enters deep sleep.
- *
- *  - Waveshare ESP32-S3-RLCD-4.2: wakes via EXT0 on GPIO18 (active-low).
- *    The RLCD is reflective, so screen content is retained visually.
- *  - M5Stack PaperS3: wakes via EXT0 on the BOOT button (GPIO0,
- *    active-low). Earlier revisions tried GPIO21 (wrong -- the on-board
- *    buzzer pin, floated low under some speaker-driver states and woke
- *    the device instantly) and GPIO48 (the GT911 touch INT). GPIO48
- *    also failed: M5GFX initializes only the e-paper panel, not the
- *    touch controller, so the GT911 is left uninitialized and holds
- *    its INT line low (the line doubles as I2C-address selection
- *    during reset), which fired GPIO_INTR_LOW_LEVEL immediately on
- *    every sleep attempt. GPIO0 is the only other digital input
- *    button on the PaperS3 (the hardware power switch is not a GPIO),
- *    is RTC-capable, and -- being an ESP32-S3 strapping pin with a
- *    board-level pull-up -- is guaranteed high while idle.
- *
- * The wake-up GPIO comes from app_config.h's WAKEUP_GPIO_NUM macro,
- * which is set per board.
+ * Tracks user inactivity via an esp_timer. When the configured
+ * timeout expires the board enters deep sleep and wakes via EXT0
+ * on the per-board RTC-capable GPIO selected by
+ * CONFIG_DRAFTLING_WAKEUP_GPIO in main/Kconfig.projbuild
+ * (active-low). This file is board-agnostic.
  *
  * The editor state lives in PSRAM/heap so it is lost on wake;
- * callers should auto-save before sleep.  The timeout value is persisted
- * in NVS.
+ * callers should auto-save before sleep. The timeout value is
+ * persisted in NVS.
  */
 
 #include <cstring>
@@ -50,23 +35,11 @@ static const char *TAG = "Standby";
 #define NVS_NAMESPACE  "standby"
 #define NVS_KEY_TOUT   "timeout"
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-/* GPIO used as EXT0 wake-up source (active-low) -- matches app_config.h */
-#define WAKEUP_GPIO    ((gpio_num_t)18)
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-/* PaperS3 BOOT button (active-low, RTC-capable). See header comment
- * for why GPIO48 (touch INT) and GPIO21 (buzzer) were rejected. */
-#define WAKEUP_GPIO    ((gpio_num_t)0)
-#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349) || \
-      defined(CONFIG_DRAFTLING_MODEL_JC3248W535) || \
-      defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
-/* Color-LCD boards (AXS15231B and ST7789): BOOT button on GPIO0
- * (active-low, RTC-capable strapping pin with board-level pull-up).
- * Matches WAKEUP_GPIO_NUM in main/app_config.h for these models. */
-#define WAKEUP_GPIO    ((gpio_num_t)0)
-#else
-#error "Unsupported hardware model: WAKEUP_GPIO not defined"
-#endif
+/* GPIO used as EXT0 wake-up source (active-low). The numeric value
+ * is selected per board in main/Kconfig.projbuild via the hidden
+ * DRAFTLING_WAKEUP_GPIO symbol so the standby code itself stays
+ * board-agnostic. */
+#define WAKEUP_GPIO    ((gpio_num_t)CONFIG_DRAFTLING_WAKEUP_GPIO)
 
 static uint32_t s_timeout_sec = STANDBY_DEFAULT_TIMEOUT_SEC;
 static esp_timer_handle_t s_timer = NULL;

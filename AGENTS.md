@@ -3,6 +3,21 @@
 ## Code Style
 
 - Do not use non-ASCII characters in code, comments, or string literals. All source files must be ASCII-only.
+- All board-specific configuration -- pin numbers, panel dimensions,
+  wakeup GPIOs, brand strings, etc. -- belongs in `main/Kconfig.projbuild`
+  and `main/app_config.h`. C and C++ files outside `main/` must NOT
+  reference specific board models (no `#if defined(CONFIG_DRAFTLING_MODEL_*)`,
+  no hard-coded board names). Use the derived feature flags
+  (`CONFIG_DRAFTLING_DISPLAY_EPD`, `CONFIG_DRAFTLING_DISPLAY_RLCD`,
+  `CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT`, `CONFIG_DRAFTLING_HAS_BATTERY`,
+  `CONFIG_DRAFTLING_SD_SDMMC`, `CONFIG_DRAFTLING_WAKEUP_GPIO`, etc.)
+  exposed by `main/Kconfig.projbuild` instead. To add a new model,
+  introduce a new `DRAFTLING_MODEL_*` choice option, set the matching
+  derived flags / `default` lines for the existing feature symbols,
+  add a per-board `#elif` block in `main/app_config.h` defining the
+  board's `BOARD_NAME`, pin numbers and `WAKEUP_GPIO_NUM`, and update
+  `main/main.cpp`'s display / SD init switch as needed -- no other
+  C / C++ file should require changes.
 
 ## Project Overview
 
@@ -143,7 +158,8 @@ so non-PaperS3 builds do not link it into the final image.)
 
 Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
 `display_flush()`, `display_full_refresh()`, `display_push_rgb565()`,
-`display_set_partial_clip()`, `display_get_buffer()`,
+`display_set_partial_clip()`, `display_set_backlight()`,
+`display_get_buffer()`,
 `display_get_buffer_size()`, `lvgl_port_init()`,
 `lvgl_port_lock()`, `lvgl_port_unlock()`.
 
@@ -162,6 +178,19 @@ The largest component. Contains:
   headings H1-H4, bullet and numbered lists, blockquotes, code fences,
   horizontal rules, and inline bold/italic/code/strikethrough spans.
 - **draftling_logo.c** -- embedded LVGL image for the splash screen.
+
+The F1 menu opens an in-line **Settings** list with: standby
+timeout, base font size, **Backlight** (NN%, only on boards with
+`CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT` -- the value is persisted
+in NVS under the `editor` namespace and applied at boot via
+`display_set_backlight()`; default 50%), color theme (only on
+`CONFIG_DRAFTLING_DISPLAY_COLOR`), sleep-now, factory reset and
+back. Picking a new color theme does NOT reboot the device:
+`rebuild_screens_for_theme()` deletes every screen / overlay /
+screen-bound timer, re-runs `init_styles()` under the new palette,
+calls `build_screens()` again and restores the screen the user was
+on. The persistent state (open document, NVS-backed font size /
+theme / backlight / standby timeout) survives the rebuild.
 
 Public API: `editor_init()`, `editor_open_file()`, `editor_save_file()`,
 `editor_ui_init()`, `editor_ui_handle_key()`, `editor_find()`,
@@ -230,15 +259,18 @@ and others.
 Monitors user inactivity and enters ESP32 deep sleep after a configurable
 timeout (default 600 seconds / 10 minutes). The timeout is persisted in
 NVS so it survives reboots. A pre-sleep callback allows the editor to
-auto-save before power-down. On the Waveshare RLCD board, wakeup is
-triggered by pressing the GPIO18 button (EXT0, active-low). On the
-M5Stack PaperS3 the wake source is the BOOT button on GPIO0 (EXT0,
-active-low) -- the only RTC-capable user-input GPIO on the board.
-Earlier revisions tried GPIO21 (wrong -- that's the buzzer) and
-GPIO48 (the GT911 touch INT) with a light-sleep + `esp_restart()`
+auto-save before power-down. The wake source is an EXT0 trigger on
+the per-board RTC-capable GPIO selected by `CONFIG_DRAFTLING_WAKEUP_GPIO`
+in `main/Kconfig.projbuild` (defaults: GPIO18 on Waveshare RLCD-4.2,
+GPIO0 / BOOT on every other board). The standby code itself is
+board-agnostic and never tests `DRAFTLING_MODEL_*` directly. On the
+M5Stack PaperS3, GPIO0 is used because earlier revisions tried
+GPIO21 (the on-board buzzer pin -- floated low under some
+speaker-driver states and woke the device instantly) and GPIO48
+(the GT911 touch INT) with a light-sleep + `esp_restart()`
 workaround; both woke the device immediately, the latter because
-M5GFX initializes only the e-paper panel (not the touch controller),
-so the GT911 is left uninitialized and holds INT low.
+M5GFX initializes only the e-paper panel (not the touch
+controller), so the GT911 is left uninitialized and holds INT low.
 
 Before arming EXT0, `standby_enter_sleep()` enables the chip's
 internal RTC pull-up on the wake GPIO and disables any pull-down.
@@ -382,8 +414,35 @@ per-model `default` lines on these symbols.
 
 #### E-paper full-refresh interval (DRAFTLING_EPD_FULL_REFRESH_INTERVAL)
 
-`int` used by the M5Stack PaperS3 (M5GFX backend) only. Number of
-partial refreshes between full refreshes; default 30.
+`int` used by e-paper backends only (gated on
+`DRAFTLING_DISPLAY_EPD`). Number of partial refreshes between
+full refreshes; default 30.
+
+#### Derived feature flags (no menuconfig prompt)
+
+The hardware-model choice also drives a set of hidden `bool` /
+`int` symbols that carry the user's board pick to every component
+without anyone needing to test individual `DRAFTLING_MODEL_*` ids
+in C / C++ code:
+
+| Symbol | Purpose | Set by |
+|--------|---------|--------|
+| DRAFTLING_DISPLAY_RLCD            | Selects `display_rlcd.cpp`        | RLCD-4.2 |
+| DRAFTLING_DISPLAY_EPD             | Selects `display_eds3.cpp`; gates EPD-only options (BLACK_BACKGROUND, full-refresh interval) and the editor's no-blink cursor / 120 ms flush debounce | PaperS3 |
+| DRAFTLING_DISPLAY_AXS15231B       | Selects `display_axs15231b.cpp`   | Touch-LCD-3.49, JC3248W535 |
+| DRAFTLING_DISPLAY_ST7789          | Selects `display_st7789.cpp`      | T-Display-S3 |
+| DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B + ST7789 boards |
+| DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings; calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards |
+| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, T-Display-S3 |
+| DRAFTLING_SD_SDMMC                | Routes SD init through the on-chip SDMMC peripheral (1-bit) instead of generic SPI | RLCD-4.2 |
+| DRAFTLING_WAKEUP_GPIO             | RTC-capable EXT0 wake-up GPIO; consumed by `components/standby/standby.cpp` | per-model defaults |
+
+Components MUST key off these derived symbols; they MUST NOT
+test `DRAFTLING_MODEL_*` directly. Adding a new model means
+adding new `default` lines to each of the symbols above (plus
+the width / height / rotate-default symbols), an `#elif` block
+in `main/app_config.h`, and the matching display / SD init
+branch in `main/main.cpp`.
 
 #### Display Rotation (DRAFTLING_DISPLAY_ROTATE)
 

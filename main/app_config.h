@@ -21,6 +21,7 @@
 
 #if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
 /* ----- Waveshare ESP32-S3-RLCD-4.2 ----- */
+#define BOARD_NAME      "Waveshare ESP32-S3-RLCD-4.2"
 
 /* RLCD Display - SPI interface */
 #define RLCD_MOSI_PIN   12
@@ -63,6 +64,7 @@
  * Pins listed below are the ones Draftling itself touches outside of
  * the display driver (SD card, wakeup, optional I2C).
  */
+#define BOARD_NAME      "M5Stack PaperS3"
 
 /* Onboard MicroSD on a dedicated SPI host (SPI3 - the EPD parallel bus
  * driven by M5GFX claims GPIO 6-18 plus 45/46 for its data/control
@@ -127,6 +129,7 @@
  *
  * Touch input (CST816 / I2C) is not used by Draftling.
  */
+#define BOARD_NAME          "Waveshare ESP32-S3-Touch-LCD-3.49"
 
 /* AXS15231B QSPI display interface */
 #define LCD_QSPI_CS_PIN     10
@@ -168,6 +171,7 @@
  *
  * Touch input (AXS5106L / I2C) is not used by Draftling.
  */
+#define BOARD_NAME          "Guition JC3248W535"
 
 /* AXS15231B QSPI display interface */
 #define LCD_QSPI_CS_PIN     45
@@ -222,6 +226,7 @@
  * will fail gracefully if no SD is connected and the editor falls
  * back to read-only with the "ERROR: SD card not ready" status.
  */
+#define BOARD_NAME      "LilyGO T-Display-S3"
 
 /* ST7789 8-bit parallel (i80) display interface */
 #define LCD_PWR_EN_PIN  15  /* gates the LCD's 3V3 rail; must be HIGH */

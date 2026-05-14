@@ -36,7 +36,7 @@ static void pre_sleep_autosave(void)
      * last position. No-op if no file is currently open. */
     editor_save_meta();
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* E-paper retains its image without power. Wipe the panel to a
      * clean white frame so the user does not see the editor frozen on
      * the display while the MCU is in deep sleep. We do this even when
@@ -68,17 +68,7 @@ static void pre_sleep_autosave(void)
 
 extern "C" void app_main(void)
 {
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
-    ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-RLCD-4.2");
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-    ESP_LOGI(TAG, "Draftling - M5Stack PaperS3");
-#elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
-    ESP_LOGI(TAG, "Draftling - Waveshare ESP32-S3-Touch-LCD-3.49");
-#elif defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
-    ESP_LOGI(TAG, "Draftling - Guition JC3248W535");
-#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
-    ESP_LOGI(TAG, "Draftling - LilyGO T-Display-S3");
-#endif
+    ESP_LOGI(TAG, "Draftling - %s", BOARD_NAME);
 
     /* Initialize NVS - required for WiFi and BT */
     esp_err_t ret = nvs_flash_init();
@@ -90,11 +80,11 @@ extern "C" void app_main(void)
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, -1,
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#elif defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* The PaperS3 driver is a thin shim over M5GFX which configures
      * all panel GPIOs internally based on the M5PaperS3 board id. We
      * still call display_init for API parity; pin parameters are
@@ -201,29 +191,19 @@ extern "C" void app_main(void)
     /* Initialize SD card */
     ESP_LOGI(TAG, "Initializing SD card...");
     esp_err_t sd_ret = ESP_FAIL;
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_SD_SDMMC)
+    /* Boards with the SD slot wired to the on-chip SDMMC peripheral
+     * (Waveshare RLCD-4.2). Uses 1-bit mode to keep the pin count
+     * down. */
     sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
-#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
-    /* PaperS3 has an on-board MicroSD on its own SPI3 bus. */
-    sd_ret = sd_card_init_spi(SPI3_HOST,
-                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
-                              SD_SPI_CS_PIN, SD_EN_PIN,
-                              SD_MOUNT_POINT);
-#elif defined(CONFIG_DRAFTLING_DISPLAY_AXS15231B)
-    /* The AXS15231B color-LCD boards (Waveshare 3.49, JC3248W535)
-     * carry the SD card on a SPI bus separate from the QSPI display
-     * bus (the display owns SPI2_HOST, so the SD slot uses SPI3). */
-    sd_ret = sd_card_init_spi(SPI3_HOST,
-                              SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
-                              SD_SPI_CS_PIN, SD_EN_PIN,
-                              SD_MOUNT_POINT);
-#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
-    /* T-Display-S3 has no on-board MicroSD slot. The SD_SPI_* pins
-     * defined in app_config.h describe a *recommended* external SD
-     * wiring on the back GPIO header (10/11/12/13). If no SD module
-     * is connected the call below fails harmlessly and the editor
-     * runs in read-only mode with the "ERROR: SD card not ready"
-     * status banner. */
+#else
+    /* Every other supported board carries the SD card on a generic
+     * SPI bus separate from the display:
+     *   - PaperS3:                on-board MicroSD on SPI3
+     *   - AXS15231B color LCDs:   SPI3 (display owns SPI2 QSPI)
+     *   - LilyGO T-Display-S3:    user-wired external SD on SPI3
+     * sd_card_init_spi() returns gracefully if no card is present
+     * (e.g. T-Display-S3 with no module wired). */
     sd_ret = sd_card_init_spi(SPI3_HOST,
                               SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_SCK_PIN,
                               SD_SPI_CS_PIN, SD_EN_PIN,

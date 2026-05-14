@@ -109,10 +109,28 @@ typedef struct {
     int te;       /* tearing-effect input, -1 if unused */
     int bl;       /* backlight enable, -1 if always-on / external.
                    * When >= 0 the backend drives this GPIO with LEDC
-                   * PWM at DRAFTLING_BACKLIGHT_PERCENT duty. */
+                   * PWM whose duty is set via display_set_backlight();
+                   * the editor's F1 -> Settings menu persists the
+                   * brightness in NVS. */
     int width;
     int height;
 } display_axs15231b_config_t;
+
+/*
+ * Set the LCD backlight brightness.
+ *
+ * percent is clamped to [0, 100]. 0 = backlight off, 100 = full
+ * brightness. The exact PWM frequency / resolution is backend-
+ * specific (LEDC PWM at ~5 kHz on the AXS15231B and ST7789
+ * backends).
+ *
+ * No-op on backends that have no controllable backlight
+ * (reflective LCD, e-paper). Boards whose displays expose a
+ * backlight set CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT in
+ * Kconfig.projbuild; the editor uses that flag to decide whether
+ * to show a "Backlight" entry in the F1 Settings menu.
+ */
+void display_set_backlight(int percent);
 
 void display_axs15231b_init(const display_axs15231b_config_t *cfg);
 
@@ -141,7 +159,8 @@ typedef struct {
     int rst;
     int bl;           /* backlight enable, -1 if always-on / external.
                        * When >= 0 the backend drives this GPIO with
-                       * LEDC PWM at DRAFTLING_BACKLIGHT_PERCENT duty. */
+                       * LEDC PWM whose duty is set via
+                       * display_set_backlight(). */
     int width;        /* logical (after rotation) panel width */
     int height;       /* logical (after rotation) panel height */
     int x_gap;        /* column offset on the controller (35 for T-Display-S3 in landscape) */

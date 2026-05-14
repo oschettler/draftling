@@ -71,11 +71,9 @@ static const char *TAG = "DisplayAXS";
 #define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
 #define BL_LEDC_FREQ_HZ     5000
 
-static void backlight_pwm_init(int bl_pin, int percent)
+static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
 
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_LEDC_MODE;
@@ -99,8 +97,9 @@ static void backlight_pwm_init(int bl_pin, int percent)
     ESP_ERROR_CHECK(ledc_channel_config(&c));
 }
 
-static void backlight_pwm_set_percent(int percent)
+extern "C" void display_set_backlight(int percent)
 {
+    if (s_bl_pin < 0) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
@@ -294,12 +293,12 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
         ESP_ERROR_CHECK(gpio_config(&g));
     }
     if (s_bl_pin >= 0) {
-        /* Backlight is driven by LEDC PWM so the user can dial the
-         * brightness with DRAFTLING_BACKLIGHT_PERCENT. Init the
-         * channel with duty 0 (off) here; we ramp it up to the
-         * configured brightness after the panel is fully
+        /* Backlight is driven by LEDC PWM. The LEDC channel is set
+         * up here with duty 0 (off); the editor calls
+         * display_set_backlight() with the user-configured
+         * (NVS-persisted) percent after the panel is fully
          * initialised, so there is no black/garbage flash. */
-        backlight_pwm_init(s_bl_pin, CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
+        backlight_pwm_init(s_bl_pin);
     }
     if (s_te_pin >= 0) {
         gpio_config_t g = {};
@@ -346,10 +345,10 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     hw_reset();
     axs15231b_init_sequence();
 
-    /* Backlight on at the user-configured brightness. */
-    if (s_bl_pin >= 0) {
-        backlight_pwm_set_percent(CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
-    }
+    /* Backlight LEDC channel is initialised in init() with duty 0;
+     * the editor calls display_set_backlight() once the user-
+     * configured (NVS-persisted) percent is loaded, so we do not
+     * push a default value here and avoid a black/garbage flash. */
 
     /* Initial blank to avoid showing whatever junk was in panel RAM. */
     display_clear(0x00);

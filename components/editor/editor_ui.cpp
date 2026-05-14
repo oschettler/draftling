@@ -93,6 +93,13 @@ static int s_char_w       = 6;
 /* Forward declaration (defined below) */
 static int char_width_for_font(const lv_font_t *font);
 
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+/* Forward declaration: tear down every screen / overlay and rebuild
+ * them under the freshly-selected color theme. Defined alongside
+ * the other init helpers near the bottom of this file. */
+static void rebuild_screens_for_theme(void);
+#endif
+
 /* Return the body font for the current size setting. */
 static const lv_font_t *body_font(void)
 {
@@ -221,6 +228,57 @@ static inline lv_color_t theme_bg(void)
 
 #endif  /* CONFIG_DRAFTLING_DISPLAY_COLOR */
 
+/* ---- Backlight setting ----
+ *
+ * Boards whose display backend exposes a controllable backlight
+ * (CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT) let the user pick a
+ * brightness percentage from F1 -> Settings. The selection is
+ * persisted in NVS and applied at boot (and immediately on change)
+ * via display_set_backlight().
+ *
+ * The available steps are coarse on purpose: a single Enter on the
+ * Settings list cycles through them, so finer granularity would be
+ * tedious to dial in. */
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+#define BACKLIGHT_OPTION_COUNT 5
+static const int BACKLIGHT_OPTIONS[BACKLIGHT_OPTION_COUNT] = {
+    10, 25, 50, 75, 100
+};
+
+#define NVS_KEY_BACKLIGHT "backlight"
+static int s_backlight_pct = 50;  /* default: 50 % */
+
+static void load_backlight_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, NVS_KEY_BACKLIGHT, &v) == ESP_OK && v <= 100) {
+            s_backlight_pct = v;
+        }
+        nvs_close(h);
+    }
+}
+
+static void save_backlight_to_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_BACKLIGHT, (uint8_t)s_backlight_pct);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static int find_backlight_option(int pct)
+{
+    for (int i = 0; i < BACKLIGHT_OPTION_COUNT; i++) {
+        if (BACKLIGHT_OPTIONS[i] == pct) return i;
+    }
+    return 2;  /* default to 50 % */
+}
+#endif  /* CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT */
+
 /* Recalculate derived layout values from the current body font. */
 static void recalc_layout(void)
 {
@@ -300,7 +358,7 @@ static bool      s_menu_open    = false;
 /* Number of menu items */
 #define MENU_ITEM_COUNT 8
 
-#if !defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if !defined(CONFIG_DRAFTLING_DISPLAY_EPD)
 static lv_timer_t *s_blink_timer = NULL;
 #endif
 static bool s_cursor_visible = true;
@@ -377,9 +435,7 @@ static bool s_esc_pending = false;
  * file browser. Each board defines this in app_config.h:
  *   - Waveshare RLCD-4.2:   GPIO4, 3:1 divider
  *   - M5Stack PaperS3:      GPIO3, 2:1 divider (no enable) */
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
 #define DRAFTLING_HAS_BATT_INDICATOR 1
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
@@ -518,7 +574,7 @@ static void init_styles(void)
     invalidate_render_cache();
 }
 
-#if !defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if !defined(CONFIG_DRAFTLING_DISPLAY_EPD)
 static void cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -530,9 +586,7 @@ static void cursor_blink_cb(lv_timer_t *timer)
 }
 #endif
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
 /* Build a battery level string for the status bar. */
 static void format_batt_str(char *buf, size_t len)
 {
@@ -581,7 +635,7 @@ static void update_title_bar(void)
     int line, col;
     editor_get_cursor_pos(&line, &col);
     int total_lines = editor_get_line_count();
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* On e-paper boards the cursor moves on every keystroke, so the
      * column counter is omitted to avoid dirtying the title bar on
      * every edit. The line counter ("L %d/%d") only changes when the
@@ -1326,21 +1380,32 @@ static int find_timeout_option(uint32_t sec)
  * Indices vary slightly between monochrome and color builds; on
  * color LCDs an extra "Color theme" item is inserted after the font
  * size. Use the SETTINGS_IDX_* constants instead of bare integers
- * everywhere downstream so the two layouts stay in lock-step. */
+ * everywhere downstream so the two layouts stay in lock-step.
+ *
+ * Backlight is gated separately on CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT
+ * so reflective-LCD / e-paper builds (no controllable backlight) skip
+ * the entry entirely. */
 #define SETTINGS_IDX_TIMEOUT  0
 #define SETTINGS_IDX_FONTSZ   1
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+#define SETTINGS_IDX_BACKLIGHT 2
+#define _SETTINGS_NEXT_AFTER_BACKLIGHT 3
+#else
+#define SETTINGS_IDX_BACKLIGHT (-1)
+#define _SETTINGS_NEXT_AFTER_BACKLIGHT 2
+#endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
-#define SETTINGS_IDX_THEME    2
-#define SETTINGS_IDX_SLEEP    3
-#define SETTINGS_IDX_RESET    4
-#define SETTINGS_IDX_BACK     5
-#define SETTINGS_ITEM_COUNT   6
+#define SETTINGS_IDX_THEME    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 0)
+#define SETTINGS_IDX_SLEEP    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 1)
+#define SETTINGS_IDX_RESET    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 2)
+#define SETTINGS_IDX_BACK     (_SETTINGS_NEXT_AFTER_BACKLIGHT + 3)
+#define SETTINGS_ITEM_COUNT   (_SETTINGS_NEXT_AFTER_BACKLIGHT + 4)
 #else
 #define SETTINGS_IDX_THEME    (-1)
-#define SETTINGS_IDX_SLEEP    2
-#define SETTINGS_IDX_RESET    3
-#define SETTINGS_IDX_BACK     4
-#define SETTINGS_ITEM_COUNT   5
+#define SETTINGS_IDX_SLEEP    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 0)
+#define SETTINGS_IDX_RESET    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 1)
+#define SETTINGS_IDX_BACK     (_SETTINGS_NEXT_AFTER_BACKLIGHT + 2)
+#define SETTINGS_ITEM_COUNT   (_SETTINGS_NEXT_AFTER_BACKLIGHT + 3)
 #endif
 
 static void refresh_settings_items(void)
@@ -1365,6 +1430,12 @@ static void refresh_settings_items(void)
                  FONT_SIZE_LABELS[fi]);
         lv_list_add_btn(s_settings_list, NULL, buf);
     }
+
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+    /* Backlight brightness (LCD boards with a controllable backlight) */
+    snprintf(buf, sizeof(buf), "Backlight: %d%%", s_backlight_pct);
+    lv_list_add_btn(s_settings_list, NULL, buf);
+#endif
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     /* Color theme (color LCDs only) */
@@ -1479,12 +1550,23 @@ static void settings_activate_item(int idx)
         save_font_size_to_nvs();
         init_styles();
         refresh_settings_items();
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+    } else if (idx == SETTINGS_IDX_BACKLIGHT) {
+        /* Cycle to next backlight brightness step. Apply immediately
+         * so the user sees the change without leaving the menu. */
+        int bi = find_backlight_option(s_backlight_pct);
+        bi = (bi + 1) % BACKLIGHT_OPTION_COUNT;
+        s_backlight_pct = BACKLIGHT_OPTIONS[bi];
+        save_backlight_to_nvs();
+        display_set_backlight(s_backlight_pct);
+        refresh_settings_items();
+#endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     } else if (idx == SETTINGS_IDX_THEME) {
         /* Open the theme picker sub-list. The user navigates with
          * Up/Down and confirms with Enter; only on Enter is the new
-         * theme persisted and the device restarted to re-style every
-         * widget. Esc returns to the settings list without changes. */
+         * theme persisted and the screens rebuilt. Esc returns to
+         * the settings list without changes. */
         s_theme_picker_open = true;
         s_theme_picker_sel = s_theme_idx;
         refresh_theme_picker_items();
@@ -1531,13 +1613,21 @@ static void handle_settings_key(const kb_event_t *ev)
                 s_theme_picker_sel < COLOR_THEME_COUNT) {
                 /* Apply the selected theme. The theme drives the bg
                  * color of every screen and the text color of dozens
-                 * of widgets configured at create time, so the simplest
-                 * reliable way to repaint is to persist + reboot. */
+                 * of widgets configured at create time, so we tear
+                 * the screens down and rebuild them in place against
+                 * the new palette -- no esp_restart() required. */
                 if (s_theme_picker_sel != s_theme_idx) {
                     s_theme_idx = s_theme_picker_sel;
                     save_theme_to_nvs();
-                    esp_restart();
-                    /* does not return */
+                    /* close_theme_picker() restores the regular
+                     * settings list state; rebuild_screens_for_theme()
+                     * then deletes every screen (including the one
+                     * holding s_settings_list) and re-creates them
+                     * under the new theme, restoring the user's
+                     * current screen at the end. */
+                    close_theme_picker();
+                    rebuild_screens_for_theme();
+                    return;
                 }
                 /* No change -> just close the picker. */
                 close_theme_picker();
@@ -2106,7 +2196,7 @@ static void handle_search_prompt_key(const kb_event_t *ev)
 
 /* ---- Keyboard handler (registered as BLE callback) ---- */
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
 /* Information captured before a key event is processed, used by
  * try_partial_clip_for_typing() to decide whether the next e-paper
  * refresh can be narrowed to just the area around the typed
@@ -2239,9 +2329,9 @@ static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
     display_set_partial_clip(x_min, pre->cur_y, x_max - x_min, pre->cur_h);
     return true;
 }
-#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
+#endif /* CONFIG_DRAFTLING_DISPLAY_EPD */
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
 /* RAII guard that runs the partial-clip post-processing on every
  * return path of handle_editor_key (including the F1 / Ctrl+? / Esc
  * early returns). Without this, a typing event in one drain batch
@@ -2260,14 +2350,14 @@ struct ClipGuard {
         if (!clipped) display_set_partial_clip(0, 0, 0, 0);
     }
 };
-#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3 */
+#endif /* CONFIG_DRAFTLING_DISPLAY_EPD */
 
 static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
     bool shift = (ev->modifier & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* Snapshot before-edit state for the partial-refresh fast path,
      * and ensure the clip is updated (set or cleared) on every
      * return path. */
@@ -2368,7 +2458,7 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         case 'r':
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
              * artefacts left over from partial refreshes. */
@@ -2452,7 +2542,7 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_BACKSPACE:
         if (!editor_delete_selection()) {
             editor_delete_back();
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
             fast_path_eligible = true;
 #endif
         }
@@ -2460,7 +2550,7 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_DELETE:
         if (!editor_delete_selection()) {
             editor_delete_forward();
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
             fast_path_eligible = true;
 #endif
         }
@@ -2500,7 +2590,7 @@ static void handle_editor_key(const kb_event_t *ev)
             editor_delete_selection();
             if (!editor_insert_text(text, strlen(text)))
                 editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
             /* The fast-path clip only handles edits that started
              * without a selection -- replacing a selection
              * potentially repaints multiple lines. */
@@ -2563,7 +2653,7 @@ static void handle_browser_key(const kb_event_t *ev)
             }
             return;
         }
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         if (ck == 'r') {
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
              * artefacts left over from partial refreshes. */
@@ -3019,21 +3109,16 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
 
 /* ---- Initialization ---- */
 
-extern "C" void editor_ui_init(void)
+/* Build (or rebuild) every LVGL screen, overlay and timer that
+ * displays the current theme. Called from editor_ui_init() at boot
+ * and again from rebuild_screens_for_theme() after a theme change.
+ *
+ * Pre-condition: init_styles() has already been called so theme_fg()
+ * / theme_bg() reflect the desired palette, and any previously-built
+ * screens / overlays / timers have been deleted with their pointers
+ * NULLed. */
+static void build_screens(void)
 {
-    load_font_size_from_nvs();
-#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
-    load_theme_from_nvs();
-#endif
-    init_styles();
-
-    /* Create key-event queue (must exist before BLE callback is set) */
-    s_key_queue = xQueueCreate(KEY_QUEUE_LEN, sizeof(kb_event_t));
-    assert(s_key_queue);
-
-    /* Editor init */
-    editor_init();
-
     /* ---- Editor screen ---- */
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, theme_bg(), 0);
@@ -3122,9 +3207,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_color(s_lbl_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_status, EDITOR_DEFAULT_STATUS);
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
     /* Device battery label (right-aligned in editor status bar) */
     s_lbl_dev_batt = lv_label_create(s_scr);
     lv_obj_set_style_text_font(s_lbl_dev_batt, FONT_11, 0);
@@ -3163,17 +3246,12 @@ extern "C" void editor_ui_init(void)
      * twice per second, which is both visually distracting and bad
      * for the panel. Keep the cursor solid (always visible) on EPD
      * targets; only the reflective LCD blinks. */
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     s_cursor_visible = true;
     if (s_cursor) lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 #else
     s_blink_timer = lv_timer_create(cursor_blink_cb, 500, NULL);
 #endif
-
-    /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
-     * queued keyboard events in a batch.  This decouples BLE input
-     * from the LVGL render cycle so fast typing never drops keys. */
-    s_key_drain_timer = lv_timer_create(key_drain_cb, KEY_DRAIN_PERIOD_MS, NULL);
 
     /* ---- File browser screen ---- */
     s_scr_browser = lv_obj_create(NULL);
@@ -3216,9 +3294,7 @@ extern "C" void editor_ui_init(void)
     lv_obj_set_style_text_color(s_lbl_br_status, theme_fg(), 0);
     lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  Ctrl+G:Git  Ctrl+W:WiFi");
 
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42) || \
-    defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
     /* Device battery label (right-aligned in browser status bar) */
     s_lbl_br_dev_batt = lv_label_create(s_scr_browser);
     lv_obj_set_style_text_font(s_lbl_br_dev_batt, FONT_11, 0);
@@ -3470,6 +3546,141 @@ extern "C" void editor_ui_init(void)
 
     /* Start on BLE prompt screen (transitions to file browser on connect) */
     lv_scr_load(s_scr_ble_prompt);
+}
+
+/* Tear down every screen, overlay and screen-bound timer that was
+ * created by build_screens() so the next build_screens() call can
+ * recreate them in a fresh theme. Runs on the LVGL task with the
+ * port lock held (caller is a key-event handler). */
+static void teardown_screens(void)
+{
+    /* Stop and forget the screen-bound timers first. */
+    if (s_blink_timer)     { lv_timer_delete(s_blink_timer);     s_blink_timer     = NULL; }
+    if (s_batt_timer)      { lv_timer_delete(s_batt_timer);      s_batt_timer      = NULL; }
+    if (s_repeat_timer)    { lv_timer_delete(s_repeat_timer);    s_repeat_timer    = NULL; }
+    if (s_status_clear_timer) {
+        lv_timer_delete(s_status_clear_timer);
+        s_status_clear_timer = NULL;
+    }
+
+    /* Delete every top-level screen we created. Children (status
+     * bars, line labels, selection rects, the passkey / save /
+     * search overlays parented to s_scr, the wifi icons, etc.) are
+     * deleted automatically with their parent. */
+    if (s_scr_browser)    { lv_obj_delete(s_scr_browser);    s_scr_browser    = NULL; }
+    if (s_scr_menu)       { lv_obj_delete(s_scr_menu);       s_scr_menu       = NULL; }
+    if (s_scr_settings)   { lv_obj_delete(s_scr_settings);   s_scr_settings   = NULL; }
+    if (s_scr_ble_prompt) { lv_obj_delete(s_scr_ble_prompt); s_scr_ble_prompt = NULL; }
+    if (s_scr)            { lv_obj_delete(s_scr);            s_scr            = NULL; }
+
+    /* NULL every child-widget pointer so any stale reference
+     * crashes deterministically instead of touching freed memory. */
+    s_lbl_title = s_cont_edit = s_lbl_status = s_cursor = NULL;
+    s_img_logo = s_img_wifi = s_img_br_wifi = NULL;
+    s_list_files = s_lbl_br_status = NULL;
+    s_lbl_dev_batt = s_lbl_br_dev_batt = NULL;
+    s_menu_list = s_lbl_menu_hdr = NULL;
+    s_settings_list = NULL;
+    s_ble_prompt_lbl = NULL;
+    s_passkey_panel = s_passkey_label = NULL;
+    s_save_panel = s_save_hdr_lbl = s_save_name_lbl = s_save_cur = NULL;
+    s_search_panel = s_search_hdr_lbl = NULL;
+    s_search_find_hdr = s_search_find_lbl = NULL;
+    s_search_repl_hdr = s_search_repl_lbl = NULL;
+    s_search_cur = s_search_help_lbl = NULL;
+    for (int i = 0; i < MAX_LINE_LABELS; i++) {
+        s_line_labels[i] = NULL;
+        s_sel_rects[i]   = NULL;
+    }
+
+    /* Reset every "open" / transient flag so a fresh build starts
+     * from a clean state. The persistent document, NVS-backed font
+     * size / theme / backlight / standby timeout are NOT touched. */
+    s_menu_open               = false;
+    s_settings_open           = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    s_theme_picker_open       = false;
+#endif
+    s_factory_reset_confirm   = false;
+    s_save_open               = false;
+    s_search_open             = false;
+    s_search_replace_mode     = false;
+
+    /* The editor render cache references the deleted line labels;
+     * wipe it so the next refresh re-creates fresh slots. */
+    invalidate_render_cache();
+}
+
+/* Apply a freshly-selected color theme without rebooting. Recreates
+ * every LVGL screen and widget under the new palette and restores
+ * the screen the user was on. */
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+static void rebuild_screens_for_theme(void)
+{
+    /* Remember which screen the user is on so we can restore it. */
+    lv_obj_t *prev_active = lv_scr_act();
+    bool was_browser     = (prev_active == s_scr_browser);
+    bool was_menu        = (prev_active == s_scr_menu);
+    bool was_settings    = (prev_active == s_scr_settings);
+    bool was_ble_prompt  = (prev_active == s_scr_ble_prompt);
+    bool was_editor      = (prev_active == s_scr);
+    /* If lv_scr_act returned something we did not recognise (should
+     * not happen) fall back to the editor screen. */
+    if (!was_browser && !was_menu && !was_settings &&
+        !was_ble_prompt && !was_editor) {
+        was_editor = true;
+    }
+
+    teardown_screens();
+    init_styles();
+    build_screens();
+
+    /* Restore the previously-active screen and re-paint its content. */
+    if (was_browser) {
+        refresh_file_list();
+        lv_scr_load(s_scr_browser);
+    } else if (was_menu) {
+        show_menu();        /* refreshes items + loads s_scr_menu */
+    } else if (was_settings) {
+        show_settings();    /* refreshes items + loads s_scr_settings */
+    } else if (was_ble_prompt) {
+        lv_scr_load(s_scr_ble_prompt);
+    } else {
+        lv_scr_load(s_scr);
+        editor_ui_refresh();
+    }
+    update_title_bar();
+    update_wifi_icons();
+}
+#endif
+
+extern "C" void editor_ui_init(void)
+{
+    load_font_size_from_nvs();
+#if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
+    load_theme_from_nvs();
+#endif
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+    load_backlight_from_nvs();
+    display_set_backlight(s_backlight_pct);
+#endif
+    init_styles();
+
+    /* Create key-event queue (must exist before BLE callback is set) */
+    s_key_queue = xQueueCreate(KEY_QUEUE_LEN, sizeof(kb_event_t));
+    assert(s_key_queue);
+
+    /* Editor init */
+    editor_init();
+
+    /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
+     * queued keyboard events in a batch. This decouples BLE input
+     * from the LVGL render cycle so fast typing never drops keys.
+     * Created here (not in build_screens) so a theme rebuild does
+     * not destroy the timer that owns the rebuild's own call stack. */
+    s_key_drain_timer = lv_timer_create(key_drain_cb, KEY_DRAIN_PERIOD_MS, NULL);
+
+    build_screens();
 
     ESP_LOGI(TAG, "Editor UI initialized");
 }

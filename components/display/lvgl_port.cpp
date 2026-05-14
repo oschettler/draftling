@@ -124,7 +124,7 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     }
     lv_display_set_rotation(disp, rot);
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3) || \
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD) || \
     defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     /* PaperS3 / M5GFX path: use PARTIAL render mode so flush_cb is
      * called once per invalidated rectangle with a tightly-packed

@@ -84,6 +84,70 @@ config DRAFTLING_DISPLAY_ST7789
     default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     default n
 
+# DRAFTLING_DISPLAY_RLCD is set automatically when the selected
+# board uses a Waveshare reflective-LCD panel driven over SPI by
+# the display_rlcd.cpp backend. Code that is specific to this
+# backend (the file-level guard in display_rlcd.cpp, etc.) keys
+# off this symbol instead of the model id.
+config DRAFTLING_DISPLAY_RLCD
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default n
+
+# DRAFTLING_DISPLAY_EPD is set automatically when the selected
+# board has an electronic-paper panel. Code that has to be aware
+# of e-paper specifics (slow refresh, no blinking cursor, white-on-
+# sleep wipe, partial-refresh interval, etc.) keys off this
+# symbol instead of the model id so adding a new e-paper board
+# does not require touching every consumer.
+config DRAFTLING_DISPLAY_EPD
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default n
+
+# DRAFTLING_DISPLAY_HAS_BACKLIGHT is set automatically on boards
+# whose display backend drives a controllable backlight GPIO via
+# LEDC PWM. The editor exposes a "Backlight" entry in the F1
+# Settings menu (persisted in NVS) on these boards only.
+config DRAFTLING_DISPLAY_HAS_BACKLIGHT
+    bool
+    default y if DRAFTLING_DISPLAY_AXS15231B
+    default y if DRAFTLING_DISPLAY_ST7789
+    default n
+
+# DRAFTLING_HAS_BATTERY is set automatically on boards that wire
+# the LiPo cell through a divider to an ADC pin (BATT_ADC_PIN >= 0
+# in app_config.h). Used by the editor UI to decide whether to
+# create the battery-percentage status-bar label and timer, instead
+# of testing every model id individually.
+config DRAFTLING_HAS_BATTERY
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
+    default n
+
+# DRAFTLING_SD_SDMMC selects the on-chip SDMMC peripheral (1-bit
+# mode) for SD card access. When unset, SD access goes through a
+# generic SPI bus. Used by main.cpp's SD-init branch instead of
+# testing per-board model ids.
+config DRAFTLING_SD_SDMMC
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default n
+# the EXT0 deep-sleep wake source. Selected here so the standby
+# component does not need to test individual model ids. The matching
+# WAKEUP_GPIO_NUM macro in main/app_config.h is kept in lock-step
+# for any code that includes app_config.h directly.
+config DRAFTLING_WAKEUP_GPIO
+    int
+    default 18 if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default 0  if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default 0  if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default 0  if DRAFTLING_MODEL_JC3248W535
+    default 0  if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
+    default 0
+
 config DRAFTLING_DISPLAY_WIDTH
     int
     range 64 1024
@@ -163,30 +227,9 @@ config DRAFTLING_DISPLAY_SCALE
         NOT re-applied automatically -- delete sdkconfig (or set the
         value here by hand) to pick up the new default.
 
-config DRAFTLING_BACKLIGHT_PERCENT
-    int "LCD backlight brightness (%)"
-    depends on DRAFTLING_DISPLAY_AXS15231B || DRAFTLING_DISPLAY_ST7789
-    range 0 100
-    default 75
-    help
-        Brightness of the LCD backlight, in percent of the maximum
-        duty cycle. The display backend drives the backlight GPIO
-        with an LEDC PWM signal (~5 kHz, 10-bit resolution) at this
-        duty so the user can dial the screen down to a comfortable
-        level and save battery.
-
-        Boards with a controllable backlight GPIO:
-          - Waveshare ESP32-S3-Touch-LCD-3.49 (AXS15231B, GPIO 2)
-          - Guition JC3248W535 (AXS15231B, GPIO 1)
-          - LilyGO T-Display-S3 (ST7789, GPIO 38)
-
-        0 = backlight off (screen is unreadable), 100 = full
-        brightness. Default 75 is a comfortable level for indoor
-        use on all supported color boards.
-
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
-    depends on DRAFTLING_MODEL_M5STACK_PAPERS3
+    depends on DRAFTLING_DISPLAY_EPD
     range 1 1000
     default 30
     help
@@ -202,7 +245,7 @@ config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
 
 config DRAFTLING_EPD_BLACK_BACKGROUND
     bool "Black background (white text on black)"
-    depends on DRAFTLING_MODEL_M5STACK_PAPERS3
+    depends on DRAFTLING_DISPLAY_EPD
     default n
     help
         When enabled, the editor renders white text on a black

@@ -1,5 +1,5 @@
 #include "sdkconfig.h"
-#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42)
+#if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
 
 #include <cstdio>
 #include <cstring>
@@ -218,4 +218,9 @@ extern "C" void display_set_partial_clip(int /*x*/, int /*y*/,
      * region to clip. No-op. */
 }
 
-#endif /* CONFIG_DRAFTLING_MODEL_WAVESHARE_RLCD42 */
+extern "C" void display_set_backlight(int /*percent*/)
+{
+    /* The reflective LCD has no backlight. No-op. */
+}
+
+#endif /* CONFIG_DRAFTLING_DISPLAY_RLCD */
