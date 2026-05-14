@@ -132,6 +132,18 @@ static int s_height = 0;
 static uint16_t *s_fb = NULL;
 static size_t    s_fb_pixels = 0;
 
+/* Logical-to-panel pixel scale. Read from Kconfig at compile time.
+ * Each logical LVGL pixel is rendered as SCALE x SCALE physical
+ * panel pixels via nearest-neighbor expansion in display_push_rgb565().
+ * LVGL renders into a logical canvas of size (s_width / SCALE) by
+ * (s_height / SCALE), so without this scaling the LVGL output would
+ * occupy only the top-left 1/SCALE^2 of the panel. */
+#ifdef CONFIG_DRAFTLING_DISPLAY_SCALE
+#define ST7789_SCALE CONFIG_DRAFTLING_DISPLAY_SCALE
+#else
+#define ST7789_SCALE 1
+#endif
+
 /* Accumulated dirty bounding box (inclusive) since the last flush.
  * (-1, -1, -1, -1) means clean. */
 static int s_dirty_x1 = -1;
@@ -322,46 +334,93 @@ extern "C" void display_clear(uint8_t color)
 
 extern "C" void display_set_pixel(uint16_t x, uint16_t y, uint8_t color)
 {
-    if (x >= s_width || y >= s_height) return;
-    s_fb[(size_t)y * s_width + x] = (color == 0) ? 0x0000 : 0xFFFF;
+    /* Caller passes *logical* coordinates; expand to a SCALE x SCALE
+     * block of panel pixels to match display_push_rgb565(). */
+    int px = (int)x * ST7789_SCALE;
+    int py = (int)y * ST7789_SCALE;
+    if (px >= s_width || py >= s_height) return;
+    uint16_t v = (color == 0) ? 0x0000 : 0xFFFF;
+    int x_end = px + ST7789_SCALE; if (x_end > s_width)  x_end = s_width;
+    int y_end = py + ST7789_SCALE; if (y_end > s_height) y_end = s_height;
+    for (int yy = py; yy < y_end; yy++) {
+        uint16_t *row = s_fb + (size_t)yy * s_width + px;
+        for (int xx = px; xx < x_end; xx++) *row++ = v;
+    }
 
+    int x2 = x_end - 1;
+    int y2 = y_end - 1;
     if (s_dirty_x1 < 0) {
-        s_dirty_x1 = s_dirty_x2 = x;
-        s_dirty_y1 = s_dirty_y2 = y;
+        s_dirty_x1 = px;  s_dirty_y1 = py;
+        s_dirty_x2 = x2;  s_dirty_y2 = y2;
     } else {
-        if ((int)x < s_dirty_x1) s_dirty_x1 = x;
-        if ((int)x > s_dirty_x2) s_dirty_x2 = x;
-        if ((int)y < s_dirty_y1) s_dirty_y1 = y;
-        if ((int)y > s_dirty_y2) s_dirty_y2 = y;
+        if (px < s_dirty_x1) s_dirty_x1 = px;
+        if (x2 > s_dirty_x2) s_dirty_x2 = x2;
+        if (py < s_dirty_y1) s_dirty_y1 = py;
+        if (y2 > s_dirty_y2) s_dirty_y2 = y2;
     }
 }
 
 extern "C" bool display_push_rgb565(int x, int y, int w, int h,
                                     const void *color_map)
 {
-    if (x < 0 || y < 0 || w <= 0 || h <= 0) return true;
-    int x2 = x + w - 1;
-    int y2 = y + h - 1;
+    if (w <= 0 || h <= 0) return true;
+    /* Caller passes *logical* coordinates and a tightly-packed
+     * (logical w * logical h) RGB565 buffer. Nearest-neighbor expand
+     * each source pixel into a SCALE x SCALE panel-pixel block in the
+     * framebuffer. */
+    int px = x * ST7789_SCALE;
+    int py = y * ST7789_SCALE;
+    int pw = w * ST7789_SCALE;
+    int ph = h * ST7789_SCALE;
+    if (px < 0 || py < 0) return true;
+    int x2 = px + pw - 1;
+    int y2 = py + ph - 1;
     if (x2 >= s_width)  x2 = s_width  - 1;
     if (y2 >= s_height) y2 = s_height - 1;
-    int eff_w = x2 - x + 1;
-    int eff_h = y2 - y + 1;
+    int eff_w = x2 - px + 1;
+    int eff_h = y2 - py + 1;
     if (eff_w <= 0 || eff_h <= 0) return true;
 
     const uint16_t *src = (const uint16_t *)color_map;
-    for (int row = 0; row < eff_h; row++) {
-        uint16_t *dst = s_fb + (size_t)(y + row) * s_width + x;
-        memcpy(dst, src, eff_w * sizeof(uint16_t));
-        src += w;  /* caller-supplied stride is the original w */
+    if (ST7789_SCALE == 1) {
+        for (int row = 0; row < eff_h; row++) {
+            uint16_t *dst = s_fb + (size_t)(py + row) * s_width + px;
+            memcpy(dst, src, eff_w * sizeof(uint16_t));
+            src += w;
+        }
+    } else {
+        /* Expand each source row into one panel row, then memcpy-replicate
+         * (ST7789_SCALE - 1) more times. */
+        for (int sy = 0; sy < h; sy++) {
+            int dy0 = py + sy * ST7789_SCALE;
+            if (dy0 >= s_height) break;
+            uint16_t *drow0 = s_fb + (size_t)dy0 * s_width + px;
+            int eff_w_row = eff_w;
+            uint16_t *p = drow0;
+            int written = 0;
+            for (int sx = 0; sx < w && written < eff_w_row; sx++) {
+                uint16_t v = src[(size_t)sy * w + sx];
+                for (int k = 0; k < ST7789_SCALE && written < eff_w_row; k++) {
+                    *p++ = v;
+                    written++;
+                }
+            }
+            for (int k = 1; k < ST7789_SCALE; k++) {
+                int dy = dy0 + k;
+                if (dy >= s_height) break;
+                memcpy(s_fb + (size_t)dy * s_width + px, drow0,
+                       (size_t)eff_w_row * sizeof(uint16_t));
+            }
+        }
     }
 
     if (s_dirty_x1 < 0) {
-        s_dirty_x1 = x;  s_dirty_y1 = y;
-        s_dirty_x2 = x2; s_dirty_y2 = y2;
+        s_dirty_x1 = px;  s_dirty_y1 = py;
+        s_dirty_x2 = x2;  s_dirty_y2 = y2;
     } else {
-        if (x  < s_dirty_x1) s_dirty_x1 = x;
+        if (px < s_dirty_x1) s_dirty_x1 = px;
         if (x2 > s_dirty_x2) s_dirty_x2 = x2;
-        if (y  < s_dirty_y1) s_dirty_y1 = y;
+        if (py < s_dirty_y1) s_dirty_y1 = py;
         if (y2 > s_dirty_y2) s_dirty_y2 = y2;
     }
     return true;
@@ -373,7 +432,12 @@ extern "C" void display_set_partial_clip(int x, int y, int w, int h)
         s_clip_w = s_clip_h = 0;
         return;
     }
-    s_clip_x = x; s_clip_y = y; s_clip_w = w; s_clip_h = h;
+    /* Caller passes *logical* coordinates; the dirty bbox and the
+     * panel-write window operate in panel pixels, so scale up. */
+    s_clip_x = x * ST7789_SCALE;
+    s_clip_y = y * ST7789_SCALE;
+    s_clip_w = w * ST7789_SCALE;
+    s_clip_h = h * ST7789_SCALE;
 }
 
 extern "C" void display_flush(void)

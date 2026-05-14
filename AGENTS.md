@@ -460,9 +460,11 @@ in *logical* coordinates (panel size divided by SCALE); only the
 display backend deals in physical panel pixels. Defaults: 2 for the
 M5Stack PaperS3 (so the high-density 540x960 panel renders Greybeard
 text at a comfortably readable size), 1 for every other board.
-Currently only the `display_eds3` backend implements the up-scaling;
-on the RLCD backend a value > 1 has no visible effect because the
-LVGL framebuffer already matches the panel size.
+Currently the `display_eds3` (PaperS3 e-paper), `display_axs15231b`
+(Touch-LCD-3.49 / JC3248W535) and `display_st7789` (T-Display-S3)
+backends implement the up-scaling; on the RLCD backend a value > 1
+has no visible effect because the LVGL framebuffer already matches
+the panel size.
 
 Because the symbol is prompted, its value is sticky in `sdkconfig`:
 switching `DRAFTLING_HARDWARE_MODEL` does NOT re-apply the per-model
