@@ -135,6 +135,8 @@ config DRAFTLING_SD_SDMMC
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default n
+
+# DRAFTLING_WAKEUP_GPIO is the per-board RTC-capable GPIO used as
 # the EXT0 deep-sleep wake source. Selected here so the standby
 # component does not need to test individual model ids. The matching
 # WAKEUP_GPIO_NUM macro in main/app_config.h is kept in lock-step
