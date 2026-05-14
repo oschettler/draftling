@@ -71,6 +71,11 @@ static const char *TAG = "DisplayAXS";
 #define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
 #define BL_LEDC_FREQ_HZ     5000
 
+/* Backlight GPIO captured at init(); declared here so
+ * display_set_backlight() (below) can reference it before the rest
+ * of the static state is defined further down. */
+static int s_bl_pin = -1;
+
 static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
@@ -125,7 +130,8 @@ static int s_width  = 0;
 static int s_height = 0;
 static int s_rst_pin = -1;
 static int s_te_pin  = -1;
-static int s_bl_pin  = -1;
+/* s_bl_pin is defined near the top of this file. */
+
 
 /* RGB565 framebuffer (host-side). uint16_t in little-endian; we send
  * it byte-swapped to match the panel's big-endian RGB565 wire format. */

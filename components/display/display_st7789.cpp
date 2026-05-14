@@ -68,6 +68,11 @@ static const char *TAG = "DisplayST7789";
 #define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
 #define BL_LEDC_FREQ_HZ     5000
 
+/* Backlight GPIO captured at init(); forward-declared here so
+ * display_set_backlight() (below) can reference it before the rest
+ * of the static state is defined further down. */
+static int s_bl_pin = -1;
+
 static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
@@ -118,7 +123,8 @@ static esp_lcd_panel_io_handle_t s_io     = NULL;
 static esp_lcd_panel_handle_t    s_panel  = NULL;
 static int s_width  = 0;
 static int s_height = 0;
-static int s_bl_pin = -1;
+/* s_bl_pin is defined near the top of this file (above
+ * display_set_backlight); kept logically with the other s_* state. */
 
 /* RGB565 framebuffer (host-side). uint16_t in little-endian; the
  * esp_lcd ST7789 driver swaps to the panel's wire format internally
