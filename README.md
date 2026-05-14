@@ -185,6 +185,7 @@ Found at the top-level **DRAFTLING Configuration** menu.
 | -- M5Stack PaperS3 | | | 4.7" e-paper, ED047TC1, 540x960 (driver via m5stack/M5GFX) |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
 | **E-paper full-refresh interval** | int | 30 | M5Stack PaperS3 only: number of partial refreshes between full refreshes. |
+| **LCD backlight brightness (%)** | int | 75 | Color-LCD boards only (AXS15231B, ST7789): backlight PWM duty in percent. The backend drives the BL GPIO with an LEDC PWM signal (~5 kHz, 10-bit). 0 = off, 100 = full brightness. |
 
 > **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the
 > single-pulse `epd_fast` waveform for partial refreshes (one visible

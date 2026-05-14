@@ -107,7 +107,9 @@ typedef struct {
     int d3;
     int rst;
     int te;       /* tearing-effect input, -1 if unused */
-    int bl;       /* backlight enable, -1 if always-on */
+    int bl;       /* backlight enable, -1 if always-on / external.
+                   * When >= 0 the backend drives this GPIO with LEDC
+                   * PWM at DRAFTLING_BACKLIGHT_PERCENT duty. */
     int width;
     int height;
 } display_axs15231b_config_t;
@@ -137,7 +139,9 @@ typedef struct {
     int dc;           /* data/command select */
     int cs;
     int rst;
-    int bl;           /* backlight enable, -1 if always-on / external */
+    int bl;           /* backlight enable, -1 if always-on / external.
+                       * When >= 0 the backend drives this GPIO with
+                       * LEDC PWM at DRAFTLING_BACKLIGHT_PERCENT duty. */
     int width;        /* logical (after rotation) panel width */
     int height;       /* logical (after rotation) panel height */
     int x_gap;        /* column offset on the controller (35 for T-Display-S3 in landscape) */

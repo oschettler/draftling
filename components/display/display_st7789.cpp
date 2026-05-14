@@ -48,6 +48,7 @@
 #include <esp_heap_caps.h>
 #include <esp_attr.h>
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_ops.h>
@@ -55,6 +56,43 @@
 #include "display.h"
 
 static const char *TAG = "DisplayST7789";
+
+/* LEDC PWM configuration for the backlight. We keep timer 0 / channel
+ * 0 dedicated to the LCD backlight; nothing else in Draftling uses
+ * LEDC. 5 kHz is well above any visible flicker and is comfortably
+ * within the LEDC peripheral's range at 10-bit duty resolution. */
+#define BL_LEDC_TIMER       LEDC_TIMER_0
+#define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
+#define BL_LEDC_CHANNEL     LEDC_CHANNEL_0
+#define BL_LEDC_DUTY_RES    LEDC_TIMER_10_BIT
+#define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
+#define BL_LEDC_FREQ_HZ     5000
+
+static void backlight_pwm_init(int bl_pin, int percent)
+{
+    if (bl_pin < 0) return;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+
+    ledc_timer_config_t t = {};
+    t.speed_mode      = BL_LEDC_MODE;
+    t.duty_resolution = BL_LEDC_DUTY_RES;
+    t.timer_num       = BL_LEDC_TIMER;
+    t.freq_hz         = BL_LEDC_FREQ_HZ;
+    t.clk_cfg         = LEDC_AUTO_CLK;
+    ESP_ERROR_CHECK(ledc_timer_config(&t));
+
+    ledc_channel_config_t c = {};
+    c.gpio_num   = bl_pin;
+    c.speed_mode = BL_LEDC_MODE;
+    c.channel    = BL_LEDC_CHANNEL;
+    c.timer_sel  = BL_LEDC_TIMER;
+    c.intr_type  = LEDC_INTR_DISABLE;
+    c.duty       = duty;
+    c.hpoint     = 0;
+    ESP_ERROR_CHECK(ledc_channel_config(&c));
+}
 
 /* The i80 driver's PCLK ceiling depends on the GPIOs in use; 20 MHz
  * is the conservative figure recommended in the ESP-IDF examples for
@@ -242,14 +280,11 @@ extern "C" void display_st7789_init(const display_st7789_config_t *cfg)
         }
     }
 
-    /* Backlight on (after panel init so we don't show a black flash). */
+    /* Backlight on (after panel init so we don't show a black flash).
+     * Driven by LEDC PWM so DRAFTLING_BACKLIGHT_PERCENT controls the
+     * brightness. */
     if (s_bl_pin >= 0) {
-        gpio_config_t g = {};
-        g.intr_type    = GPIO_INTR_DISABLE;
-        g.mode         = GPIO_MODE_OUTPUT;
-        g.pin_bit_mask = (1ULL << s_bl_pin);
-        ESP_ERROR_CHECK(gpio_config(&g));
-        gpio_set_level((gpio_num_t)s_bl_pin, 1);
+        backlight_pwm_init(s_bl_pin, CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
     }
 
     /* Initial blank to avoid showing whatever junk was in panel RAM. */

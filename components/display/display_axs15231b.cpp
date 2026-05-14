@@ -54,10 +54,60 @@
 #include <esp_heap_caps.h>
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
+#include <driver/ledc.h>
 
 #include "display.h"
 
 static const char *TAG = "DisplayAXS";
+
+/* LEDC PWM configuration for the backlight. We keep timer 0 / channel
+ * 0 dedicated to the LCD backlight; nothing else in Draftling uses
+ * LEDC. 5 kHz is well above any visible flicker and is comfortably
+ * within the LEDC peripheral's range at 10-bit duty resolution. */
+#define BL_LEDC_TIMER       LEDC_TIMER_0
+#define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
+#define BL_LEDC_CHANNEL     LEDC_CHANNEL_0
+#define BL_LEDC_DUTY_RES    LEDC_TIMER_10_BIT
+#define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
+#define BL_LEDC_FREQ_HZ     5000
+
+static void backlight_pwm_init(int bl_pin, int percent)
+{
+    if (bl_pin < 0) return;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    ledc_timer_config_t t = {};
+    t.speed_mode      = BL_LEDC_MODE;
+    t.duty_resolution = BL_LEDC_DUTY_RES;
+    t.timer_num       = BL_LEDC_TIMER;
+    t.freq_hz         = BL_LEDC_FREQ_HZ;
+    t.clk_cfg         = LEDC_AUTO_CLK;
+    ESP_ERROR_CHECK(ledc_timer_config(&t));
+
+    ledc_channel_config_t c = {};
+    c.gpio_num   = bl_pin;
+    c.speed_mode = BL_LEDC_MODE;
+    c.channel    = BL_LEDC_CHANNEL;
+    c.timer_sel  = BL_LEDC_TIMER;
+    c.intr_type  = LEDC_INTR_DISABLE;
+    /* Start at 0 (off) -- the caller bumps the duty up to the
+     * configured brightness after panel init so the user never sees a
+     * black/garbage flash. */
+    c.duty       = 0;
+    c.hpoint     = 0;
+    ESP_ERROR_CHECK(ledc_channel_config(&c));
+}
+
+static void backlight_pwm_set_percent(int percent)
+{
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+    ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
+}
+
 
 #define AXS_SPI_HOST            SPI2_HOST
 #define AXS_SPI_CLOCK_HZ        (40 * 1000 * 1000)
@@ -244,12 +294,12 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
         ESP_ERROR_CHECK(gpio_config(&g));
     }
     if (s_bl_pin >= 0) {
-        gpio_config_t g = {};
-        g.intr_type    = GPIO_INTR_DISABLE;
-        g.mode         = GPIO_MODE_OUTPUT;
-        g.pin_bit_mask = (1ULL << s_bl_pin);
-        ESP_ERROR_CHECK(gpio_config(&g));
-        gpio_set_level((gpio_num_t)s_bl_pin, 0);  /* off until panel ready */
+        /* Backlight is driven by LEDC PWM so the user can dial the
+         * brightness with DRAFTLING_BACKLIGHT_PERCENT. Init the
+         * channel with duty 0 (off) here; we ramp it up to the
+         * configured brightness after the panel is fully
+         * initialised, so there is no black/garbage flash. */
+        backlight_pwm_init(s_bl_pin, CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
     }
     if (s_te_pin >= 0) {
         gpio_config_t g = {};
@@ -296,9 +346,9 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     hw_reset();
     axs15231b_init_sequence();
 
-    /* Backlight on. */
+    /* Backlight on at the user-configured brightness. */
     if (s_bl_pin >= 0) {
-        gpio_set_level((gpio_num_t)s_bl_pin, 1);
+        backlight_pwm_set_percent(CONFIG_DRAFTLING_BACKLIGHT_PERCENT);
     }
 
     /* Initial blank to avoid showing whatever junk was in panel RAM. */

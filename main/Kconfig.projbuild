@@ -163,6 +163,27 @@ config DRAFTLING_DISPLAY_SCALE
         NOT re-applied automatically -- delete sdkconfig (or set the
         value here by hand) to pick up the new default.
 
+config DRAFTLING_BACKLIGHT_PERCENT
+    int "LCD backlight brightness (%)"
+    depends on DRAFTLING_DISPLAY_AXS15231B || DRAFTLING_DISPLAY_ST7789
+    range 0 100
+    default 75
+    help
+        Brightness of the LCD backlight, in percent of the maximum
+        duty cycle. The display backend drives the backlight GPIO
+        with an LEDC PWM signal (~5 kHz, 10-bit resolution) at this
+        duty so the user can dial the screen down to a comfortable
+        level and save battery.
+
+        Boards with a controllable backlight GPIO:
+          - Waveshare ESP32-S3-Touch-LCD-3.49 (AXS15231B, GPIO 2)
+          - Guition JC3248W535 (AXS15231B, GPIO 1)
+          - LilyGO T-Display-S3 (ST7789, GPIO 38)
+
+        0 = backlight off (screen is unreadable), 100 = full
+        brightness. Default 75 is a comfortable level for indoor
+        use on all supported color boards.
+
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
     depends on DRAFTLING_MODEL_M5STACK_PAPERS3
