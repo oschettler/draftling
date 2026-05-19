@@ -151,6 +151,11 @@ extern "C" void display_set_backlight(int percent)
 static spi_device_handle_t s_spi = NULL;
 static int s_width  = 0;
 static int s_height = 0;
+/* Software 90-deg-CW rotation flag. See display_axs15231b_config_t.swap_xy.
+ * Set in display_axs15231b_init() from cfg->swap_xy and read by
+ * display_flush() to decide between the direct and the transposed
+ * per-row path. */
+static bool s_swap_xy = false;
 static int s_rst_pin = -1;
 static int s_te_pin  = -1;
 static int s_cs_pin  = -1;
@@ -498,13 +503,20 @@ static void axs15231b_init_sequence(void)
     };
     spi_send_cmd(0xBB, init_bb_lock, sizeof(init_bb_lock));
 
-    /* Memory Access Control (MADCTL). Decide portrait vs landscape
-     * by comparing the configured logical width and height: if the
-     * caller asked for width > height, the panel must be put in
-     * landscape mode (MV row/column exchange + MX mirror) so that
-     * the AXS15231B's native 320x480 portrait scanout matches the
-     * orientation Draftling renders into. RGB pixel order. */
-    uint8_t madctl = (s_width > s_height) ? 0x60 : 0x00;
+    /* Memory Access Control (MADCTL). Always 0x00 on this driver:
+     * not every AXS15231B silicon revision honours the MV
+     * (row/column exchange) bit -- the Guition JC3248W535 is known
+     * to silently ignore it (the Tactility project's JC3248W535
+     * driver carries the same observation). Boards mounted in
+     * portrait whose application wants landscape opt in to
+     * software rotation via display_axs15231b_config_t.swap_xy,
+     * which display_flush() honours by transposing per-row into
+     * the DMA scratch buffer and addressing the panel in its
+     * native portrait coords. Boards whose panel is natively
+     * landscape (e.g. Waveshare Touch-LCD-3.49, 640x172) leave
+     * swap_xy false and write to the panel in landscape directly.
+     * RGB pixel order. */
+    uint8_t madctl = 0x00;
     spi_send_cmd(0x36, &madctl, 1);
 
     /* TE line on (V-blank only). The matching IDF-native init at
@@ -577,6 +589,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     assert(cfg);
     s_width  = cfg->width;
     s_height = cfg->height;
+    s_swap_xy = cfg->swap_xy;
     s_rst_pin = cfg->rst;
     s_te_pin  = cfg->te;
     s_bl_pin  = cfg->bl;
@@ -626,14 +639,20 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
 
     /* QSPI bus: 4 data lines (D0..D3) + SCK. CS is managed by us
      * (spics_io_num = -1) so that pixel-write bursts can keep CS
-     * low across multiple transactions. */
+     * low across multiple transactions.
+     *
+     * max_transfer_sz is sized to the longer of width/height because
+     * when s_swap_xy is set, display_flush() addresses the panel in
+     * portrait coords and each panel row carries s_height (logical
+     * column) pixels rather than s_width. */
+    int max_row_pixels = (s_width > s_height) ? s_width : s_height;
     spi_bus_config_t bus_cfg = {};
     bus_cfg.data0_io_num = cfg->d0;
     bus_cfg.data1_io_num = cfg->d1;
     bus_cfg.data2_io_num = cfg->d2;
     bus_cfg.data3_io_num = cfg->d3;
     bus_cfg.sclk_io_num  = cfg->sck;
-    bus_cfg.max_transfer_sz = s_width * 2 + 16;
+    bus_cfg.max_transfer_sz = max_row_pixels * 2 + 16;
     bus_cfg.flags        = SPICOMMON_BUSFLAG_QUAD;
     ESP_ERROR_CHECK(spi_bus_initialize(AXS_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO));
 
@@ -653,7 +672,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_fb_pixels = (size_t)s_width * s_height;
     s_fb = (uint16_t *)heap_caps_malloc(s_fb_pixels * sizeof(uint16_t),
                                         MALLOC_CAP_SPIRAM);
-    s_row_buf = (uint8_t *)heap_caps_malloc(s_width * 2,
+    s_row_buf = (uint8_t *)heap_caps_malloc(max_row_pixels * 2,
                                             MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     assert(s_fb && s_row_buf);
     memset(s_fb, 0, s_fb_pixels * sizeof(uint16_t));
@@ -834,26 +853,74 @@ extern "C" void display_flush(void)
      * Memory-Write preamble and subsequent chunks send raw data. */
     ESP_ERROR_CHECK(spi_device_acquire_bus(s_spi, portMAX_DELAY));
 
-    set_addr_window(x1, y1, w, h);
+    if (!s_swap_xy) {
+        /* Direct path: framebuffer orientation matches panel
+         * orientation, so a logical row is a panel row. */
+        set_addr_window(x1, y1, w, h);
 
-    /* Pixel-write burst. Drive CS low ourselves and keep it low
-     * until every row of the dirty region has been streamed. */
-    cs_low();
-    for (int row = 0; row < h; row++) {
-        const uint16_t *src = s_fb + (size_t)(y1 + row) * s_width + x1;
-        uint8_t *dst = s_row_buf;
-        for (int col = 0; col < w; col++) {
-            uint16_t px = src[col];
-            *dst++ = (uint8_t)(px >> 8);
-            *dst++ = (uint8_t)(px & 0xFF);
+        /* Pixel-write burst. Drive CS low ourselves and keep it low
+         * until every row of the dirty region has been streamed. */
+        cs_low();
+        for (int row = 0; row < h; row++) {
+            const uint16_t *src = s_fb + (size_t)(y1 + row) * s_width + x1;
+            uint8_t *dst = s_row_buf;
+            for (int col = 0; col < w; col++) {
+                uint16_t px = src[col];
+                *dst++ = (uint8_t)(px >> 8);
+                *dst++ = (uint8_t)(px & 0xFF);
+            }
+            if (row == 0) {
+                spi_send_pixels_first(s_row_buf, (size_t)w * 2);
+            } else {
+                spi_send_pixels_cont(s_row_buf, (size_t)w * 2);
+            }
         }
-        if (row == 0) {
-            spi_send_pixels_first(s_row_buf, (size_t)w * 2);
-        } else {
-            spi_send_pixels_cont(s_row_buf, (size_t)w * 2);
+        cs_high();
+    } else {
+        /* Software 90-deg-CW rotation. The framebuffer is in logical
+         * landscape coords (s_width x s_height); the panel scans out
+         * in native portrait (s_height x s_width). Map each logical
+         * point (lx, ly) to a panel point as
+         *
+         *     panel_x = (s_height - 1) - ly      (0 .. s_height-1)
+         *     panel_y = lx                       (0 .. s_width-1)
+         *
+         * so the logical dirty rect (x1,y1)-(x2,y2) becomes a panel
+         * window of width (y2-y1+1) and height (x2-x1+1), starting
+         * at panel_x = (s_height-1) - y2, panel_y = x1.
+         *
+         * For each panel row (constant panel_y = lx) we walk a
+         * logical *column* (fixed lx, ly from y2 down to y1) and
+         * transpose those pixels into the DMA scratch buffer. The
+         * column walk is a strided read over the framebuffer, so it
+         * does cost some PSRAM cache pressure; this is acceptable
+         * for a once-per-frame flush. */
+        int panel_w = y2 - y1 + 1;
+        int panel_h = x2 - x1 + 1;
+        int panel_x_start = (s_height - 1) - y2;
+        int panel_y_start = x1;
+
+        set_addr_window(panel_x_start, panel_y_start, panel_w, panel_h);
+
+        cs_low();
+        for (int row = 0; row < panel_h; row++) {
+            int lx = x1 + row;                  /* logical column */
+            const uint16_t *col_base = s_fb + lx;
+            uint8_t *dst = s_row_buf;
+            for (int col = 0; col < panel_w; col++) {
+                int ly = y2 - col;              /* logical row, decreasing */
+                uint16_t px = col_base[(size_t)ly * s_width];
+                *dst++ = (uint8_t)(px >> 8);
+                *dst++ = (uint8_t)(px & 0xFF);
+            }
+            if (row == 0) {
+                spi_send_pixels_first(s_row_buf, (size_t)panel_w * 2);
+            } else {
+                spi_send_pixels_cont(s_row_buf, (size_t)panel_w * 2);
+            }
         }
+        cs_high();
     }
-    cs_high();
 
     spi_device_release_bus(s_spi);
 }

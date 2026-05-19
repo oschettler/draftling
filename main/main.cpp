@@ -107,6 +107,17 @@ extern "C" void app_main(void)
         cfg.bl     = LCD_BL_PIN;
         cfg.width  = DISPLAY_WIDTH;
         cfg.height = DISPLAY_HEIGHT;
+        /* The Guition JC3248W535's AXS15231B silicon ignores the
+         * MADCTL MV (swap-XY) bit (same observation as Tactility's
+         * driver for this board), so the backend has to software-
+         * rotate at flush time to present the 320x480 portrait
+         * panel as 480x320 landscape. Waveshare's Touch-LCD-3.49
+         * is natively 640x172 landscape and needs no rotation. */
+#if defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
+        cfg.swap_xy = true;
+#else
+        cfg.swap_xy = false;
+#endif
         display_axs15231b_init(&cfg);
     }
 #elif defined(CONFIG_DRAFTLING_DISPLAY_ST7789)

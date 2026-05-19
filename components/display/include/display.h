@@ -114,6 +114,19 @@ typedef struct {
                    * brightness in NVS. */
     int width;
     int height;
+    /* Software 90-deg-CW rotation. Set to true on boards whose
+     * AXS15231B silently ignores the MADCTL MV (swap-XY) bit but
+     * whose physical panel is mounted in portrait orientation
+     * (native scanout is height x width). When set, the backend
+     * keeps its internal framebuffer in logical orientation
+     * (width x height) so push/clear/set-pixel paths stay
+     * unchanged, and transposes per-row into the DMA scratch
+     * buffer at flush time, addressing the panel in its native
+     * portrait coordinate space. Known true on Guition
+     * JC3248W535; left false on Waveshare Touch-LCD-3.49 whose
+     * 640x172 panel is natively landscape and works with
+     * MADCTL=0x00 directly. */
+    bool swap_xy;
 } display_axs15231b_config_t;
 
 /*
