@@ -30,12 +30,16 @@
  *
  * Status
  * ------
- * Initial implementation. The init sequence and pin maps have been
- * cross-referenced with the boards' published schematics and the
- * widely shared LovyanGFX panel definitions for these displays, but
- * have not been verified on real hardware in-tree. Likely tweak
- * points: MADCTL byte (0x36) for rotation, and the AXS15231B-specific
- * vendor command block (0xBB / 0xA0 below).
+ * Driver protocol implementation cross-referenced against the
+ * Arduino_GFX Arduino_ESP32QSPI / Arduino_AXS15231B references and
+ * corrected on real hardware (Guition JC3248W535): vendor commands
+ * are sent with the cmd/addr phases on all 4 data lines
+ * (SPI_TRANS_MULTILINE_CMD|_ADDR), the QSPI memory-write opcode
+ * uses operand 0x3C (not the MIPI 0x2C), and pixel-write bursts
+ * keep CS low across all chunks (preamble on the first chunk only,
+ * zero-bit cmd/addr/dummy on continuation chunks). The init
+ * sequence is the proven Arduino_GFX "Type-1" 320x480 vendor
+ * block.
  *
  * Pins are passed in via display_axs15231b_init() (struct-based,
  * since the controller needs 9 GPIOs -- more than the legacy
@@ -116,20 +120,40 @@ extern "C" void display_set_backlight(int percent)
 #define AXS_SPI_HOST            SPI2_HOST
 #define AXS_SPI_CLOCK_HZ        (40 * 1000 * 1000)
 
-/* Command preamble (single-line mode). The controller expects the
- * 8-bit command in the third byte of the 32-bit "address" phase. */
+/* AXS15231B QSPI protocol constants.
+ *
+ * The AXS15231B uses a non-standard QSPI command framing borrowed
+ * from QSPI NOR flash:
+ *
+ *   - Vendor / DCS commands ("register writes"):
+ *       cmd byte = 0x02   (QSPI "write register" opcode)
+ *       addr     = 0x00 <reg> 0x00   (24-bit, reg = MIPI DCS code)
+ *       data     = optional parameter bytes (single-line)
+ *     Both the cmd byte and the 24-bit address MUST be shifted out
+ *     on all four data lines (SPI_TRANS_MULTILINE_CMD|_ADDR), or
+ *     the controller does not recognize the frame at all.
+ *
+ *   - Pixel writes (memory-write):
+ *       cmd byte = 0x32   (QSPI "memory write" opcode)
+ *       addr     = 0x00 0x3C 0x00   (NB: 0x3C, not the MIPI 0x2C)
+ *       data     = raw RGB565 pixels in QSPI (4-line) mode
+ *     The preamble is only sent for the first chunk of a memory-
+ *     write burst; subsequent chunks of the same burst send raw
+ *     pixel bytes with zero-bit cmd/addr/dummy phases. CS must
+ *     stay LOW across the whole burst -- if CS toggles between
+ *     chunks the address pointer is reset and only the first
+ *     chunk lands at the CASET/RASET origin.
+ */
 #define AXS_CMD_PREAMBLE        0x02
-
-/* Pixel-data preamble (QSPI mode). 0x32 selects QSPI, 0x2C is the
- * standard MIPI "Memory Write" command. */
 #define AXS_DATA_PREAMBLE_BYTE  0x32
-#define AXS_MEMORY_WRITE        0x2C
+#define AXS_QSPI_MEMWR_OPERAND  0x3C
 
 static spi_device_handle_t s_spi = NULL;
 static int s_width  = 0;
 static int s_height = 0;
 static int s_rst_pin = -1;
 static int s_te_pin  = -1;
+static int s_cs_pin  = -1;
 /* s_bl_pin is defined near the top of this file. */
 
 
@@ -168,18 +192,35 @@ static uint8_t *s_row_buf = NULL;
 
 /* ---------------- Low-level SPI helpers ---------------- */
 
+static inline void cs_low(void)
+{
+    if (s_cs_pin >= 0) gpio_set_level((gpio_num_t)s_cs_pin, 0);
+}
+
+static inline void cs_high(void)
+{
+    if (s_cs_pin >= 0) gpio_set_level((gpio_num_t)s_cs_pin, 1);
+}
+
+/* Send a vendor / DCS command (with optional parameter bytes).
+ *
+ * Frame layout on the wire (all sent within one CS-low pulse):
+ *   cmd phase (8 bits,  QSPI mode): 0x02
+ *   addr phase (24 bits, QSPI mode): 0x00, reg, 0x00
+ *   data phase (n_params*8 bits, single-line): parameter bytes
+ *
+ * Marking cmd/addr as MULTILINE (4-line) is mandatory: the
+ * AXS15231B does not accept these phases on a single line and the
+ * frame is silently ignored if MULTILINE is not set.
+ */
 static void spi_send_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
 {
-    /* AXS15231B command format (single-line SPI):
-     *   addr phase (32 bits): 0x02 0x00 cmd 0x00
-     *   data phase: 0...n parameter bytes
-     */
+    cs_low();
+
     spi_transaction_ext_t tx = {};
-    tx.base.flags = SPI_TRANS_VARIABLE_ADDR | SPI_TRANS_VARIABLE_CMD;
+    tx.base.flags = SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR;
     tx.base.cmd   = AXS_CMD_PREAMBLE;
     tx.base.addr  = ((uint32_t)cmd) << 8;
-    tx.command_bits = 8;
-    tx.address_bits = 24;
 
     if (n_params > 0) {
         tx.base.length    = n_params * 8;
@@ -187,20 +228,44 @@ static void spi_send_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
     }
 
     ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&tx));
+
+    cs_high();
 }
 
-/* Send a chunk of pixel data over QSPI using the Memory Write
- * preamble. Used for the initial blank fill and for each row of the
- * dirty region. */
-static void spi_send_pixels(const uint8_t *data, size_t n_bytes)
+/* Stream pixel data as a single CS-low memory-write burst.
+ *
+ * The first chunk carries the QSPI memory-write preamble
+ * (cmd 0x32, addr 0x003C00) and selects 4-line data mode; every
+ * subsequent chunk in the same burst sends raw pixel bytes with
+ * cmd/addr/dummy phases sized to zero (SPI_TRANS_VARIABLE_*
+ * with the corresponding _bits fields cleared).
+ *
+ * The caller is responsible for ensuring no other transaction
+ * touches the bus mid-burst (we acquire the bus in display_flush).
+ */
+static void spi_send_pixels_first(const uint8_t *data, size_t n_bytes)
 {
     spi_transaction_ext_t tx = {};
-    tx.base.flags = SPI_TRANS_VARIABLE_ADDR | SPI_TRANS_VARIABLE_CMD |
-                    SPI_TRANS_MODE_QIO;
+    tx.base.flags = SPI_TRANS_MODE_QIO;
     tx.base.cmd   = AXS_DATA_PREAMBLE_BYTE;
-    tx.base.addr  = ((uint32_t)AXS_MEMORY_WRITE) << 8;
-    tx.command_bits = 8;
-    tx.address_bits = 24;
+    tx.base.addr  = ((uint32_t)AXS_QSPI_MEMWR_OPERAND) << 8;
+    tx.base.length    = n_bytes * 8;
+    tx.base.tx_buffer = data;
+
+    ESP_ERROR_CHECK(spi_device_polling_transmit(s_spi, (spi_transaction_t *)&tx));
+}
+
+static void spi_send_pixels_cont(const uint8_t *data, size_t n_bytes)
+{
+    spi_transaction_ext_t tx = {};
+    tx.base.flags = SPI_TRANS_MODE_QIO |
+                    SPI_TRANS_VARIABLE_CMD |
+                    SPI_TRANS_VARIABLE_ADDR |
+                    SPI_TRANS_VARIABLE_DUMMY;
+    /* No cmd / addr / dummy on continuation chunks. */
+    tx.command_bits = 0;
+    tx.address_bits = 0;
+    tx.dummy_bits   = 0;
     tx.base.length    = n_bytes * 8;
     tx.base.tx_buffer = data;
 
@@ -220,30 +285,213 @@ static void hw_reset(void)
 
 static void axs15231b_init_sequence(void)
 {
-    /* Vendor-specific init block. These two writes are required by
-     * the AXS15231B before any standard MIPI commands are honoured;
-     * the magic bytes were cross-referenced with the LovyanGFX
-     * Panel_AXS15231B definition and the Waveshare/Guition example
-     * code shipped with these boards. */
+    /* Full AXS15231B 320x480 "Type-1" vendor init block, taken
+     * verbatim from the proven Arduino_GFX Arduino_AXS15231B
+     * driver (axs15231b_320480_type1_init_operations) -- the
+     * minimal 0xBB/0xA0 stub that lived here before was not
+     * sufficient to bring the panel out of its reset state on
+     * either the Waveshare Touch-LCD-3.49 or the Guition
+     * JC3248W535 (both ship with this controller). */
+
+    static const uint8_t init_a0[] = {
+        0xC0, 0x10, 0x00, 0x02, 0x00, 0x00, 0x04, 0x3F,
+        0x20, 0x05, 0x3F, 0x3F, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    spi_send_cmd(0xA0, init_a0, sizeof(init_a0));
+
+    static const uint8_t init_a2[] = {
+        0x30, 0x3C, 0x24, 0x14, 0xD0, 0x20, 0xFF, 0xE0,
+        0x40, 0x19, 0x80, 0x80, 0x80, 0x20, 0xF9, 0x10,
+        0x02, 0xFF, 0xFF, 0xF0, 0x90, 0x01, 0x32, 0xA0,
+        0x91, 0xE0, 0x20, 0x7F, 0xFF, 0x00, 0x5A
+    };
+    spi_send_cmd(0xA2, init_a2, sizeof(init_a2));
+
+    static const uint8_t init_d0[] = {
+        0xE0, 0x40, 0x51, 0x24, 0x08, 0x05, 0x10, 0x01,
+        0x20, 0x15, 0xC2, 0x42, 0x22, 0x22, 0xAA, 0x03,
+        0x10, 0x12, 0x60, 0x14, 0x1E, 0x51, 0x15, 0x00,
+        0x8A, 0x20, 0x00, 0x03, 0x3A, 0x12
+    };
+    spi_send_cmd(0xD0, init_d0, sizeof(init_d0));
+
+    static const uint8_t init_a3[] = {
+        0xA0, 0x06, 0xAA, 0x00, 0x08, 0x02, 0x0A, 0x04,
+        0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04,
+        0x04, 0x04, 0x04, 0x00, 0x55, 0x55
+    };
+    spi_send_cmd(0xA3, init_a3, sizeof(init_a3));
+
+    static const uint8_t init_c1[] = {
+        0x31, 0x04, 0x02, 0x02, 0x71, 0x05, 0x24, 0x55,
+        0x02, 0x00, 0x41, 0x00, 0x53, 0xFF, 0xFF, 0xFF,
+        0x4F, 0x52, 0x00, 0x4F, 0x52, 0x00, 0x45, 0x3B,
+        0x0B, 0x02, 0x0D, 0x00, 0xFF, 0x40
+    };
+    spi_send_cmd(0xC1, init_c1, sizeof(init_c1));
+
+    static const uint8_t init_c3[] = {
+        0x00, 0x00, 0x00, 0x50, 0x03, 0x00, 0x00, 0x00,
+        0x01, 0x80, 0x01
+    };
+    spi_send_cmd(0xC3, init_c3, sizeof(init_c3));
+
+    static const uint8_t init_c4[] = {
+        0x00, 0x24, 0x33, 0x80, 0x00, 0xEA, 0x64, 0x32,
+        0xC8, 0x64, 0xC8, 0x32, 0x90, 0x90, 0x11, 0x06,
+        0xDC, 0xFA, 0x00, 0x00, 0x80, 0xFE, 0x10, 0x10,
+        0x00, 0x0A, 0x0A, 0x44, 0x50
+    };
+    spi_send_cmd(0xC4, init_c4, sizeof(init_c4));
+
+    static const uint8_t init_c5[] = {
+        0x18, 0x00, 0x00, 0x03, 0xFE, 0x3A, 0x4A, 0x20,
+        0x30, 0x10, 0x88, 0xDE, 0x0D, 0x08, 0x0F, 0x0F,
+        0x01, 0x3A, 0x4A, 0x20, 0x10, 0x10, 0x00
+    };
+    spi_send_cmd(0xC5, init_c5, sizeof(init_c5));
+
+    static const uint8_t init_c6[] = {
+        0x05, 0x0A, 0x05, 0x0A, 0x00, 0xE0, 0x2E, 0x0B,
+        0x12, 0x22, 0x12, 0x22, 0x01, 0x03, 0x00, 0x3F,
+        0x6A, 0x18, 0xC8, 0x22
+    };
+    spi_send_cmd(0xC6, init_c6, sizeof(init_c6));
+
+    static const uint8_t init_c7[] = {
+        0x50, 0x32, 0x28, 0x00, 0xA2, 0x80, 0x8F, 0x00,
+        0x80, 0xFF, 0x07, 0x11, 0x9C, 0x67, 0xFF, 0x24,
+        0x0C, 0x0D, 0x0E, 0x0F
+    };
+    spi_send_cmd(0xC7, init_c7, sizeof(init_c7));
+
+    static const uint8_t init_c9[] = { 0x33, 0x44, 0x44, 0x01 };
+    spi_send_cmd(0xC9, init_c9, sizeof(init_c9));
+
+    static const uint8_t init_cf[] = {
+        0x2C, 0x1E, 0x88, 0x58, 0x13, 0x18, 0x56, 0x18,
+        0x1E, 0x68, 0x88, 0x00, 0x65, 0x09, 0x22, 0xC4,
+        0x0C, 0x77, 0x22, 0x44, 0xAA, 0x55, 0x08, 0x08,
+        0x12, 0xA0, 0x08
+    };
+    spi_send_cmd(0xCF, init_cf, sizeof(init_cf));
+
+    static const uint8_t init_d5[] = {
+        0x40, 0x8E, 0x8D, 0x01, 0x35, 0x04, 0x92, 0x74,
+        0x04, 0x92, 0x74, 0x04, 0x08, 0x6A, 0x04, 0x46,
+        0x03, 0x03, 0x03, 0x03, 0x82, 0x01, 0x03, 0x00,
+        0xE0, 0x51, 0xA1, 0x00, 0x00, 0x00
+    };
+    spi_send_cmd(0xD5, init_d5, sizeof(init_d5));
+
+    static const uint8_t init_d6[] = {
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE,
+        0x93, 0x00, 0x01, 0x83, 0x07, 0x07, 0x00, 0x07,
+        0x07, 0x00, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
+        0x00, 0x84, 0x00, 0x20, 0x01, 0x00
+    };
+    spi_send_cmd(0xD6, init_d6, sizeof(init_d6));
+
+    static const uint8_t init_d7[] = {
+        0x03, 0x01, 0x0B, 0x09, 0x0F, 0x0D, 0x1E, 0x1F,
+        0x18, 0x1D, 0x1F, 0x19, 0x40, 0x8E, 0x04, 0x00,
+        0x20, 0xA0, 0x1F
+    };
+    spi_send_cmd(0xD7, init_d7, sizeof(init_d7));
+
+    static const uint8_t init_d8[] = {
+        0x02, 0x00, 0x0A, 0x08, 0x0E, 0x0C, 0x1E, 0x1F,
+        0x18, 0x1D, 0x1F, 0x19
+    };
+    spi_send_cmd(0xD8, init_d8, sizeof(init_d8));
+
+    static const uint8_t init_d9[] = {
+        0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F,
+        0x1F, 0x1F, 0x1F, 0x1F
+    };
+    spi_send_cmd(0xD9, init_d9, sizeof(init_d9));
+
+    static const uint8_t init_dd[] = {
+        0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F,
+        0x1F, 0x1F, 0x1F, 0x1F
+    };
+    spi_send_cmd(0xDD, init_dd, sizeof(init_dd));
+
+    static const uint8_t init_df[] = {
+        0x44, 0x73, 0x4B, 0x69, 0x00, 0x0A, 0x02, 0x90
+    };
+    spi_send_cmd(0xDF, init_df, sizeof(init_df));
+
+    static const uint8_t init_e0[] = {
+        0x3B, 0x28, 0x10, 0x16, 0x0C, 0x06, 0x11, 0x28,
+        0x5C, 0x21, 0x0D, 0x35, 0x13, 0x2C, 0x33, 0x28,
+        0x0D
+    };
+    spi_send_cmd(0xE0, init_e0, sizeof(init_e0));
+
+    static const uint8_t init_e1[] = {
+        0x37, 0x28, 0x10, 0x16, 0x0B, 0x06, 0x11, 0x28,
+        0x5C, 0x21, 0x0D, 0x35, 0x14, 0x2C, 0x33, 0x28,
+        0x0F
+    };
+    spi_send_cmd(0xE1, init_e1, sizeof(init_e1));
+
+    static const uint8_t init_e2[] = {
+        0x3B, 0x07, 0x12, 0x18, 0x0E, 0x0D, 0x17, 0x35,
+        0x44, 0x32, 0x0C, 0x14, 0x14, 0x36, 0x3A, 0x2F,
+        0x0D
+    };
+    spi_send_cmd(0xE2, init_e2, sizeof(init_e2));
+
+    static const uint8_t init_e3[] = {
+        0x37, 0x07, 0x12, 0x18, 0x0E, 0x0D, 0x17, 0x35,
+        0x44, 0x32, 0x0C, 0x14, 0x14, 0x36, 0x32, 0x2F,
+        0x0F
+    };
+    spi_send_cmd(0xE3, init_e3, sizeof(init_e3));
+
+    static const uint8_t init_e4[] = {
+        0x3B, 0x07, 0x12, 0x18, 0x0E, 0x0D, 0x17, 0x39,
+        0x44, 0x2E, 0x0C, 0x14, 0x14, 0x36, 0x3A, 0x2F,
+        0x0D
+    };
+    spi_send_cmd(0xE4, init_e4, sizeof(init_e4));
+
+    static const uint8_t init_e5[] = {
+        0x37, 0x07, 0x12, 0x18, 0x0E, 0x0D, 0x17, 0x39,
+        0x44, 0x2E, 0x0C, 0x14, 0x14, 0x36, 0x3A, 0x2F,
+        0x0F
+    };
+    spi_send_cmd(0xE5, init_e5, sizeof(init_e5));
+
+    static const uint8_t init_a4_1[] = {
+        0x85, 0x85, 0x95, 0x82, 0xAF, 0xAA, 0xAA, 0x80,
+        0x10, 0x30, 0x40, 0x40, 0x20, 0xFF, 0x60, 0x30
+    };
+    spi_send_cmd(0xA4, init_a4_1, sizeof(init_a4_1));
+
+    static const uint8_t init_a4_2[] = { 0x85, 0x85, 0x95, 0x85 };
+    spi_send_cmd(0xA4, init_a4_2, sizeof(init_a4_2));
+
+    /* Vendor register-block lock. Writing 0xBB with eight zero bytes
+     * closes the vendor register window opened earlier in this init
+     * sequence (the matching 0x5A/0xA5 "unlock-key" variant is used
+     * by some other AXS15231B init blocks, e.g. the 320x480 Type-2
+     * sequence; Type-1 leaves the registers unlocked by default and
+     * only emits this lock at the end). */
     static const uint8_t init_bb[] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
     spi_send_cmd(0xBB, init_bb, sizeof(init_bb));
 
-    static const uint8_t init_a0[] = {
-        0xC0, 0x10, 0x00, 0x02, 0x00, 0x00, 0x04,
-        0x3F, 0x20, 0x05, 0x0F, 0x18, 0x21, 0x10
-    };
-    spi_send_cmd(0xA0, init_a0, sizeof(init_a0));
-
-    /* Memory Access Control (MADCTL). 0x00 selects portrait mode
-     * with RGB pixel order (no row/column swaps, no mirroring). The
-     * Waveshare 3.49" board's "640x172" landscape orientation will
-     * need this byte tuned (typically 0x60 or similar to set MV/MX);
-     * we leave the default here and expect the per-board init to
-     * override once the orientation is verified on hardware. */
-    static const uint8_t madctl[] = { 0x00 };
-    spi_send_cmd(0x36, madctl, sizeof(madctl));
+    /* Memory Access Control (MADCTL). Decide portrait vs landscape
+     * by comparing the configured logical width and height: if the
+     * caller asked for width > height, the panel must be put in
+     * landscape mode (MV row/column exchange + MX mirror) so that
+     * the AXS15231B's native 320x480 portrait scanout matches the
+     * orientation Draftling renders into. RGB pixel order. */
+    uint8_t madctl = (s_width > s_height) ? 0x60 : 0x00;
+    spi_send_cmd(0x36, &madctl, 1);
 
     /* Pixel format: 16 bpp (RGB565). */
     static const uint8_t pixfmt[] = { 0x05 };
@@ -253,11 +501,16 @@ static void axs15231b_init_sequence(void)
     static const uint8_t te[] = { 0x00 };
     spi_send_cmd(0x35, te, sizeof(te));
 
-    /* Sleep out and display on. */
+    /* Sleep out, wait, then display on. */
     spi_send_cmd(0x11, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(200));
     spi_send_cmd(0x29, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* Prime the panel write pointer with a single dummy memory-write
+     * (4 zero bytes). Matches Arduino_GFX's init terminator. */
+    static const uint8_t init_2c[] = { 0x00, 0x00, 0x00, 0x00 };
+    spi_send_cmd(0x2C, init_2c, sizeof(init_2c));
 }
 
 static void set_addr_window(int x, int y, int w, int h)
@@ -301,6 +554,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_rst_pin = cfg->rst;
     s_te_pin  = cfg->te;
     s_bl_pin  = cfg->bl;
+    s_cs_pin  = cfg->cs;
 
     /* Reset / TE / Backlight GPIOs */
     if (s_rst_pin >= 0) {
@@ -327,8 +581,26 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
         ESP_ERROR_CHECK(gpio_config(&g));
     }
 
-    /* QSPI bus: 4 data lines (D0..D3) + SCK. CS is owned by the
-     * spi_device. Max transfer = one full row (width * 2 bytes). */
+    /* CS pin: manage manually rather than letting the SPI peripheral
+     * toggle it per-transaction. The AXS15231B's QSPI memory-write
+     * protocol expects the cmd/addr preamble to be sent once at the
+     * start of a write burst and then raw pixel chunks streamed
+     * without CS pulsing in between (otherwise the column/page
+     * pointer is reset and only the first chunk lands at the
+     * CASET/RASET origin). spics_io_num below is set to -1; we
+     * drive this GPIO from cs_low() / cs_high(). */
+    if (s_cs_pin >= 0) {
+        gpio_config_t g = {};
+        g.intr_type    = GPIO_INTR_DISABLE;
+        g.mode         = GPIO_MODE_OUTPUT;
+        g.pin_bit_mask = (1ULL << s_cs_pin);
+        ESP_ERROR_CHECK(gpio_config(&g));
+        gpio_set_level((gpio_num_t)s_cs_pin, 1);
+    }
+
+    /* QSPI bus: 4 data lines (D0..D3) + SCK. CS is managed by us
+     * (spics_io_num = -1) so that pixel-write bursts can keep CS
+     * low across multiple transactions. */
     spi_bus_config_t bus_cfg = {};
     bus_cfg.data0_io_num = cfg->d0;
     bus_cfg.data1_io_num = cfg->d1;
@@ -344,7 +616,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     dev_cfg.address_bits   = 24;
     dev_cfg.mode           = 0;
     dev_cfg.clock_speed_hz = AXS_SPI_CLOCK_HZ;
-    dev_cfg.spics_io_num   = cfg->cs;
+    dev_cfg.spics_io_num   = -1;
     dev_cfg.queue_size     = 7;
     dev_cfg.flags          = SPI_DEVICE_HALFDUPLEX;
     ESP_ERROR_CHECK(spi_bus_add_device(AXS_SPI_HOST, &dev_cfg, &s_spi));
@@ -528,9 +800,19 @@ extern "C" void display_flush(void)
     int w = x2 - x1 + 1;
     int h = y2 - y1 + 1;
 
+    /* Acquire the bus for the whole flush so that the spi_device
+     * driver does not interleave any other transactions between our
+     * pixel-stream chunks. CASET / RASET are normal vendor commands
+     * (CS-pulsed per command); the pixel write that follows is a
+     * single CS-low burst whose first chunk carries the QSPI
+     * Memory-Write preamble and subsequent chunks send raw data. */
+    ESP_ERROR_CHECK(spi_device_acquire_bus(s_spi, portMAX_DELAY));
+
     set_addr_window(x1, y1, w, h);
 
-    /* Stream the region row-by-row, byte-swapping into the DMA buffer. */
+    /* Pixel-write burst. Drive CS low ourselves and keep it low
+     * until every row of the dirty region has been streamed. */
+    cs_low();
     for (int row = 0; row < h; row++) {
         const uint16_t *src = s_fb + (size_t)(y1 + row) * s_width + x1;
         uint8_t *dst = s_row_buf;
@@ -539,8 +821,15 @@ extern "C" void display_flush(void)
             *dst++ = (uint8_t)(px >> 8);
             *dst++ = (uint8_t)(px & 0xFF);
         }
-        spi_send_pixels(s_row_buf, w * 2);
+        if (row == 0) {
+            spi_send_pixels_first(s_row_buf, (size_t)w * 2);
+        } else {
+            spi_send_pixels_cont(s_row_buf, (size_t)w * 2);
+        }
     }
+    cs_high();
+
+    spi_device_release_bus(s_spi);
 }
 
 extern "C" void display_full_refresh(void)
