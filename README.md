@@ -54,10 +54,9 @@ the board you are building for:
   color LCD (AXS15231B, 480x320, QSPI) with AXS5106L capacitive
   touch overlay. Has no user buttons, so deep-sleep wake is armed on
   the touch INT line: any tap wakes the device. Touch also drives
-  the editor (tap to position cursor, double tap to select the word,
-  vertical swipe to scroll) and the menu lists (tap a row to
-  highlight it, tap again to activate -- the keyboard "arrows + Enter"
-  flow still works in parallel).
+  the editor and the menu lists; see the **Touch Operations** section
+  below for the full gesture list. The keyboard "arrows + Enter" flow
+  still works in parallel.
 - **LilyGO T-Display-S3** -- 1.9" IPS color LCD (ST7789, 320x170,
   8-bit i80 parallel). On-board battery monitor and BOOT button for
   deep-sleep wake; no on-board MicroSD slot, so an external SD must
@@ -130,6 +129,41 @@ Git repository via the GitHub REST API.
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
+
+## Touch Operations
+
+On boards with a touchscreen (currently the Guition JC3248W535), touch
+input works alongside the Bluetooth keyboard -- you can use either, or
+both. All gestures are summarized below.
+
+### In the editor
+
+| Gesture | Action |
+|---------|--------|
+| Single tap | Move the cursor to the tapped position |
+| Double tap | Select the word at the tapped position |
+| Drag up / down | Scroll the document line by line, following the finger (one line per line-height of travel) |
+| Swipe up / down (fast flick) | Scroll by roughly one screen |
+
+A drag that moves more than a few pixels never moves the caret -- the
+tap-to-cursor action only fires for short, stationary taps.
+
+### In menus and the file browser
+
+| Gesture | Action |
+|---------|--------|
+| Tap a row | Highlight that row (same as moving with arrow keys) |
+| Tap the highlighted row again | Activate it (same as pressing Enter) |
+
+This two-step "highlight then activate" flow mirrors the keyboard
+"arrows + Enter" interaction and avoids accidental activations on
+imprecise taps.
+
+### Wake from sleep
+
+On boards without user buttons (such as the JC3248W535), the touch
+controller's INT line is wired to the deep-sleep wake source, so any
+tap on the screen wakes the device.
 
 ## Keyboard Layouts
 
