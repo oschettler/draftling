@@ -1106,6 +1106,24 @@ static void apply_list_selection_styles(lv_obj_t *list, int sel);
 
 static void refresh_file_list(void)
 {
+    /* Remember the currently-selected entry's filename (if any) so we
+     * can restore the selection after the list is rebuilt. This keeps
+     * the highlight where the user left it when returning from the
+     * editor, and also preserves selection across a Git-sync refresh
+     * that added or removed files. */
+    char remembered_name[sizeof(s_browser_entries[0].name)] = {0};
+    if (s_list_files && s_browser_sel >= 0 &&
+        s_browser_sel < (int)lv_obj_get_child_count(s_list_files)) {
+        lv_obj_t *cur_btn = lv_obj_get_child(s_list_files, s_browser_sel);
+        if (cur_btn) {
+            int cur_idx = (int)(intptr_t)lv_obj_get_user_data(cur_btn);
+            if (cur_idx >= 0 && cur_idx < s_browser_count) {
+                strncpy(remembered_name, s_browser_entries[cur_idx].name,
+                        sizeof(remembered_name) - 1);
+            }
+        }
+    }
+
     const char *mp = sd_card_get_mount_point();
     s_browser_count = sd_card_list_dir(mp, s_browser_entries, 64);
     if (s_browser_count < 0) s_browser_count = 0;
@@ -1113,6 +1131,8 @@ static void refresh_file_list(void)
     /* Filter to show only .md files and directories */
     lv_obj_clean(s_list_files);
 
+    int restored_row = -1;
+    int row = 0;
     for (int i = 0; i < s_browser_count; i++) {
         const char *name = s_browser_entries[i].name;
         bool show = s_browser_entries[i].is_dir;
@@ -1128,9 +1148,17 @@ static void refresh_file_list(void)
                 snprintf(label, sizeof(label), "  %.255s", name);
             lv_obj_t *btn = lv_list_add_btn(s_list_files, NULL, label);
             lv_obj_set_user_data(btn, (void *)(intptr_t)i);
+            if (remembered_name[0] && strcmp(name, remembered_name) == 0) {
+                restored_row = row;
+            }
+            row++;
         }
     }
-    s_browser_sel = 0;
+    s_browser_sel = (restored_row >= 0) ? restored_row : 0;
+    /* Clamp in case the list shrank below the saved selection. */
+    int new_count = (int)lv_obj_get_child_count(s_list_files);
+    if (s_browser_sel >= new_count)
+        s_browser_sel = (new_count > 0) ? new_count - 1 : 0;
     /* List was rebuilt -- no item carries a highlight yet, so the
      * next update_list_highlight() call should not try to "clear"
      * a stale previous selection. */
