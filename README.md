@@ -41,8 +41,10 @@ significantly slower than with RLCD, but still acceptable. The M5GFX
 driver uses the single-pulse `epd_fast` waveform for partial refreshes
 (one visible flash, ~80-150 ms per update); a full refresh (3-5 s) is
 performed every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
-(default 30) to clear residual ghosting. Partial refresh and grayscale
-are not implemented yet -- the framebuffer is 1-bpp B/W.
+(default 30) to clear residual ghosting. Draftling feeds the panel
+1-bpp black-and-white content, but M5GFX keeps a 4-bpp grayscale
+framebuffer internally and dithers automatically, so future grayscale
+rendering is a software-only change.
 
 The **Guition JC3248W535** is a color-LCD board with no user buttons,
 so touch is the only local input besides the BLE keyboard: deep-sleep
@@ -80,13 +82,19 @@ Git repository via the GitHub REST API.
 
 ## Features
 
-- **WYSIWYG Markdown editing** on reflective display
+- **WYSIWYG Markdown editing** on reflective LCD, e-paper or
+  small color LCD displays
 - **Bluetooth keyboard** input with auto-discovery and pairing
 - **File browser** to open and manage `.md` files on the SD card
   (entries sorted alphabetically, directories first)
 - **Markdown rendering**: headings (H1-H4), bullet and numbered lists,
-  blockquotes, code fences, horizontal rules, inline bold/italic/code
-- **Gap buffer** text engine for efficient editing (256 KB document limit)
+  blockquotes, code fences, horizontal rules, inline bold / italic /
+  code / strikethrough
+- **Gap buffer** text engine for efficient editing. The document size
+  limit is sized at boot from the PSRAM that is free when the editor
+  starts (clamped to [64 KB, 4 MB] per buffer) and surfaced read-only
+  in F1 -> Settings. Typical limits range from a few hundred KB to a
+  few MB depending on the board.
 - **WiFi** station mode with credentials from NVS or `/sdcard/wifi.cfg`
 - **Git sync** via GitHub REST API (pull and push `.md` files)
 - **Per-file metadata sidecars**: when a `.md` file is closed (or
@@ -103,7 +111,7 @@ Git repository via the GitHub REST API.
 
 | Shortcut | Action |
 |----------|--------|
-| F1 | Open settings menu (BLE, WiFi, Git, Layout) |
+| F1 | Open main menu (BLE, WiFi, Git, Layout, Settings...) |
 | Arrow keys | Move cursor |
 | Home / End | Start / end of line |
 | PgUp / PgDn | Scroll by page |
@@ -115,6 +123,8 @@ Git repository via the GitHub REST API.
 | Ctrl+W | Toggle WiFi (connect / disconnect) |
 | Ctrl+F | Find |
 | Ctrl+H | Find + Replace (Tab switches field, Enter = next match, Ctrl+Enter = replace + next) |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste the current selection |
+| Ctrl+A | Select all |
 | Ctrl+R | Force full e-paper refresh (clears ghosting; e-paper boards only) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
@@ -215,9 +225,11 @@ idf.py build
 ## Menuconfig Options
 
 Run `idf.py menuconfig` to open the interactive configuration UI.
-Draftling adds two custom menus described below. All other options
-(Bluetooth, LVGL fonts, etc.) use the ESP-IDF defaults from
-`sdkconfig.defaults` and normally do not need to be changed.
+Draftling adds three custom menus described below (**DRAFTLING
+Configuration**, **DRAFTLING Keyboard Layouts** and **DRAFTLING
+Editor**). All other options (Bluetooth, LVGL fonts, etc.) use the
+ESP-IDF defaults from `sdkconfig.defaults` and normally do not need
+to be changed.
 
 ### DRAFTLING Configuration
 
@@ -230,7 +242,11 @@ Found at the top-level **DRAFTLING Configuration** menu.
 | **E-paper full-refresh interval** | int | 30 | E-paper boards only: number of partial refreshes between full refreshes. |
 | **Enable touchscreen input** | bool | y on PaperS3 and JC3248W535, n otherwise | Enable the I2C touch driver and LVGL pointer input device. |
 | **Standby: wake from deep sleep on touchscreen tap** | bool | y on JC3248W535, n otherwise | Arm EXT0 on the touch INT line so any tap wakes the device. |
-| **LCD backlight brightness (%)** | int | 75 | Color-LCD boards only (AXS15231B, ST7789): backlight PWM duty in percent. The backend drives the BL GPIO with an LEDC PWM signal (~5 kHz, 10-bit). 0 = off, 100 = full brightness. |
+
+> Backlight brightness on color-LCD boards is not a menuconfig option:
+> it is set at runtime from F1 -> Settings -> Backlight and persisted
+> in NVS (default 50%). The backend drives the BL GPIO with an LEDC
+> PWM signal (~5 kHz, 10-bit). 0% = off, 100% = full brightness.
 
 > **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the
 > single-pulse `epd_fast` waveform for partial refreshes (one visible
@@ -280,15 +296,19 @@ The `token` is a GitHub Personal Access Token with `repo` scope.
 ```
 main/               Application entry point, pin definitions, Kconfig
 components/
-  display/           Display driver (RLCD SPI) and LVGL v9 port
-  sd_card/           SD card (SDMMC) file operations
+  battery/           Battery voltage monitor (ADC + smoothing)
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
-  kb_layout/         Keyboard layout translation (US/UA/DE/FR)
-  fonts/             Custom LVGL fonts (Latin, Latin-1 Supplement, Cyrillic)
+  display/           Display backends (RLCD SPI, EDS3 e-paper via
+                     M5GFX, AXS15231B QSPI, ST7789 8-bit i80) and
+                     LVGL v9 port
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
-  wifi_manager/      WiFi STA connection manager
+  fonts/             Custom LVGL fonts (Latin, Latin-1 Supplement, Cyrillic)
   git_sync/          GitHub REST API file synchronization
+  kb_layout/         Keyboard layout translation (US/UA/DE/FR)
+  sd_card/           SD card (SDMMC or SPI) file operations
   standby/           Deep-sleep / standby timer manager
+  touchscreen/       I2C touch driver (AXS5106L, GT911) + LVGL pointer indev
+  wifi_manager/      WiFi STA connection manager
 ```
 
 ## License
