@@ -458,23 +458,23 @@ consumed in `app_config.h` as `DISPLAY_ROTATE`.
 
 #### Display scale factor (DRAFTLING_DISPLAY_SCALE)
 
-User-editable `int` (range 1-8). Logical pixel size: every LVGL pixel
-is rendered as SCALE x SCALE physical panel pixels via nearest-neighbor
-expansion in the display backend. The editor and LVGL canvas operate
-in *logical* coordinates (panel size divided by SCALE); only the
-display backend deals in physical panel pixels. Defaults: 2 for the
-M5Stack PaperS3 (so the high-density 540x960 panel renders Greybeard
-text at a comfortably readable size), 1 for every other board.
+Non-prompted derived `int` (range 1-8). Logical pixel size: every
+LVGL pixel is rendered as SCALE x SCALE physical panel pixels via
+nearest-neighbor expansion in the display backend. The editor and
+LVGL canvas operate in *logical* coordinates (panel size divided by
+SCALE); only the display backend deals in physical panel pixels.
+Defaults: 2 for the M5Stack PaperS3 (so the high-density 540x960
+panel renders Greybeard text at a comfortably readable size), 1 for
+every other board. Because the symbol is non-prompted, the per-model
+default re-applies automatically whenever `DRAFTLING_HARDWARE_MODEL`
+changes -- no need to delete `sdkconfig`. To override, set the value
+in `sdkconfig.defaults`.
+
 Currently the `display_eds3` (PaperS3 e-paper), `display_axs15231b`
 (Touch-LCD-3.49 / JC3248W535) and `display_st7789` (T-Display-S3)
 backends implement the up-scaling; on the RLCD backend a value > 1
 has no visible effect because the LVGL framebuffer already matches
 the panel size.
-
-Because the symbol is prompted, its value is sticky in `sdkconfig`:
-switching `DRAFTLING_HARDWARE_MODEL` does NOT re-apply the per-model
-default automatically. Delete `sdkconfig` (or set the field by hand
-in menuconfig) when changing boards.
 
 ### components/kb_layout/Kconfig.projbuild -- Keyboard Layouts
 

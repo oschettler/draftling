@@ -1,97 +1,82 @@
 # Draftling
 
-A distraction-free Markdown text editor for ESP32-S3-based development boards
-with reflective displays.
+A distraction-free Markdown text editor for ESP32-S3-based development
+boards with reflective LCD, e-paper or small color LCD displays.
 
 
-### Supported hardware
+## Supported hardware
 
-| Board | Display |
-|-------|---------|
-| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300 |
-| [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper (ED047TC1), 540x960 |
-| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" color IPS (AXS15231B), 640x172 |
-| Guition JC3248W535 | 3.5" color IPS (AXS15231B), 480x320 |
-| [LilyGO T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3) | 1.9" color IPS (ST7789), 320x170 |
+Draftling currently runs on five ESP32-S3 development boards. All of
+them share the same firmware image; the target board is picked at
+build time with `idf.py menuconfig` -> **DRAFTLING Configuration >
+Hardware Model**. Display resolution, driver, pin map, touch
+controller and the deep-sleep wake source are derived automatically
+from that choice.
+
+| Board | Display | Touch | Battery | Wake source | Storage |
+|-------|---------|-------|---------|-------------|---------|
+| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300, SPI | -- | GPIO4 ADC (3:1) | GPIO18 button | On-board MicroSD (SDMMC 1-bit) |
+| [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper ED047TC1, 540x960, parallel I80 (via `m5stack/M5GFX`) | GT911 (I2C) | GPIO3 ADC (1:2) | BOOT (GPIO0); optionally touch (`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`) | On-board MicroSD (SPI3) |
+| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | not wired (pinout unverified) | -- | BOOT (GPIO0) | External SD on SPI |
+| Guition JC3248W535 | 3.5" IPS color, 480x320, AXS15231B QSPI | AXS5106L (I2C) | -- | Touch INT (no user buttons) | External SD on SPI |
+| [LilyGO T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3) | 1.9" IPS color, 320x170, ST7789 8-bit i80 | -- | GPIO4 ADC (1:2) | BOOT (GPIO0) | External SD on SPI (no on-board slot) |
+
+All boards use an ESP32-S3 with at least 8 MB of PSRAM and 16 MB of
+flash, BLE for the HID keyboard and 802.11 b/g/n WiFi for Git sync.
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
 
-The Waveshare ESP32-S3-RLCD-4.2 provides the smoothest and most
+### Choosing a board
+
+The **Waveshare ESP32-S3-RLCD-4.2** provides the smoothest and most
 responsive user interaction. But the screen is very fragile, and the
-device needs a proper enclosure, preferably with a protective
-glass. Also, the contrast is very low, so iit needs a good lighting
-for comfortable work. The screen broke during the tests.
+device needs a proper enclosure, preferably with a protective glass.
+The contrast is very low, so it needs good lighting for comfortable
+work. (The screen broke during my tests.)
 
-The M5Stack PaperS3 is so far the most usable option: it is compact,
-packed in a good enclosure with magnets on the back, and the contrast
-is much higher than that of the RLCD display. The reaction is
-significantly slower than with RLCD, but still acceptable.
+The **M5Stack PaperS3** is so far the most usable option: it is
+compact, packed in a good enclosure with magnets on the back, and the
+contrast is much higher than that of the RLCD display. The reaction is
+significantly slower than with RLCD, but still acceptable. The M5GFX
+driver uses the single-pulse `epd_fast` waveform for partial refreshes
+(one visible flash, ~80-150 ms per update); a full refresh (3-5 s) is
+performed every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
+(default 30) to clear residual ghosting. Partial refresh and grayscale
+are not implemented yet -- the framebuffer is 1-bpp B/W.
 
-I also tried UC8179-based e-paper displays (such as those used by the Seeed
-Studio reTerminal E1001 and the Waveshare E-Paper Driver HAT) and they proved 
-to be too slow for an interactive Markdown editor: even with
-fast partial updates, the panel cannot keep up with typing and
+The **Guition JC3248W535** is a color-LCD board with no user buttons,
+so touch is the only local input besides the BLE keyboard: deep-sleep
+wake is armed on the touch INT line and any tap wakes the device.
+Touch also drives the editor and the menu lists; see
+[Touch Operations](#touch-operations) below.
+
+The **LilyGO T-Display-S3** has a small 1.9" panel; it works as a
+secondary / pocket device. It has no on-board MicroSD slot, so an
+external SD card must be wired to a free SPI bus (default pins
+documented in `main/app_config.h`).
+
+The **Waveshare ESP32-S3-Touch-LCD-3.49** is currently the least
+polished target: the AXS15231B QSPI panel works, but the touch
+controller pinout has not been verified, so touch input is not wired
+up. The BOOT button on GPIO0 is used for deep-sleep wake.
+
+UC8179-based e-paper displays (such as those used by the Seeed Studio
+reTerminal E1001 and the Waveshare E-Paper Driver HAT) were previously
+supported but proved too slow for an interactive Markdown editor: even
+with fast partial updates, the panel cannot keep up with typing and
 quickly accumulates ghosting artefacts. Support for UC8179 has
 therefore been removed from the codebase.
 
-
-### Hardware selection
-
-Before building, select the target board with `idf.py menuconfig`.
-Navigate to **DRAFTLING Configuration > Hardware Model** and choose
-the board you are building for:
-
-- **Waveshare ESP32-S3-RLCD-4.2** -- 4.2" reflective LCD (400x300)
-- **M5Stack PaperS3** -- 4.7" e-paper (ED047TC1, 540x960). Driver is
-  a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
-  component; partial refresh and grayscale are not implemented yet.
-  Has an on-board GT911 capacitive touchscreen on the I2C bus
-  (SDA=GPIO41, SCL=GPIO42, INT=GPIO48); when
-  `CONFIG_DRAFTLING_TOUCHSCREEN` is enabled (default on this board)
-  the editor and menu lists accept the same tap / drag / swipe
-  gestures as on the JC3248W535.
-- **Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49** --
-  3.49" IPS color LCD (AXS15231B, 640x172, QSPI). Touch input is
-  not currently wired up (the controller pinout is board-specific
-  and has not been verified); the BOOT button on GPIO0 is used for
-  deep-sleep wake.
-- **Generic ESP32 + color LCD: Guition JC3248W535** -- 3.5" IPS
-  color LCD (AXS15231B, 480x320, QSPI) with AXS5106L capacitive
-  touch overlay. Has no user buttons, so deep-sleep wake is armed on
-  the touch INT line: any tap wakes the device. Touch also drives
-  the editor and the menu lists; see the **Touch Operations** section
-  below for the full gesture list. The keyboard "arrows + Enter" flow
-  still works in parallel.
-- **LilyGO T-Display-S3** -- 1.9" IPS color LCD (ST7789, 320x170,
-  8-bit i80 parallel). On-board battery monitor and BOOT button for
-  deep-sleep wake; no on-board MicroSD slot, so an external SD must
-  be wired to a free SPI bus (default pins documented in
-  `main/app_config.h`).
-
-On color LCD boards, the editor offers a runtime-selectable color
-theme (F1 -> Settings -> Color theme): dark green on black (default),
-amber/orange on black, or white on black.
-
-The display resolution and driver are configured automatically based
-on the selected model. You can also adjust the **Display rotation
-angle** in the same menu.
+On color LCD boards (Touch-LCD-3.49, JC3248W535, T-Display-S3) the
+editor offers a runtime-selectable color theme (F1 -> Settings ->
+Color theme): dark green on black (default), amber/orange on black,
+or white on black. You can also adjust the **Display rotation angle**
+in the same `idf.py menuconfig` menu.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.
 On request the device connects to WiFi and synchronizes files with a remote
 Git repository via the GitHub REST API.
-
-## Hardware
-
-| Feature | Waveshare RLCD-4.2 | M5Stack PaperS3 |
-|---------|--------------------|-----------------|
-| MCU | ESP32-S3 (16 MB flash, 8 MB OPI PSRAM) | ESP32-S3 (16 MB flash, 16 MB PSRAM) |
-| Display | 4.2" reflective LCD, 400x300, SPI | 4.7" e-paper ED047TC1, 540x960, parallel I80 |
-| Storage | MicroSD (SDMMC 1-bit) | Onboard MicroSD (SPI3) |
-| Input | BLE HID keyboard | BLE HID keyboard |
-| Connectivity | WiFi 802.11 b/g/n | WiFi 802.11 b/g/n |
-| Battery monitor | GPIO4 ADC (3:1 divider) | GPIO3 ADC (2:1 divider) |
-| Wake from sleep | GPIO18 button | BOOT button (GPIO0) |
 
 ## Features
 
@@ -240,11 +225,11 @@ Found at the top-level **DRAFTLING Configuration** menu.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| **Hardware Model** | choice | Waveshare ESP32-S3-RLCD-4.2 | Select the target board. Display resolution and driver are set automatically. |
-| -- Waveshare ESP32-S3-RLCD-4.2 | | | 4.2" reflective LCD, 400x300 |
-| -- M5Stack PaperS3 | | | 4.7" e-paper, ED047TC1, 540x960 (driver via m5stack/M5GFX) |
+| **Hardware Model** | choice | M5Stack PaperS3 | Select the target board. Display resolution, driver, pin map, touch controller and the deep-sleep wake source are derived automatically. See the [Supported hardware](#supported-hardware) table for all five options. |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
-| **E-paper full-refresh interval** | int | 30 | M5Stack PaperS3 only: number of partial refreshes between full refreshes. |
+| **E-paper full-refresh interval** | int | 30 | E-paper boards only: number of partial refreshes between full refreshes. |
+| **Enable touchscreen input** | bool | y on PaperS3 and JC3248W535, n otherwise | Enable the I2C touch driver and LVGL pointer input device. |
+| **Standby: wake from deep sleep on touchscreen tap** | bool | y on JC3248W535, n otherwise | Arm EXT0 on the touch INT line so any tap wakes the device. |
 | **LCD backlight brightness (%)** | int | 75 | Color-LCD boards only (AXS15231B, ST7789): backlight PWM duty in percent. The backend drives the BL GPIO with an LEDC PWM signal (~5 kHz, 10-bit). 0 = off, 100 = full brightness. |
 
 > **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the

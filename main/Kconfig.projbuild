@@ -183,33 +183,29 @@ config DRAFTLING_TOUCHSCREEN
 # Touch controller silicon. Each model wires a different I2C chip
 # (AXS5106L on the Guition JC3248W535, GT911 on the M5Stack
 # PaperS3). The touchscreen component carries one driver per
-# controller and dispatches at build time on this choice. Defaults
-# track the hardware-model selection so users do not normally need
-# to touch this menu.
-choice DRAFTLING_TOUCH_CONTROLLER
-    prompt "Touch controller"
-    depends on DRAFTLING_TOUCHSCREEN
-    default DRAFTLING_TOUCH_GT911    if DRAFTLING_MODEL_M5STACK_PAPERS3
-    default DRAFTLING_TOUCH_AXS5106L if DRAFTLING_MODEL_JC3248W535
-    default DRAFTLING_TOUCH_AXS5106L
-    help
-        Select the I2C touch controller wired on the target board.
-
+# controller and dispatches at build time on these symbols.
+#
+# Both are non-prompted derived bools so the value tracks the
+# hardware-model choice automatically (no stickiness in sdkconfig).
 config DRAFTLING_TOUCH_AXS5106L
-    bool "AXS5106L (Allystar magic-packet, e.g. Guition JC3248W535)"
+    bool
+    depends on DRAFTLING_TOUCHSCREEN
+    default y if DRAFTLING_MODEL_JC3248W535
+    default n
     help
         Allystar AXS5106L / AXS5106. Uses a fixed 8-byte read-request
         magic packet over I2C and returns one touch point. Default
         I2C address 0x3B.
 
 config DRAFTLING_TOUCH_GT911
-    bool "Goodix GT911 (register-based, e.g. M5Stack PaperS3)"
+    bool
+    depends on DRAFTLING_TOUCHSCREEN
+    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default n
     help
         Goodix GT911. Register-addressed protocol: 16-bit register
         address sent MSB-first, status byte at 0x814E, touch points
         at 0x814F+. Default I2C address 0x5D (0x14 as backup).
-
-endchoice
 
 # Touchscreen INT GPIO. The touch controller pulses this line low
 # on touch. Used by the LVGL pointer indev (the read_cb only polls
@@ -217,33 +213,30 @@ endchoice
 # when CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH is set, as the EXT0
 # deep-sleep wake source. Must be RTC-capable (GPIO0-21 on the
 # ESP32-S3) for the wake-on-touch path to work.
+#
+# Non-prompted: derived from the hardware-model choice. Defaults
+# verified for: Guition JC3248W535 (GPIO3, AXS5106L), M5Stack
+# PaperS3 (GPIO48, GT911).
 config DRAFTLING_TOUCH_INT_GPIO
-    int "Touchscreen INT GPIO"
+    int
     depends on DRAFTLING_TOUCHSCREEN
     range -1 48
     default 3  if DRAFTLING_MODEL_JC3248W535
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default -1
-    help
-        GPIO connected to the touch controller's interrupt (INT)
-        line. Set to -1 if INT is not wired (the LVGL indev will
-        then poll I2C on every tick and CONFIG_DRAFTLING_STANDBY_
-        WAKE_ON_TOUCH will be unusable).
-
-        Defaults verified for: Guition JC3248W535 (GPIO3, AXS5106L),
-        M5Stack PaperS3 (GPIO48, GT911).
 
 # Touchscreen reset GPIO. The reset line is often tied to the LCD
 # reset on combo touch+LCD boards; set to -1 to skip a software
 # reset pulse during touchscreen_init.
+#
+# Non-prompted: derived from the hardware-model choice. On all
+# currently-supported touch boards RST is tied to the LCD reset
+# or a fixed pull-up, so the default is -1.
 config DRAFTLING_TOUCH_RST_GPIO
-    int "Touchscreen RST GPIO (-1 = none)"
+    int
     depends on DRAFTLING_TOUCHSCREEN
     range -1 48
     default -1
-    help
-        GPIO connected to the touch controller's reset (RST) line,
-        or -1 if it is tied to the LCD reset / a fixed pull-up.
 
 # ---- Standby behavior ----
 #
@@ -347,33 +340,30 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
     default 180 if DRAFTLING_DISPLAY_ROTATE_180
     default 270 if DRAFTLING_DISPLAY_ROTATE_270
 
+# DRAFTLING_DISPLAY_SCALE -- logical pixel size in physical panel
+# pixels. Non-prompted derived int so the per-board default tracks
+# the hardware-model choice automatically (no stickiness in
+# sdkconfig). Override via sdkconfig.defaults if you need a value
+# other than the per-board default.
+#
+# Every logical LVGL pixel is rendered as SCALE x SCALE physical
+# panel pixels via nearest-neighbor expansion in the display
+# backend. The editor and LVGL canvas operate in logical
+# coordinates (panel size divided by SCALE); only the display
+# backend scales up when pushing to the panel. Larger values give
+# bigger text at the cost of less screen real estate.
+#
+# Defaults: 2 for the M5Stack PaperS3 (whose 540x960 panel is
+# dense enough that 1:1 Greybeard text is uncomfortably small),
+# 1 everywhere else (one LVGL pixel == one panel pixel).
+# Currently only the M5Stack PaperS3, JC3248W535 and T-Display-S3
+# backends implement the up-scaling; on the RLCD backend SCALE > 1
+# has no visible effect.
 config DRAFTLING_DISPLAY_SCALE
-    int "Display scale factor (logical pixel = SCALE x SCALE panel pixels)"
+    int
     range 1 8
     default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 1
-    help
-        Logical-pixel scale factor.
-
-        Every logical LVGL pixel is rendered as SCALE x SCALE physical
-        panel pixels via nearest-neighbor expansion in the display
-        backend. The editor and LVGL canvas operate in logical
-        coordinates (panel size divided by SCALE); only the display
-        backend scales up when pushing to the panel. Larger values give
-        bigger text at the cost of less screen real estate.
-
-        Defaults: 2 for the M5Stack PaperS3 (whose 540x960 panel is
-        dense enough that 1:1 Greybeard text is uncomfortably small),
-        1 everywhere else (one LVGL pixel == one panel pixel).
-        Currently only the M5Stack PaperS3 backend implements the
-        up-scaling; on the other backends SCALE > 1 would have no
-        visible effect.
-
-        NOTE: this is a prompted int, so once you have visited
-        menuconfig the value becomes sticky in sdkconfig. If you later
-        switch DRAFTLING_HARDWARE_MODEL, the per-model default above is
-        NOT re-applied automatically -- delete sdkconfig (or set the
-        value here by hand) to pick up the new default.
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL
     int "E-paper full-refresh interval (partial updates between full refreshes)"
