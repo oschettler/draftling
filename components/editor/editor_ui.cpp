@@ -1179,6 +1179,23 @@ static int      s_last_tap_y  = -1;
 #define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
 #define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
 
+/* Drag-to-scroll state. Touch panels here typically poll at 30-60 Hz
+ * with small per-frame deltas; LVGL's built-in gesture detector needs
+ * a fairly high velocity to fire, which makes "slow scroll a long
+ * document" feel unresponsive. So we implement drag-scrolling
+ * directly off LV_EVENT_PRESSED / _PRESSING / _RELEASED: every time
+ * the finger has moved one full line height vertically, scroll the
+ * document by one line and re-anchor. The accumulated drag distance
+ * also lets us suppress the LV_EVENT_CLICKED that LVGL emits on
+ * release after a drag, so a swipe never moves the cursor by
+ * accident. */
+static bool s_drag_active     = false;
+static int  s_drag_start_x    = 0;
+static int  s_drag_start_y    = 0;
+static int  s_drag_anchor_y   = 0;
+static int  s_drag_total_dy   = 0;
+#define TOUCH_DRAG_SUPPRESS_PX 8   /* clicks within this radius still count as taps */
+
 /* Convert a tap point (in s_cont_edit local coordinates) to a byte
  * offset within the editor's flat text buffer. Returns true on
  * success and fills *out_off; returns false if the tap landed on
@@ -1336,7 +1353,72 @@ static void editor_touch_event_cb(lv_event_t *e)
 
     lv_event_code_t code = lv_event_get_code(e);
 
+    /* --- Drag-to-scroll ---
+     *
+     * On PRESSED we record the start point; on every PRESSING we
+     * compute the vertical delta from the last anchor and, once it
+     * exceeds one line height, scroll the document by that many
+     * lines. RELEASED leaves s_drag_total_dy set so the CLICKED
+     * branch below can ignore the release if the user actually
+     * dragged rather than tapped. */
+    if (code == LV_EVENT_PRESSED) {
+        lv_indev_t *indev = lv_indev_active();
+        if (!indev) return;
+        lv_point_t pt;
+        lv_indev_get_point(indev, &pt);
+        s_drag_active   = true;
+        s_drag_start_x  = pt.x;
+        s_drag_start_y  = pt.y;
+        s_drag_anchor_y = pt.y;
+        s_drag_total_dy = 0;
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        if (!s_drag_active) return;
+        lv_indev_t *indev = lv_indev_active();
+        if (!indev) return;
+        lv_point_t pt;
+        lv_indev_get_point(indev, &pt);
+
+        int dy = pt.y - s_drag_anchor_y;
+        s_drag_total_dy = pt.y - s_drag_start_y;
+
+        int line_h = LINE_H > 0 ? LINE_H : 1;
+        if (dy <= -line_h || dy >= line_h) {
+            int step = dy / line_h;            /* finger up -> step<0 -> scroll forward */
+            s_drag_anchor_y += step * line_h;
+
+            int total      = editor_get_line_count();
+            int scroll     = editor_get_scroll_line();
+            int new_scroll = scroll - step;    /* invert: dragging down reveals lines above */
+            if (new_scroll > total - 1) new_scroll = total - 1;
+            if (new_scroll < 0) new_scroll = 0;
+            if (new_scroll != scroll) {
+                editor_set_scroll_line(new_scroll);
+                editor_ui_refresh();
+                standby_reset_timer();
+            }
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        s_drag_active = false;
+        /* s_drag_total_dy is consumed by the CLICKED branch below
+         * (LVGL fires CLICKED right after RELEASED on a short press). */
+        return;
+    }
+
     if (code == LV_EVENT_CLICKED) {
+        /* Suppress the click if the user actually dragged: a swipe
+         * should scroll only, never move the caret. */
+        if (std::abs(s_drag_total_dy) > TOUCH_DRAG_SUPPRESS_PX) {
+            s_drag_total_dy = 0;
+            return;
+        }
+        s_drag_total_dy = 0;
+
         lv_indev_t *indev = lv_indev_active();
         if (!indev) return;
         lv_point_t pt;
@@ -3644,14 +3726,15 @@ static void build_screens(void)
     lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
 
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-    /* Route LVGL pointer events (tap, double-tap, swipe) on the
-     * editor area to editor_touch_event_cb. The container is
-     * CLICKABLE by default and receives gestures from the indev. */
+    /* Route LVGL pointer events (tap, double-tap, drag-to-scroll,
+     * swipe gesture) on the editor area to editor_touch_event_cb.
+     * The container is CLICKABLE so it receives press / pressing /
+     * released / clicked / gesture events from the indev. Using
+     * LV_EVENT_ALL is simpler than registering each subtype and
+     * lets editor_touch_event_cb filter by code. */
     lv_obj_add_flag(s_cont_edit, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
-                        LV_EVENT_CLICKED, NULL);
-    lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
-                        LV_EVENT_GESTURE, NULL);
+                        LV_EVENT_ALL, NULL);
 #endif
 
     /* "draftling" text label shown when no file is open */
