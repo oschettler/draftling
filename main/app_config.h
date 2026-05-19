@@ -104,10 +104,10 @@
  *     logical_y (the screen's vertical axis);
  *   - mirror_y flips native_y, which (after the swap) flips
  *     logical_x (the screen's horizontal axis).
- * Verified on hardware: with the PaperS3 held in landscape mode
- * (USB-C on the right, the orientation M5GFX setRotation(1)
- * produces) both axes need to be inverted, so mirror_x=1 AND
- * mirror_y=1. */
+ * Verified on hardware (PaperS3 in landscape, USB-C on the right,
+ * the orientation M5GFX setRotation(1) produces): only the
+ * vertical screen axis needs to be inverted, which after the swap
+ * corresponds to flipping native_x -- so mirror_x=1, mirror_y=0. */
 #define TOUCH_I2C_ADDR  0x5D
 #define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO
@@ -115,7 +115,7 @@
 #define TOUCH_NATIVE_H  960
 #define TOUCH_SWAP_XY   1
 #define TOUCH_MIRROR_X  1
-#define TOUCH_MIRROR_Y  1
+#define TOUCH_MIRROR_Y  0
 
 /* Battery voltage monitor.
  *
