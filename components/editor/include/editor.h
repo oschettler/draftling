@@ -10,9 +10,16 @@ extern "C" {
 #include <sdkconfig.h>
 
 /* Maximum document size held in the in-memory gap buffer, in bytes.
- * Configured via menuconfig (DRAFTLING -> Editor -> Editor document
- * buffer size). The buffer itself lives in PSRAM. */
-#define EDITOR_MAX_DOC_SIZE  (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB * 1024)
+ *
+ * Sized dynamically at startup from the free PSRAM available when
+ * editor_init() runs (after the display, LVGL widget heap, and
+ * editor UI have taken their share). Two buffers of this size are
+ * allocated from PSRAM -- the gap buffer and a flattened text cache
+ * used by the UI refresh path -- so the editor's total SPIRAM cost
+ * is roughly 2x this value.
+ *
+ * Returns 0 before editor_init() has run. */
+size_t editor_get_max_doc_size(void);
 
 typedef enum {
     EDITOR_MODE_NORMAL,

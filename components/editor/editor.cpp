@@ -67,18 +67,64 @@ extern "C" void editor_init(void)
      * of the process. Subsequent calls (e.g. from the file-browser
      * "open" handler) only reset the in-memory document state. */
     if (s_buf == NULL) {
-        s_buf_size = EDITOR_MAX_DOC_SIZE;
+        /* ---- Dynamic sizing from free PSRAM ----
+         *
+         * Use roughly half of the PSRAM that is still free at this
+         * point in boot, split evenly between the gap buffer and the
+         * flat text cache. The other half is reserved for the rest of
+         * the system that initializes after the editor: BLE/Bluedroid
+         * (CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST), the WiFi/LWIP
+         * dynamic pools (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP), the
+         * Git-sync HTTPS task stack and response buffers, the LVGL
+         * widget heap growth, and ad-hoc heap_caps_malloc(SPIRAM)
+         * allocations during editing (clipboard, file I/O staging,
+         * Markdown re-rendering, etc.).
+         *
+         * Clamped to a sensible min/max so very small or very large
+         * PSRAM configurations still get a usable editor:
+         *   - Min 64 KB per buffer keeps editor_open_file() useful.
+         *   - Max 4 MB per buffer matches the previous Kconfig ceiling
+         *     and avoids creating a single allocation larger than any
+         *     realistic Markdown file the editor needs to load. */
+        const size_t MIN_BUF = 64  * 1024;
+        const size_t MAX_BUF = 4   * 1024 * 1024;
+        const size_t RUNTIME_RESERVE = 2 * 1024 * 1024;
+        const size_t ALIGN   = 4 * 1024;
+
+        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t usable;
+        if (free_psram > RUNTIME_RESERVE) {
+            usable = free_psram - RUNTIME_RESERVE;
+        } else {
+            /* PSRAM is tight: fall back to using half of what is free.
+             * The min/max clamp below still guarantees we ask for at
+             * least MIN_BUF -- if that allocation fails we abort via
+             * assert(), which is the same behaviour as before. */
+            usable = free_psram / 2;
+        }
+        size_t per_buf = usable / 2;
+        per_buf &= ~(ALIGN - 1);
+        if (per_buf < MIN_BUF) per_buf = MIN_BUF;
+        if (per_buf > MAX_BUF) per_buf = MAX_BUF;
+        s_buf_size = per_buf;
+
         s_buf  = (char *)heap_caps_malloc(s_buf_size, MALLOC_CAP_SPIRAM);
         s_flat = (char *)heap_caps_malloc(s_buf_size + 1, MALLOC_CAP_SPIRAM);
         assert(s_buf && s_flat);
-        ESP_LOGI(TAG, "Editor initialized (%u KB buffer, PSRAM)",
-                 (unsigned)(s_buf_size / 1024));
+        ESP_LOGI(TAG, "Editor initialized (%u KB buffer, PSRAM; %u KB free PSRAM remaining)",
+                 (unsigned)(s_buf_size / 1024),
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     }
     s_gap_start = 0;
     s_gap_end   = s_buf_size;
     s_modified  = false;
     s_path[0]   = '\0';
     invalidate_flat();
+}
+
+extern "C" size_t editor_get_max_doc_size(void)
+{
+    return s_buf_size;
 }
 
 /* ---- Per-file metadata sidecar ----

@@ -1952,12 +1952,13 @@ static int find_timeout_option(uint32_t sec)
  * the entry entirely. */
 #define SETTINGS_IDX_TIMEOUT  0
 #define SETTINGS_IDX_FONTSZ   1
+#define SETTINGS_IDX_MAXFILE  2
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
-#define SETTINGS_IDX_BACKLIGHT 2
-#define _SETTINGS_NEXT_AFTER_BACKLIGHT 3
+#define SETTINGS_IDX_BACKLIGHT 3
+#define _SETTINGS_NEXT_AFTER_BACKLIGHT 4
 #else
 #define SETTINGS_IDX_BACKLIGHT (-1)
-#define _SETTINGS_NEXT_AFTER_BACKLIGHT 2
+#define _SETTINGS_NEXT_AFTER_BACKLIGHT 3
 #endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
 #define SETTINGS_IDX_THEME    (_SETTINGS_NEXT_AFTER_BACKLIGHT + 0)
@@ -1995,6 +1996,14 @@ static void refresh_settings_items(void)
                  FONT_SIZE_LABELS[fi]);
         lv_list_add_btn(s_settings_list, NULL, buf);
     }
+
+    /* Max file size (read-only).
+     * Sized dynamically by editor_init() from the PSRAM that was free
+     * at boot; surface it here so the user knows the hard upper limit
+     * for files they can open. */
+    snprintf(buf, sizeof(buf), "Max file size: %u KB (read-only)",
+             (unsigned)(editor_get_max_doc_size() / 1024));
+    lv_list_add_btn(s_settings_list, NULL, buf);
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
     /* Backlight brightness (LCD boards with a controllable backlight) */
@@ -2122,6 +2131,9 @@ static void settings_activate_item(int idx)
         save_font_size_to_nvs();
         init_styles();
         refresh_settings_items();
+    } else if (idx == SETTINGS_IDX_MAXFILE) {
+        /* Read-only display of the dynamically-sized editor buffer.
+         * Enter is a no-op; the value is fixed at editor_init() time. */
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
     } else if (idx == SETTINGS_IDX_BACKLIGHT) {
         /* Cycle to next backlight brightness step. Apply immediately
@@ -3202,13 +3214,13 @@ static void browser_activate_item(int row)
     esp_err_t oerr = editor_open_file(path);
     if (oerr == ESP_ERR_NO_MEM) {
         /* File too large for the editor buffer. Stay on the file
-         * browser and tell the user how big the limit is so they
-         * can decide to raise CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB
-         * in menuconfig. */
+         * browser and tell the user how big the limit is. The limit
+         * is sized at boot from available PSRAM (see editor_init),
+         * and is also surfaced read-only in F1 -> Settings. */
         char msg[96];
         snprintf(msg, sizeof(msg),
                  "File too large (limit %u KB)",
-                 (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
+                 (unsigned)(editor_get_max_doc_size() / 1024));
         editor_ui_set_status(msg);
         return;
     }
@@ -3658,7 +3670,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
                 char msg[96];
                 snprintf(msg, sizeof(msg),
                          "Reload failed: file too large (limit %u KB)",
-                         (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
+                         (unsigned)(editor_get_max_doc_size() / 1024));
                 editor_ui_set_status(msg);
             }
             editor_ui_refresh();

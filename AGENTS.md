@@ -167,9 +167,14 @@ Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
 
 The largest component. Contains:
 
-- **editor.cpp** -- gap-buffer text engine (default 256 KB document
-  limit, configurable via `CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB` in
-  menuconfig; the gap buffer and flat cache both live in PSRAM) with
+- **editor.cpp** -- gap-buffer text engine with a document size limit
+  sized dynamically at `editor_init()` from the PSRAM that is free
+  when the editor starts (the gap buffer and flat cache are each
+  allocated at that size, so the editor's SPIRAM cost is ~2x the
+  limit; the value is clamped to [64 KB, 4 MB] per buffer and a
+  ~2 MB headroom is reserved for BLE / WiFi / Git sync / LVGL
+  widget growth). Exposes `editor_get_max_doc_size()` for the UI,
+  which surfaces the value read-only in F1 -> Settings. Provides
   cursor movement, selection, clipboard, insert/delete, and file I/O.
 - **editor_ui.cpp** -- LVGL-based user interface: title bar with battery
   and layout indicators, scrollable text area with Markdown rendering,
@@ -496,7 +501,9 @@ with ESP-IDF 6.x; the top-level `CMakeLists.txt` enforces this with a
 `FATAL_ERROR` on IDF major version >= 6.
 
 PSRAM is required on every supported board. The editor gap buffer
-(`CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB`, default 256 KB), the display
+(sized dynamically at startup from the PSRAM that is free when
+`editor_init()` runs -- typically a few hundred KB up to a few MB
+depending on the board), the display
 framebuffers, the LVGL widget heap (`CONFIG_LV_USE_CUSTOM_MALLOC` routes
 through PSRAM), the Git-sync HTTPS response buffers + task stack, and
 the Bluedroid host environment (`CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY` plus

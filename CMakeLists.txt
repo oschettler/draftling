@@ -17,7 +17,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(draftling)
 
 # Draftling requires PSRAM on every supported board. The editor gap
-# buffer (CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB, default 256 KB), the
+# buffer (sized dynamically at editor_init() from the free PSRAM, see
+# components/editor/editor.cpp), the
 # UC8179 was previously supported (Seeed reTerminal E1001 and Waveshare
 # E-Paper Driver HAT) but proved too slow for an interactive editor and
 # was removed.
