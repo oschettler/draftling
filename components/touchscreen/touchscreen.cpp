@@ -120,15 +120,23 @@ static bool poll_controller(int *out_x, int *out_y)
     }
 
     /* Some firmwares report the touch count in resp[1]; others put a
-     * "frame valid" flag in resp[0]. Treat anything with the low
-     * nibble of resp[1] in [1..5] as "finger down". */
-    uint8_t points = resp[1] & 0x0F;
-    if (points == 0 || points > 5) {
-        return false;
-    }
+     * "frame valid" flag in resp[0]. Accept either:
+     *  - resp[1] in [1..5] (explicit point count), OR
+     *  - resp[0] == 0 (no gesture) AND (x | y) != 0 (LilyGo's check
+     *    in their official AXS15231B driver -- the controller does
+     *    not always populate the point-count byte).
+     * If none of the above, treat as "finger up". */
+    uint8_t points  = resp[1] & 0x0F;
+    uint8_t gesture = resp[0];
 
     int nx = ((int)(resp[2] & 0x0F) << 8) | resp[3];
     int ny = ((int)(resp[4] & 0x0F) << 8) | resp[5];
+
+    bool valid = (points >= 1 && points <= 5) ||
+                 (gesture == 0 && (nx != 0 || ny != 0));
+    if (!valid) {
+        return false;
+    }
 
     int lx, ly;
     native_to_logical(nx, ny, &lx, &ly);
@@ -137,14 +145,13 @@ static bool poll_controller(int *out_x, int *out_y)
     return true;
 }
 
-/* INT line is active-low: poll the controller only when it is held
- * low (the controller pulses it for each touch frame). When no INT
- * GPIO is wired, fall back to polling on every read_cb invocation. */
-static bool int_active(void)
-{
-    if (s_cfg.intr < 0) return true;
-    return gpio_get_level((gpio_num_t)s_cfg.intr) == 0;
-}
+/* INT is a brief per-frame pulse on the AXS15231B (not held low
+ * while a finger is down), so we cannot use it to gate the I2C
+ * poll: by the time LVGL's read_cb runs the pulse is long gone.
+ * We therefore poll on every read_cb invocation and rely on the
+ * controller's response (gesture / point-count / zero coords) to
+ * decide whether a finger is currently down. The INT GPIO is still
+ * used by the standby manager as the EXT0 deep-sleep wake source. */
 
 static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -154,7 +161,7 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     int y = s_y_latch;
     bool pressed = false;
 
-    if (int_active() && s_mux && xSemaphoreTake(s_mux, 0) == pdTRUE) {
+    if (s_mux && xSemaphoreTake(s_mux, 0) == pdTRUE) {
         pressed = poll_controller(&x, &y);
         if (pressed) {
             s_x_latch = x;
@@ -163,8 +170,8 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         s_pressed_latch = pressed;
         xSemaphoreGive(s_mux);
     } else {
-        /* INT high -- finger up. Honour the latch so we report the
-         * release on the next call without another I2C read. */
+        /* Mutex contended -- report release for this frame; LVGL will
+         * call us again next tick. */
         s_pressed_latch = false;
     }
 
@@ -284,17 +291,13 @@ extern "C" bool touchscreen_read(int *out_x, int *out_y)
     if (!s_initialized || !s_mux) return false;
     bool pressed = false;
     if (xSemaphoreTake(s_mux, pdMS_TO_TICKS(20)) == pdTRUE) {
-        if (int_active()) {
-            pressed = poll_controller(out_x ? out_x : NULL,
-                                      out_y ? out_y : NULL);
-            if (pressed) {
-                if (out_x) s_x_latch = *out_x;
-                if (out_y) s_y_latch = *out_y;
-            }
-            s_pressed_latch = pressed;
-        } else {
-            s_pressed_latch = false;
+        pressed = poll_controller(out_x ? out_x : NULL,
+                                  out_y ? out_y : NULL);
+        if (pressed) {
+            if (out_x) s_x_latch = *out_x;
+            if (out_y) s_y_latch = *out_y;
         }
+        s_pressed_latch = pressed;
         xSemaphoreGive(s_mux);
     }
     if (!pressed) {

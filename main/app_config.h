@@ -186,7 +186,13 @@
 #define LCD_QSPI_D1_PIN     48
 #define LCD_QSPI_D2_PIN     40
 #define LCD_QSPI_D3_PIN     39
-#define LCD_RST_PIN         4
+/* The AXS15231B has no dedicated external reset pin on this
+ * board (the Arduino reference driver passes GFX_NOT_DEFINED);
+ * the controller is reset by its vendor unlock/lock SPI sequence.
+ * GPIO4 is in fact the touch I2C SDA line -- driving it as a
+ * push-pull RST output during display init would hold touch SDA
+ * low and prevent the I2C bus from ever coming up. */
+#define LCD_RST_PIN         -1
 #define LCD_TE_PIN          38
 #define LCD_BL_PIN          1
 
@@ -197,9 +203,11 @@
 #define SD_SPI_CS_PIN       10
 #define SD_EN_PIN           -1
 
-/* I2C bus (also carries the AXS5106L touch controller) */
-#define I2C_SDA_PIN         8
-#define I2C_SCL_PIN         9
+/* I2C bus carrying the AXS15231B integrated touch controller.
+ * Per the JC3248W535 board pinout (Tactility, Yoradio, edgerun
+ * and multiple community references): SDA=GPIO4, SCL=GPIO8. */
+#define I2C_SDA_PIN         4
+#define I2C_SCL_PIN         8
 
 /* AXS5106L touch controller. INT defaults to GPIO3 (RTC-capable,
  * required for wake-on-touch). The reset line is tied to the LCD
