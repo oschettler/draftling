@@ -46,10 +46,18 @@ the board you are building for:
   a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
   component; partial refresh and grayscale are not implemented yet.
 - **Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49** --
-  3.49" IPS color LCD (AXS15231B, 640x172, QSPI). Touch input is not
-  used.
+  3.49" IPS color LCD (AXS15231B, 640x172, QSPI). Touch input is
+  not currently wired up (the controller pinout is board-specific
+  and has not been verified); the BOOT button on GPIO0 is used for
+  deep-sleep wake.
 - **Generic ESP32 + color LCD: Guition JC3248W535** -- 3.5" IPS
-  color LCD (AXS15231B, 480x320, QSPI). Touch input is not used.
+  color LCD (AXS15231B, 480x320, QSPI) with AXS5106L capacitive
+  touch overlay. Has no user buttons, so deep-sleep wake is armed on
+  the touch INT line: any tap wakes the device. Touch also drives
+  the editor (tap to position cursor, double tap to select the word,
+  vertical swipe to scroll) and the menu lists (tap a row to
+  highlight it, tap again to activate -- the keyboard "arrows + Enter"
+  flow still works in parallel).
 - **LilyGO T-Display-S3** -- 1.9" IPS color LCD (ST7789, 320x170,
   8-bit i80 parallel). On-board battery monitor and BOOT button for
   deep-sleep wake; no on-board MicroSD slot, so an external SD must

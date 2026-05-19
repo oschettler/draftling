@@ -1097,12 +1097,398 @@ static void ensure_cursor_visible(void)
     }
 }
 
-/* ---- File browser ---- */
-
-/* Forward declaration: defined below in the menu system section, but
- * called from refresh_file_list() so list rows pick up theme colors
- * and the initial selection highlight. */
+/* Forward declarations: defined below in the menu / list-rendering
+ * section but referenced from the touch event callbacks immediately
+ * below, and from refresh_file_list() (so list rows pick up theme
+ * colors and the initial selection highlight). */
 static void apply_list_selection_styles(lv_obj_t *list, int sel);
+static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel);
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+/* The three activate-on-tap callbacks for the touchable lists.
+ * They are defined further down with the rest of their respective
+ * list code; forward-declared here so list_touch_attach can store
+ * them as function pointers in the static touch contexts. */
+static void browser_activate_item(int row);
+static void menu_activate_item(int idx);
+static void settings_activate_item(int idx);
+#endif
+
+/* ---- Touch input ----
+ *
+ * Touch is gated on CONFIG_DRAFTLING_TOUCHSCREEN. When enabled we
+ * register LVGL pointer-event handlers on:
+ *   - the editor content area (s_cont_edit): tap moves the cursor,
+ *     double-tap selects the word at the tap point, and vertical
+ *     swipes scroll the document.
+ *   - each list-row button in the main menu, settings menu, and
+ *     file browser: a tap highlights the row (single click) and a
+ *     second tap on the already-highlighted row activates it.
+ *     This mirrors the keyboard flow (arrow keys then Enter) so a
+ *     touch-only user can reach every command.
+ *
+ * The keyboard handlers are untouched and continue to work in
+ * parallel; touch is purely additive. */
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+
+#include <cctype>
+
+/* Treat as a "word" character: ASCII alnum / underscore, and any
+ * UTF-8 continuation/start byte (>= 0x80). This makes word-select
+ * work on Latin, Cyrillic, accented chars, etc. without needing a
+ * full Unicode category table. */
+static bool touch_is_word_byte(unsigned char c)
+{
+    if (c >= 0x80) return true;
+    if (c == '_') return true;
+    if (c >= '0' && c <= '9') return true;
+    if (c >= 'a' && c <= 'z') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    return false;
+}
+
+/* Walk N UTF-8 codepoints into a buffer and return the resulting
+ * byte offset, clamped to len. The display layer already laid the
+ * codepoints out in monospaced glyphs, so this is the inverse of
+ * what lv_label_get_letter_on() reports for our needs. */
+static int touch_utf8_skip(const char *s, int len, int n_cp)
+{
+    int i = 0;
+    while (n_cp > 0 && i < len) {
+        unsigned char c = (unsigned char)s[i];
+        int adv = 1;
+        if      ((c & 0x80) == 0x00) adv = 1;
+        else if ((c & 0xE0) == 0xC0) adv = 2;
+        else if ((c & 0xF0) == 0xE0) adv = 3;
+        else if ((c & 0xF8) == 0xF0) adv = 4;
+        if (i + adv > len) break;
+        i += adv;
+        n_cp--;
+    }
+    return i;
+}
+
+/* Last tap state for software double-tap detection. LVGL fires
+ * LV_EVENT_CLICKED on every release; we compare against the
+ * previous one and promote consecutive close-in-time clicks to a
+ * "double tap". */
+static uint32_t s_last_tap_ms = 0;
+static int      s_last_tap_x  = -1;
+static int      s_last_tap_y  = -1;
+#define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
+#define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
+
+/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+ * offset within the editor's flat text buffer. Returns true on
+ * success and fills *out_off; returns false if the tap landed on
+ * empty space below the last rendered line. */
+static bool touch_point_to_offset(int x, int y, size_t *out_off)
+{
+    if (!out_off) return false;
+
+    /* Walk the per-slot render cache to find which line was tapped.
+     * The cache is kept in lock-step with the visible labels by
+     * editor_ui_refresh(), so s_prev_line_y[i] / s_prev_line_h[i]
+     * describe the layout the user actually sees. */
+    int slot = -1;
+    for (int i = 0; i < MAX_LINE_LABELS; i++) {
+        if (!s_prev_line_visible[i]) continue;
+        if (s_prev_line_y[i] < 0)    continue;
+        int y1 = s_prev_line_y[i];
+        int y2 = y1 + s_prev_line_h[i];
+        if (y >= y1 && y < y2) { slot = i; break; }
+    }
+    if (slot < 0) {
+        /* Tapped below the last visible line -- map to end-of-document. */
+        size_t total = 0;
+        const char *flat = editor_get_text(&total);
+        (void)flat;
+        *out_off = total;
+        return true;
+    }
+
+    int line_idx = editor_get_scroll_line() + slot;
+    int total_lines = editor_get_line_count();
+    if (line_idx >= total_lines) {
+        size_t total = 0;
+        editor_get_text(&total);
+        *out_off = total;
+        return true;
+    }
+
+    size_t ll = 0;
+    const char *lt = editor_get_line(line_idx, &ll);
+    if (!lt) return false;
+
+    size_t flat_len = 0;
+    const char *flat = editor_get_text(&flat_len);
+    size_t line_off = (size_t)(lt - flat);
+
+    /* Translate (x_in_container) into (x_in_label). Each label is
+     * positioned at x=2 in the container (see build_editor_screen). */
+    int x_in_label = x - 2;
+    if (x_in_label < 0) x_in_label = 0;
+    int y_in_label = y - s_prev_line_y[slot];
+    if (y_in_label < 0) y_in_label = 0;
+
+    /* lv_label_get_letter_on returns a codepoint index into the
+     * displayed text (BIDI-aware, but our content is LTR-only). */
+    int disp_char = 0;
+    if (s_line_labels[slot]) {
+        lv_point_t p;
+        p.x = x_in_label;
+        p.y = y_in_label;
+        disp_char = (int)lv_label_get_letter_on(s_line_labels[slot], &p, false);
+    }
+    if (disp_char < 0) disp_char = 0;
+
+    /* Re-parse the line so we know the markdown-prefix lengths and
+     * can map the display character index back to a raw byte offset
+     * within the original line. */
+    md_line_info_t mi;
+    md_parse_line(lt, ll, &mi, false /* in_code irrelevant for column math */);
+
+    int disp_prefix_cp = 0;   /* codepoints rendered before mi.content */
+    int raw_prefix_b   = 0;   /* bytes skipped in the raw line before mi.content */
+
+    switch (mi.type) {
+    case MD_LINE_BULLET: {
+        /* Display string is "<2*indent spaces>* <bullet body>".
+         * The bullet body is the same as mi.content. The raw line
+         * is "<spaces>* <body>", which has the same number of
+         * leading display characters as our synthesized prefix --
+         * so disp_prefix_cp and raw_prefix_b describe equivalent
+         * spans and cancel out for ASCII bullet prefixes. */
+        disp_prefix_cp = mi.indent_level * 2 + 2;
+        raw_prefix_b   = (int)(mi.content - lt);
+        break;
+    }
+    case MD_LINE_HR:
+    case MD_LINE_EMPTY:
+        /* Display content is synthetic; map every tap to the start
+         * of the raw line so Enter/typing inserts there. */
+        *out_off = line_off;
+        return true;
+    case MD_LINE_CODE_FENCE:
+    case MD_LINE_H1: case MD_LINE_H2: case MD_LINE_H3: case MD_LINE_H4:
+    case MD_LINE_BLOCKQUOTE:
+    case MD_LINE_NUMBERED:
+    case MD_LINE_PARAGRAPH:
+    case MD_LINE_CODE:
+    default:
+        /* Display is mi.content unchanged; the raw line skipped
+         * (mi.content - lt) bytes for the markdown marker. */
+        disp_prefix_cp = 0;
+        raw_prefix_b   = (int)(mi.content - lt);
+        if (raw_prefix_b < 0) raw_prefix_b = 0;
+        break;
+    }
+
+    /* Clamp the display column to the rendered text length so a tap
+     * past end-of-line places the cursor right after the last char. */
+    int content_cp = disp_char - disp_prefix_cp;
+    if (content_cp < 0) content_cp = 0;
+
+    /* Walk content_cp codepoints into mi.content to get the raw
+     * byte offset inside the content span, then add the raw prefix. */
+    int byte_in_content = touch_utf8_skip(mi.content,
+                                          (int)mi.content_len, content_cp);
+    *out_off = line_off + (size_t)raw_prefix_b + (size_t)byte_in_content;
+    return true;
+}
+
+/* Expand a single-tap byte offset into the selection range of the
+ * word containing it. */
+static void touch_select_word_at(size_t off)
+{
+    size_t flat_len = 0;
+    const char *flat = editor_get_text(&flat_len);
+    if (!flat || flat_len == 0) return;
+    if (off > flat_len) off = flat_len;
+
+    /* Walk left until non-word byte (UTF-8-safe: continuation bytes
+     * test as word chars so multi-byte codepoints are not split). */
+    size_t start = off;
+    while (start > 0 && touch_is_word_byte((unsigned char)flat[start - 1])) {
+        start--;
+    }
+    size_t end = off;
+    while (end < flat_len && touch_is_word_byte((unsigned char)flat[end])) {
+        end++;
+    }
+    if (start == end) return;  /* tapped on whitespace */
+
+    editor_clear_selection();
+    editor_set_cursor(start);
+    editor_set_selection_anchor();
+    editor_set_cursor(end);
+}
+
+static void editor_touch_event_cb(lv_event_t *e)
+{
+    /* Bail out early if any modal overlay is open: the overlay's
+     * own keyboard handler owns the input. (A future revision could
+     * give overlays their own touch routing; for now we skip them.) */
+    if (s_menu_open || s_settings_open || s_save_open || s_search_open) {
+        return;
+    }
+    if (editor_get_mode() != EDITOR_MODE_EDITING) return;
+
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_CLICKED) {
+        lv_indev_t *indev = lv_indev_active();
+        if (!indev) return;
+        lv_point_t pt;
+        lv_indev_get_point(indev, &pt);
+
+        /* Translate screen-space point into s_cont_edit-local
+         * coordinates. The editor area starts at y=EDITOR_Y and
+         * occupies the full screen width starting at x=0. */
+        int lx = pt.x;
+        int ly = pt.y - EDITOR_Y;
+        if (ly < 0) return;
+
+        uint32_t now = lv_tick_get();
+        bool is_double = (now - s_last_tap_ms) <= TOUCH_DOUBLE_TAP_MS &&
+                          (s_last_tap_x >= 0) &&
+                          (lv_abs(pt.x - s_last_tap_x) <= TOUCH_DOUBLE_TAP_PX) &&
+                          (lv_abs(pt.y - s_last_tap_y) <= TOUCH_DOUBLE_TAP_PX);
+        s_last_tap_ms = now;
+        s_last_tap_x  = pt.x;
+        s_last_tap_y  = pt.y;
+
+        size_t off = 0;
+        if (!touch_point_to_offset(lx, ly, &off)) return;
+
+        if (is_double) {
+            touch_select_word_at(off);
+        } else {
+            editor_clear_selection();
+            editor_set_cursor(off);
+        }
+        ensure_cursor_visible();
+        editor_ui_refresh();
+        standby_reset_timer();
+        return;
+    }
+
+    if (code == LV_EVENT_GESTURE) {
+        lv_indev_t *indev = lv_indev_active();
+        if (!indev) return;
+        lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+        /* Reset the indev's gesture state so it does not fire again
+         * on the next refresh (LVGL leaves the last gesture latched
+         * until something consumes it). */
+        lv_indev_wait_release(indev);
+
+        int step = VISIBLE_LINES > 2 ? VISIBLE_LINES - 1 : 1;
+        if (dir == LV_DIR_TOP) {
+            /* Finger swiped up -> show content further down. */
+            int scroll = editor_get_scroll_line();
+            int total  = editor_get_line_count();
+            int new_scroll = scroll + step;
+            if (new_scroll > total - 1) new_scroll = total - 1;
+            if (new_scroll < 0) new_scroll = 0;
+            editor_set_scroll_line(new_scroll);
+            editor_ui_refresh();
+            standby_reset_timer();
+        } else if (dir == LV_DIR_BOTTOM) {
+            int scroll = editor_get_scroll_line();
+            int new_scroll = scroll - step;
+            if (new_scroll < 0) new_scroll = 0;
+            editor_set_scroll_line(new_scroll);
+            editor_ui_refresh();
+            standby_reset_timer();
+        }
+        /* Horizontal swipes are ignored for now (no obvious editor
+         * action; could be wired to undo/redo later). */
+        return;
+    }
+}
+
+/* Tap-on-row helper for the menu / settings / file-browser lists.
+ * Stored as the LV_EVENT_CLICKED callback on every lv_list_add_btn
+ * (the row index is stuffed into the button's user_data).
+ *
+ * Behaviour: tap a row to highlight it (single click) and tap it
+ * again to activate (matching the keyboard's "arrow keys to focus
+ * + Enter to activate" flow). This avoids accidental activations
+ * on imprecise taps and lets the user inspect the highlight before
+ * committing. */
+typedef void (*list_activate_fn)(int idx);
+
+typedef struct {
+    int            *p_sel;       /* selection index storage */
+    int            *p_sel_prev;  /* selection-prev storage (NULL if none) */
+    lv_obj_t       *list;        /* list widget */
+    list_activate_fn activate;   /* fn to call when an already-selected row is tapped */
+    int             count;       /* number of items (for clamp) */
+} list_touch_ctx_t;
+
+/* One static context per touchable list. The refresh_*() functions
+ * fill these in (count, list) and rewire the click callbacks after
+ * (re)building rows so user_data is always in sync with the visible
+ * row order. */
+static list_touch_ctx_t s_menu_touch_ctx;
+static list_touch_ctx_t s_settings_touch_ctx;
+static list_touch_ctx_t s_browser_touch_ctx;
+
+static void list_touch_event_cb(lv_event_t *e)
+{
+    list_touch_ctx_t *ctx = (list_touch_ctx_t *)lv_event_get_user_data(e);
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    if (!ctx || !ctx->p_sel || !btn) return;
+
+    /* The row index is the button's position among its siblings
+     * (LVGL keeps children in insertion order). Deriving it here
+     * avoids stomping the button's user_data slot, which the file
+     * browser uses to remember the entry index. */
+    int32_t idx32 = lv_obj_get_index(btn);
+    int idx = (int)idx32;
+    if (idx < 0 || idx >= ctx->count) return;
+
+    if (idx == *ctx->p_sel) {
+        /* Tapped the already-highlighted row -- activate it. */
+        if (ctx->activate) ctx->activate(idx);
+    } else {
+        /* First tap on a different row -- just move the highlight. */
+        if (ctx->p_sel_prev) *ctx->p_sel_prev = *ctx->p_sel;
+        *ctx->p_sel = idx;
+        update_list_highlight(ctx->list, *ctx->p_sel,
+                              ctx->p_sel_prev ? *ctx->p_sel_prev : -1);
+        if (ctx->p_sel_prev) *ctx->p_sel_prev = *ctx->p_sel;
+    }
+    standby_reset_timer();
+}
+
+/* Walk every row of `list` and attach list_touch_event_cb
+ * (LV_EVENT_CLICKED) with `ctx` as the user-data pointer. The row
+ * index is derived at click time via lv_obj_get_index() so each
+ * row's own user_data slot is left alone (the file browser uses
+ * that slot to store the underlying s_browser_entries[] index). */
+static void list_touch_attach(lv_obj_t *list, list_touch_ctx_t *ctx)
+{
+    if (!list || !ctx) return;
+    ctx->list = list;
+    uint32_t n = lv_obj_get_child_count(list);
+    ctx->count = (int)n;
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *btn = lv_obj_get_child(list, (int32_t)i);
+        if (!btn) continue;
+        /* Remove any prior callback we registered so a second
+         * refresh_*() does not stack duplicates. */
+        lv_obj_remove_event_cb(btn, list_touch_event_cb);
+        lv_obj_add_event_cb(btn, list_touch_event_cb,
+                            LV_EVENT_CLICKED, ctx);
+    }
+}
+
+
+
+#endif /* CONFIG_DRAFTLING_TOUCHSCREEN */
+
+/* ---- File browser ---- */
 
 static void refresh_file_list(void)
 {
@@ -1169,6 +1555,18 @@ static void refresh_file_list(void)
      * black background. Mirror what refresh_menu_items() does. */
     apply_list_selection_styles(s_list_files, s_browser_sel);
     s_browser_sel_prev = s_browser_sel;
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Attach tap-to-select / tap-again-to-activate handlers to the
+     * file browser rows. Each row's user_data already carries the
+     * s_browser_entries[] index for the Enter-key path; the touch
+     * callback derives the visual row number via lv_obj_get_index()
+     * so user_data is preserved. */
+    s_browser_touch_ctx.p_sel      = &s_browser_sel;
+    s_browser_touch_ctx.p_sel_prev = &s_browser_sel_prev;
+    s_browser_touch_ctx.activate   = browser_activate_item;
+    list_touch_attach(s_list_files, &s_browser_touch_ctx);
+#endif
 }
 
 extern "C" void editor_ui_show_file_browser(void)
@@ -1411,6 +1809,16 @@ static void refresh_menu_items(void)
     /* Highlight selection */
     apply_list_selection_styles(s_menu_list, s_menu_sel);
     s_menu_sel_prev = s_menu_sel;
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Attach tap-to-select / tap-again-to-activate handlers to every
+     * row. The selection state is owned by the menu itself, so we
+     * pass the addresses of s_menu_sel / s_menu_sel_prev. */
+    s_menu_touch_ctx.p_sel      = &s_menu_sel;
+    s_menu_touch_ctx.p_sel_prev = &s_menu_sel_prev;
+    s_menu_touch_ctx.activate   = menu_activate_item;
+    list_touch_attach(s_menu_list, &s_menu_touch_ctx);
+#endif
 }
 
 /* Move only the highlight bar without rebuilding the list. */
@@ -1532,6 +1940,13 @@ static void refresh_settings_items(void)
     /* Highlight selection */
     apply_list_selection_styles(s_settings_list, s_settings_sel);
     s_settings_sel_prev = s_settings_sel;
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    s_settings_touch_ctx.p_sel      = &s_settings_sel;
+    s_settings_touch_ctx.p_sel_prev = &s_settings_sel_prev;
+    s_settings_touch_ctx.activate   = settings_activate_item;
+    list_touch_attach(s_settings_list, &s_settings_touch_ctx);
+#endif
 }
 
 /* Move only the highlight bar without rebuilding the list. */
@@ -2680,6 +3095,48 @@ static void handle_editor_key(const kb_event_t *ev)
      * on the M5Stack PaperS3 backend. */
 }
 
+/* Open the file (or descend into the directory) selected by the
+ * given row index in the file browser. Shared between the Enter-key
+ * handler and the touchscreen tap-to-activate path. */
+static void browser_activate_item(int row)
+{
+    lv_obj_t *btn = lv_obj_get_child(s_list_files, row);
+    if (!btn) return;
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= s_browser_count) return;
+    if (s_browser_entries[idx].is_dir) {
+        /* Directory navigation is not implemented yet. */
+        return;
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s",
+             sd_card_get_mount_point(), s_browser_entries[idx].name);
+    editor_init();
+    esp_err_t oerr = editor_open_file(path);
+    if (oerr == ESP_ERR_NO_MEM) {
+        /* File too large for the editor buffer. Stay on the file
+         * browser and tell the user how big the limit is so they
+         * can decide to raise CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB
+         * in menuconfig. */
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "File too large (limit %u KB)",
+                 (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
+        editor_ui_set_status(msg);
+        return;
+    }
+    if (oerr != ESP_OK) {
+        editor_ui_set_status("Open failed");
+        return;
+    }
+    /* editor_open_file restores the cursor / scroll line from the
+     * metadata sidecar; make sure the cursor is on screen before
+     * the first refresh in case the saved scroll line is out of date. */
+    ensure_cursor_visible();
+    editor_ui_show_editor();
+}
+
 static void handle_browser_key(const kb_event_t *ev)
 {
     bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
@@ -2764,44 +3221,8 @@ static void handle_browser_key(const kb_event_t *ev)
         cancel_status_clear_and_restore();
         break;
     case KB_KEY_ENTER: {
-        lv_obj_t *btn = lv_obj_get_child(s_list_files, s_browser_sel);
-        if (btn) {
-            int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
-            if (idx >= 0 && idx < s_browser_count) {
-                if (!s_browser_entries[idx].is_dir) {
-                    char path[512];
-                    snprintf(path, sizeof(path), "%s/%s",
-                             sd_card_get_mount_point(), s_browser_entries[idx].name);
-                    editor_init();
-                    esp_err_t oerr = editor_open_file(path);
-                    if (oerr == ESP_ERR_NO_MEM) {
-                        /* File too large for the editor buffer.
-                         * Stay on the file browser and tell the user
-                         * how big the limit is so they can decide to
-                         * raise CONFIG_DRAFTLING_EDITOR_BUFFER_SIZE_KB
-                         * in menuconfig. */
-                        char msg[96];
-                        snprintf(msg, sizeof(msg),
-                                 "File too large (limit %u KB)",
-                                 (unsigned)(EDITOR_MAX_DOC_SIZE / 1024));
-                        editor_ui_set_status(msg);
-                        return;
-                    }
-                    if (oerr != ESP_OK) {
-                        editor_ui_set_status("Open failed");
-                        return;
-                    }
-                    /* editor_open_file restores the cursor / scroll
-                     * line from the metadata sidecar; make sure the
-                     * cursor is on screen before the first refresh
-                     * in case the saved scroll line is out of date. */
-                    ensure_cursor_visible();
-                    editor_ui_show_editor();
-                    return;
-                }
-            }
-        }
-        break;
+        browser_activate_item(s_browser_sel);
+        return;
     }
     default:
         if (ch == 'n' || ch == 'N') {
@@ -3221,6 +3642,17 @@ static void build_screens(void)
     lv_obj_set_style_pad_all(s_cont_edit, 0, 0);
     lv_obj_set_style_radius(s_cont_edit, 0, 0);
     lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Route LVGL pointer events (tap, double-tap, swipe) on the
+     * editor area to editor_touch_event_cb. The container is
+     * CLICKABLE by default and receives gestures from the indev. */
+    lv_obj_add_flag(s_cont_edit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
+                        LV_EVENT_GESTURE, NULL);
+#endif
 
     /* "draftling" text label shown when no file is open */
     s_img_logo = lv_label_create(s_cont_edit);
