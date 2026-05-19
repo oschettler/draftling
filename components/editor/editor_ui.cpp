@@ -1386,12 +1386,16 @@ static void editor_touch_event_cb(lv_event_t *e)
 
         int line_h = LINE_H > 0 ? LINE_H : 1;
         if (dy <= -line_h || dy >= line_h) {
-            int step = dy / line_h;            /* finger up -> step<0 -> scroll forward */
+            int step = dy / line_h;
             s_drag_anchor_y += step * line_h;
 
             int total      = editor_get_line_count();
             int scroll     = editor_get_scroll_line();
-            int new_scroll = scroll - step;    /* invert: dragging down reveals lines above */
+            /* Finger moves down (dy>0, step>0)  -> scroll backward
+             *   (reveal lines above, like dragging the page down).
+             * Finger moves up   (dy<0, step<0)  -> scroll forward
+             *   (reveal lines below, like dragging the page up). */
+            int new_scroll = scroll - step;
             if (new_scroll > total - 1) new_scroll = total - 1;
             if (new_scroll < 0) new_scroll = 0;
             if (new_scroll != scroll) {
