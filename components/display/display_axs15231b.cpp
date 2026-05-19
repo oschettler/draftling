@@ -146,7 +146,36 @@ extern "C" void display_set_backlight(int percent)
  */
 #define AXS_CMD_PREAMBLE        0x02
 #define AXS_DATA_PREAMBLE_BYTE  0x32
-#define AXS_QSPI_MEMWR_OPERAND  0x3C
+/* AXS15231B QSPI memory-write operand. The MIPI standard uses
+ * 0x2C (Memory Write, RAMWR) for a fresh write that resets the
+ * internal write pointer to row 0, and 0x3C (Memory Write
+ * Continue, RAMWRC) for a write that continues from the current
+ * pointer position. Both work on this controller but they have
+ * very different semantics:
+ *   RAMWR  (0x2C) -- anchors the write pointer at (CASET_x_start, 0)
+ *                    every time, so a flush that streams a full panel
+ *                    worth of pixels always covers the entire frame
+ *                    deterministically.
+ *   RAMWRC (0x3C) -- picks up from wherever the pointer happens to
+ *                    be. Useful for chaining contiguous partial
+ *                    flushes top-to-bottom in a single frame, but
+ *                    catastrophic if used on the FIRST burst after
+ *                    power-on/reset (pointer is undefined) or for
+ *                    out-of-order flushes.
+ * The original Draftling driver used 0x3C unconditionally and also
+ * relied on RASET to set the row window, which the controller
+ * silently ignores over QSPI (see set_addr_window comments and
+ * thingsapart/esp32_lcd_controllers axs15231b_panel.c). The combination
+ * caused the JC3248W535 to render mostly garbage. The rotated-flush
+ * path now uses RAMWR for the first chunk and RAMWRC for continuation
+ * chunks of the same CS-low burst, exactly matching the proven
+ * reference driver. */
+#define AXS_QSPI_MEMWR_RAMWR    0x2C
+#define AXS_QSPI_MEMWR_RAMWRC   0x3C
+/* Legacy alias kept so existing call sites in the non-rotated path
+ * (Waveshare Touch-LCD-3.49) continue to use the same RAMWRC-only
+ * behaviour they were validated against. */
+#define AXS_QSPI_MEMWR_OPERAND  AXS_QSPI_MEMWR_RAMWRC
 
 static spi_device_handle_t s_spi = NULL;
 static int s_width  = 0;
@@ -248,12 +277,25 @@ static void spi_send_cmd(uint8_t cmd, const uint8_t *params, size_t n_params)
  * The caller is responsible for ensuring no other transaction
  * touches the bus mid-burst (we acquire the bus in display_flush).
  */
-static void spi_send_pixels_first(const uint8_t *data, size_t n_bytes)
+/* Stream pixel data as the first chunk of a CS-low memory-write burst.
+ *
+ * `operand` is the MIPI memory-write opcode -- either
+ * AXS_QSPI_MEMWR_RAMWR (0x2C, anchors the write pointer at row 0)
+ * or AXS_QSPI_MEMWR_RAMWRC (0x3C, continues from current pointer).
+ * See the constant definitions for which to pick.
+ *
+ * Subsequent chunks of the same burst use spi_send_pixels_cont(),
+ * which sends raw pixel bytes with zero-bit cmd/addr/dummy phases.
+ *
+ * The caller is responsible for ensuring no other transaction
+ * touches the bus mid-burst (we acquire the bus in display_flush).
+ */
+static void spi_send_pixels_first(uint8_t operand, const uint8_t *data, size_t n_bytes)
 {
     spi_transaction_ext_t tx = {};
     tx.base.flags = SPI_TRANS_MODE_QIO;
     tx.base.cmd   = AXS_DATA_PREAMBLE_BYTE;
-    tx.base.addr  = ((uint32_t)AXS_QSPI_MEMWR_OPERAND) << 8;
+    tx.base.addr  = ((uint32_t)operand) << 8;
     tx.base.length    = n_bytes * 8;
     tx.base.tx_buffer = data;
 
@@ -855,7 +897,10 @@ extern "C" void display_flush(void)
 
     if (!s_swap_xy) {
         /* Direct path: framebuffer orientation matches panel
-         * orientation, so a logical row is a panel row. */
+         * orientation, so a logical row is a panel row. Preserves
+         * the original RAMWRC (0x3C) preamble that the Waveshare
+         * Touch-LCD-3.49 (640x172 native landscape) was validated
+         * against. */
         set_addr_window(x1, y1, w, h);
 
         /* Pixel-write burst. Drive CS low ourselves and keep it low
@@ -870,53 +915,71 @@ extern "C" void display_flush(void)
                 *dst++ = (uint8_t)(px & 0xFF);
             }
             if (row == 0) {
-                spi_send_pixels_first(s_row_buf, (size_t)w * 2);
+                spi_send_pixels_first(AXS_QSPI_MEMWR_OPERAND, s_row_buf, (size_t)w * 2);
             } else {
                 spi_send_pixels_cont(s_row_buf, (size_t)w * 2);
             }
         }
         cs_high();
     } else {
-        /* Software 90-deg-CW rotation. The framebuffer is in logical
-         * landscape coords (s_width x s_height); the panel scans out
-         * in native portrait (s_height x s_width). Map each logical
-         * point (lx, ly) to a panel point as
+        /* Software 90-deg-CW rotation -- always flush the full panel.
          *
-         *     panel_x = (s_height - 1) - ly      (0 .. s_height-1)
-         *     panel_y = lx                       (0 .. s_width-1)
+         * Two AXS15231B QSPI quirks make partial-rect flushing
+         * impractical in this mode (see thingsapart/esp32_lcd_controllers
+         * axs15231b_panel.c bug-fix comments):
          *
-         * so the logical dirty rect (x1,y1)-(x2,y2) becomes a panel
-         * window of width (y2-y1+1) and height (x2-x1+1), starting
-         * at panel_x = (s_height-1) - y2, panel_y = x1.
+         *   1. RASET (0x2B) is silently IGNORED over QSPI. The row
+         *      pointer is tracked implicitly by the controller and
+         *      sending RASET corrupts it, causing partial flushes to
+         *      land at wrong Y positions.
+         *   2. RAMWR (0x2C) resets the pointer to row 0; RAMWRC (0x3C)
+         *      continues from wherever the pointer is (undefined
+         *      right after reset). A first-frame flush MUST use RAMWR.
          *
-         * For each panel row (constant panel_y = lx) we walk a
-         * logical *column* (fixed lx, ly from y2 down to y1) and
-         * transpose those pixels into the DMA scratch buffer. The
-         * column walk is a strided read over the framebuffer, so it
-         * does cost some PSRAM cache pressure; this is acceptable
-         * for a once-per-frame flush. */
-        int panel_w = y2 - y1 + 1;
-        int panel_h = x2 - x1 + 1;
-        int panel_x_start = (s_height - 1) - y2;
-        int panel_y_start = x1;
+         * The safest pattern is to send CASET for the full panel
+         * column range, anchor with RAMWR, and stream every panel
+         * row in one CS-low burst (RAMWRC for continuation chunks).
+         * The dirty bbox is used only as an "anything to flush?"
+         * gate; the streamed payload is always the full s_height x
+         * s_width framebuffer.
+         *
+         * Cost: 320x480x2 = 307 KB per flush at 40 MHz QSPI is
+         * ~15 ms, well below the editor's typing-rate flush cadence.
+         *
+         * Logical (lx, ly) -> panel (panel_x, panel_y) mapping for
+         * 90deg CW: panel_x = (s_height - 1) - ly, panel_y = lx. */
+        (void)w; (void)h; (void)x1; (void)y1; (void)x2; (void)y2;
 
-        set_addr_window(panel_x_start, panel_y_start, panel_w, panel_h);
+        /* CASET only -- spans full panel column range 0 .. s_height-1.
+         * Inlined here (rather than calling set_addr_window) precisely
+         * because set_addr_window also sends RASET, which we must
+         * avoid in QSPI mode. */
+        int px2 = s_height - 1;
+        uint8_t caset[] = {
+            0x00, 0x00,
+            (uint8_t)((px2 >> 8) & 0xFF), (uint8_t)(px2 & 0xFF)
+        };
+        spi_send_cmd(0x2A, caset, sizeof(caset));
 
         cs_low();
-        for (int row = 0; row < panel_h; row++) {
-            int lx = x1 + row;                  /* logical column */
+        for (int prow = 0; prow < s_width; prow++) {
+            int lx = prow;                       /* logical column */
             const uint16_t *col_base = s_fb + lx;
             uint8_t *dst = s_row_buf;
-            for (int col = 0; col < panel_w; col++) {
-                int ly = y2 - col;              /* logical row, decreasing */
+            for (int pcol = 0; pcol < s_height; pcol++) {
+                int ly = (s_height - 1) - pcol;  /* logical row, decreasing */
                 uint16_t px = col_base[(size_t)ly * s_width];
                 *dst++ = (uint8_t)(px >> 8);
                 *dst++ = (uint8_t)(px & 0xFF);
             }
-            if (row == 0) {
-                spi_send_pixels_first(s_row_buf, (size_t)panel_w * 2);
+            if (prow == 0) {
+                /* RAMWR anchors the implicit write pointer at row 0
+                 * of the CASET window. Critical for correctness on
+                 * the first flush after init (pointer is undefined)
+                 * and harmless on every subsequent flush. */
+                spi_send_pixels_first(AXS_QSPI_MEMWR_RAMWR, s_row_buf, (size_t)s_height * 2);
             } else {
-                spi_send_pixels_cont(s_row_buf, (size_t)panel_w * 2);
+                spi_send_pixels_cont(s_row_buf, (size_t)s_height * 2);
             }
         }
         cs_high();
