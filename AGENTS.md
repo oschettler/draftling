@@ -233,6 +233,22 @@ repository using the GitHub REST API over HTTPS. Reads configuration
 (repo URL, branch, token, path prefix) from `/sdcard/git.cfg`. Supports
 pull, push, or bidirectional sync with state callbacks and error tracking.
 
+The last-synced per-file blob SHAs are persisted in a hidden
+`.git_state` file under the SD mount point. Every sync does a 3-way
+comparison (saved vs local vs remote) so that:
+
+- a file modified only on one side is propagated to the other;
+- a file deleted on the remote is also deleted locally (provided the
+  local copy still matches the last-synced SHA); otherwise the local
+  edits "win" and the file is recreated on the remote next push;
+- a file deleted locally is also deleted on the remote (via the GitHub
+  Contents DELETE API, conditional on the saved SHA still being current);
+  otherwise the remote-modified copy "wins" and is re-downloaded next
+  pull;
+- a file renamed on either side is handled correctly because Git models
+  renames as a delete + add of two distinct paths, which the rules
+  above cover automatically (no duplicate copies left behind).
+
 Public API: `git_sync_init()`, `git_sync_start()`,
 `git_sync_get_state()`, `git_sync_is_configured()`.
 

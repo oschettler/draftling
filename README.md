@@ -96,7 +96,10 @@ Git repository via the GitHub REST API.
   in F1 -> Settings. Typical limits range from a few hundred KB to a
   few MB depending on the board.
 - **WiFi** station mode with credentials from NVS or `/sdcard/wifi.cfg`
-- **Git sync** via GitHub REST API (pull and push `.md` files)
+- **Git sync** via GitHub REST API (pull and push `.md` files,
+  including deletion / rename propagation in both directions; the
+  last-synced per-file blob SHAs are kept in a hidden `.git_state`
+  file on the SD card so the next sync can do a proper 3-way merge)
 - **Per-file metadata sidecars**: when a `.md` file is closed (or
   before the device enters deep sleep), the editor records the
   current cursor position and scroll line in a hidden sidecar file

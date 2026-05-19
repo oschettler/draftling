@@ -155,6 +155,12 @@ static void compute_blob_sha(const char *content, size_t len, char out_hex[41])
 typedef struct {
     char name[STATE_NAME_MAX];
     char sha[41];
+    /* Transient flag set during a sync session when the entry is matched
+     * against a file present on the local or remote side.  Used after the
+     * pull/push loop to detect entries whose underlying file disappeared,
+     * which indicates a deletion that has to be propagated to the other
+     * side.  Not persisted to disk. */
+    bool seen;
 } sync_state_entry_t;
 
 static sync_state_entry_t *s_sync_state = NULL;
@@ -219,10 +225,18 @@ static void load_sync_state(void)
 
 static void save_sync_state(void)
 {
-    if (!s_sync_state || s_sync_state_count == 0) return;
-
     char path[512];
     snprintf(path, sizeof(path), "%.255s/.git_state", s_cfg.local_path);
+
+    /* When the in-memory state is empty (e.g. every tracked file was
+     * deleted on both sides) we still want to persist that fact -- a
+     * stale on-disk state file would otherwise resurrect the entries on
+     * the next sync.  Write an empty file in that case. */
+    if (!s_sync_state || s_sync_state_count == 0) {
+        sd_card_write_file(path, "", 0);
+        ESP_LOGI(TAG, "Saved sync state: 0 file(s)");
+        return;
+    }
 
     size_t buf_size = (size_t)s_sync_state_count * (STATE_NAME_MAX + 42);
     char *buf = (char *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
@@ -270,6 +284,7 @@ static void set_saved_sha(const char *name, const char *sha)
         if (strcmp(s_sync_state[i].name, name) == 0) {
             strncpy(s_sync_state[i].sha, sha, 40);
             s_sync_state[i].sha[40] = '\0';
+            s_sync_state[i].seen = true;
             return;
         }
     }
@@ -285,6 +300,46 @@ static void set_saved_sha(const char *name, const char *sha)
         e->name[STATE_NAME_MAX - 1] = '\0';
         strncpy(e->sha, sha, 40);
         e->sha[40] = '\0';
+        e->seen = true;
+    }
+}
+
+/* Mark the saved-state entry for `name` as having been observed on either
+ * the local or the remote side during this sync session.  Used so that
+ * after iterating one side we can tell which tracked files have vanished
+ * (deletions to be propagated). */
+static void mark_seen(const char *name)
+{
+    for (int i = 0; i < s_sync_state_count; i++) {
+        if (strcmp(s_sync_state[i].name, name) == 0) {
+            s_sync_state[i].seen = true;
+            return;
+        }
+    }
+}
+
+static void reset_seen_flags(void)
+{
+    for (int i = 0; i < s_sync_state_count; i++) {
+        s_sync_state[i].seen = false;
+    }
+}
+
+/* Remove the named entry from the in-memory sync state by swapping it
+ * with the last entry and decrementing the count.  Safe to call while
+ * iterating the array in reverse. */
+static void remove_saved_sha(const char *name)
+{
+    for (int i = 0; i < s_sync_state_count; i++) {
+        if (strcmp(s_sync_state[i].name, name) == 0) {
+            if (i != s_sync_state_count - 1) {
+                s_sync_state[i] = s_sync_state[s_sync_state_count - 1];
+            }
+            s_sync_state_count--;
+            memset(&s_sync_state[s_sync_state_count], 0,
+                   sizeof(sync_state_entry_t));
+            return;
+        }
     }
 }
 
@@ -328,6 +383,10 @@ static esp_err_t do_pull(void)
     /* Ensure local directory exists */
     sd_card_mkdir(s_cfg.local_path);
 
+    /* Clear "seen" flags before walking the remote listing; any saved
+     * entry that remains unseen at the end was deleted on the remote. */
+    reset_seen_flags();
+
     int pulled = 0;
     int skipped = 0;
     cJSON *item;
@@ -343,6 +402,9 @@ static esp_err_t do_pull(void)
         const char *name = jname->valuestring;
         size_t nlen = strlen(name);
         if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) continue;
+
+        /* Record that this saved entry (if any) was seen on the remote. */
+        mark_seen(name);
 
         const char *remote_sha = (jsha && jsha->valuestring)
                                  ? jsha->valuestring : NULL;
@@ -400,7 +462,73 @@ static esp_err_t do_pull(void)
     }
 
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Pulled %d file(s), skipped %d", pulled, skipped);
+
+    /* Propagate remote deletions to the local SD card.  Walk the saved
+     * state in reverse because remove_saved_sha() shrinks the array. */
+    int removed = 0;
+    int conflicts = 0;
+    for (int i = s_sync_state_count - 1; i >= 0; i--) {
+        if (s_sync_state[i].seen) continue;
+
+        /* Copy out of the array so the values survive remove_saved_sha(),
+         * which compacts the array in place. */
+        char name[STATE_NAME_MAX];
+        char saved_sha[41];
+        strncpy(name, s_sync_state[i].name, sizeof(name));
+        name[sizeof(name) - 1] = '\0';
+        strncpy(saved_sha, s_sync_state[i].sha, sizeof(saved_sha));
+        saved_sha[sizeof(saved_sha) - 1] = '\0';
+
+        /* Only consider .md files -- the saved state should never hold
+         * anything else, but stay defensive. */
+        size_t nlen = strlen(name);
+        if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) {
+            remove_saved_sha(name);
+            continue;
+        }
+
+        char local_path[512];
+        snprintf(local_path, sizeof(local_path), "%.255s/%.255s",
+                 s_cfg.local_path, name);
+
+        char *local_content = NULL;
+        size_t local_len = 0;
+        if (sd_card_read_file(local_path, &local_content, &local_len) != ESP_OK) {
+            /* Already gone locally too -- just forget about it. */
+            ESP_LOGI(TAG, "Pull: dropping stale state for %s", name);
+            remove_saved_sha(name);
+            continue;
+        }
+
+        char local_sha[41];
+        compute_blob_sha(local_content, local_len, local_sha);
+        free(local_content);
+
+        if (strcmp(local_sha, saved_sha) == 0) {
+            /* Local matches last sync -- safe to delete locally. */
+            if (sd_card_delete_file(local_path) == ESP_OK) {
+                ESP_LOGI(TAG, "Pull: deleted locally (gone on remote): %s",
+                         name);
+                removed++;
+            } else {
+                ESP_LOGW(TAG, "Pull: failed to delete %s", local_path);
+            }
+            remove_saved_sha(name);
+        } else {
+            /* Locally modified after the remote deletion -- keep the
+             * local copy and forget the saved SHA so the next push
+             * recreates it on the remote as a new file. */
+            ESP_LOGW(TAG,
+                     "Conflict (remote deleted, local modified): %s -- "
+                     "keeping local; will be re-uploaded on next push",
+                     name);
+            conflicts++;
+            remove_saved_sha(name);
+        }
+    }
+
+    ESP_LOGI(TAG, "Pulled %d file(s), skipped %d, deleted %d, conflicts %d",
+             pulled, skipped, removed, conflicts);
     return ESP_OK;
 }
 
@@ -504,6 +632,84 @@ static esp_err_t push_file(const char *name)
     return ret;
 }
 
+/* Delete a file on the remote repository via the GitHub Contents API.
+ *
+ * Verifies that the remote blob SHA still matches `expected_sha` (the
+ * SHA recorded the last time we synced).  If it does not, the remote
+ * has been edited since our last sync and we MUST NOT delete it -- we
+ * return ESP_FAIL so the caller can drop the saved-state entry and let
+ * the next pull re-download the modified content as a "new" file.
+ *
+ * Returns ESP_OK on a successful DELETE.  Returns ESP_FAIL for both
+ * "remote was modified" and "remote file is missing" cases; the caller
+ * cannot meaningfully distinguish them and treats both as "stop
+ * tracking this name". */
+static esp_err_t delete_remote_file(const char *name, const char *expected_sha)
+{
+    /* Look up the current remote SHA. */
+    char url[768];
+    snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s?ref=%.63s",
+             s_cfg.api_url, s_cfg.remote_path, name, s_cfg.branch);
+
+    int status = 0;
+    if (api_request(url, HTTP_METHOD_GET, NULL, &status) != ESP_OK) {
+        /* Most commonly a 404 -- already gone. */
+        ESP_LOGI(TAG, "Delete: remote %s already missing (HTTP %d)",
+                 name, status);
+        return ESP_FAIL;
+    }
+
+    char remote_sha[64] = "";
+    cJSON *r = cJSON_Parse(s_resp_buf);
+    if (r) {
+        cJSON *jsha = cJSON_GetObjectItem(r, "sha");
+        if (jsha && jsha->valuestring) {
+            strncpy(remote_sha, jsha->valuestring, sizeof(remote_sha) - 1);
+        }
+        cJSON_Delete(r);
+    }
+
+    if (!remote_sha[0]) {
+        ESP_LOGW(TAG, "Delete: could not read remote SHA for %s", name);
+        return ESP_FAIL;
+    }
+
+    if (expected_sha[0] && strcmp(remote_sha, expected_sha) != 0) {
+        /* Remote changed since our last sync -- do not delete. */
+        ESP_LOGW(TAG,
+                 "Conflict (local deleted, remote modified): %s -- "
+                 "keeping remote; will be re-downloaded on next pull",
+                 name);
+        return ESP_FAIL;
+    }
+
+    /* Build the DELETE body.  GitHub requires the current blob SHA so
+     * concurrent modifications fail loudly rather than silently
+     * clobbering somebody else's commit. */
+    cJSON *body = cJSON_CreateObject();
+    char msg[128];
+    snprintf(msg, sizeof(msg), "Delete %.100s from Draftling", name);
+    cJSON_AddStringToObject(body, "message", msg);
+    cJSON_AddStringToObject(body, "sha", remote_sha);
+    cJSON_AddStringToObject(body, "branch", s_cfg.branch);
+
+    char *body_str = cJSON_PrintUnformatted(body);
+    cJSON_Delete(body);
+    if (!body_str) return ESP_ERR_NO_MEM;
+
+    snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s",
+             s_cfg.api_url, s_cfg.remote_path, name);
+    esp_err_t ret = api_request(url, HTTP_METHOD_DELETE, body_str, &status);
+    cJSON_free(body_str);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Deleted on remote: %s", name);
+    } else {
+        ESP_LOGE(TAG, "Failed to delete remote %s (HTTP %d)", name, status);
+    }
+    return ret;
+}
+
 static esp_err_t do_push(void)
 {
     notify(GIT_SYNC_IN_PROGRESS, "Pushing local files...");
@@ -518,6 +724,11 @@ static esp_err_t do_push(void)
     int count = sd_card_list_dir(s_cfg.local_path, entries, MAX_ENTRIES);
     if (count < 0) { heap_caps_free(entries); set_error("Cannot list local files"); return ESP_FAIL; }
 
+    /* Reset seen flags before walking the local directory; any saved
+     * entry left unseen at the end was deleted locally and the deletion
+     * needs to be propagated to the remote. */
+    reset_seen_flags();
+
     int pushed = 0;
     int attempted = 0;
     for (int i = 0; i < count; i++) {
@@ -526,6 +737,9 @@ static esp_err_t do_push(void)
         size_t nlen = strlen(name);
         if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) continue;
 
+        /* Note that this saved entry (if any) is still present locally. */
+        mark_seen(name);
+
         attempted++;
         if (push_file(name) == ESP_OK) pushed++;
     }
@@ -533,7 +747,41 @@ static esp_err_t do_push(void)
     heap_caps_free(entries);
     ESP_LOGI(TAG, "Pushed %d/%d files", pushed, attempted);
 
-    if (attempted > 0 && pushed == 0) {
+    /* Propagate local deletions to the remote.  Walk in reverse because
+     * remove_saved_sha() compacts the array in place. */
+    int deleted = 0;
+    int conflicts = 0;
+    for (int i = s_sync_state_count - 1; i >= 0; i--) {
+        if (s_sync_state[i].seen) continue;
+
+        /* Copy out of the array so the values survive remove_saved_sha(),
+         * which compacts the array in place. */
+        char name[STATE_NAME_MAX];
+        char saved_sha[41];
+        strncpy(name, s_sync_state[i].name, sizeof(name));
+        name[sizeof(name) - 1] = '\0';
+        strncpy(saved_sha, s_sync_state[i].sha, sizeof(saved_sha));
+        saved_sha[sizeof(saved_sha) - 1] = '\0';
+
+        if (delete_remote_file(name, saved_sha) == ESP_OK) {
+            deleted++;
+        } else {
+            /* Either the remote was modified since our last sync (so we
+             * refuse to delete) or the remote is already gone.  In both
+             * cases we drop the saved entry: a modified remote will be
+             * downloaded fresh by the next pull, an already-deleted one
+             * just no longer needs tracking. */
+            conflicts++;
+        }
+        remove_saved_sha(name);
+    }
+
+    if (deleted || conflicts) {
+        ESP_LOGI(TAG, "Push: deleted %d remote file(s), conflicts %d",
+                 deleted, conflicts);
+    }
+
+    if (attempted > 0 && pushed == 0 && deleted == 0) {
         set_error("All files failed to push");
         return ESP_FAIL;
     }
