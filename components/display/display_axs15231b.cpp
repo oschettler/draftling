@@ -285,13 +285,30 @@ static void hw_reset(void)
 
 static void axs15231b_init_sequence(void)
 {
-    /* Full AXS15231B 320x480 "Type-1" vendor init block, taken
-     * verbatim from the proven Arduino_GFX Arduino_AXS15231B
-     * driver (axs15231b_320480_type1_init_operations) -- the
-     * minimal 0xBB/0xA0 stub that lived here before was not
-     * sufficient to bring the panel out of its reset state on
-     * either the Waveshare Touch-LCD-3.49 or the Guition
-     * JC3248W535 (both ship with this controller). */
+    /* AXS15231B vendor init sequence. The opcodes and parameter
+     * blocks are cross-referenced with the working JC3248W535(C)
+     * IDF-native driver at thingsapart/esp32_lcd_controllers and
+     * the Arduino_GFX `axs15231b_320480_type1_init_operations`
+     * reference; the JC3248W535 source was preferred where they
+     * differ, since it's the board we have logs from.
+     *
+     * The critical first command is the `0xBB` UNLOCK with magic
+     * bytes `0x5A 0xA5`: the AXS15231B's vendor registers
+     * (`0xA0`, `0xA2`, `0xD0`, ...) are write-protected after
+     * reset, and silently drop every write until this unlock has
+     * been received. The Arduino_GFX Type-1 sequence omits this
+     * unlock (it targets a panel that ships unlocked), which is
+     * what caused the JC3248W535 to power up with all vendor
+     * regs at their defaults -- producing a brief flash of
+     * garbage on display-on, then nothing. The all-zero `0xBB`
+     * issued near the end of this block re-locks the registers
+     * once the panel is configured. */
+
+    /* Vendor register unlock (magic key 0x5A, 0xA5). */
+    static const uint8_t init_bb_unlock[] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0xA5
+    };
+    spi_send_cmd(0xBB, init_bb_unlock, sizeof(init_bb_unlock));
 
     static const uint8_t init_a0[] = {
         0xC0, 0x10, 0x00, 0x02, 0x00, 0x00, 0x04, 0x3F,
@@ -309,7 +326,7 @@ static void axs15231b_init_sequence(void)
 
     static const uint8_t init_d0[] = {
         0xE0, 0x40, 0x51, 0x24, 0x08, 0x05, 0x10, 0x01,
-        0x20, 0x15, 0xC2, 0x42, 0x22, 0x22, 0xAA, 0x03,
+        0x20, 0x15, 0x42, 0xC2, 0x22, 0x22, 0xAA, 0x03,
         0x10, 0x12, 0x60, 0x14, 0x1E, 0x51, 0x15, 0x00,
         0x8A, 0x20, 0x00, 0x03, 0x3A, 0x12
     };
@@ -473,16 +490,13 @@ static void axs15231b_init_sequence(void)
     static const uint8_t init_a4_2[] = { 0x85, 0x85, 0x95, 0x85 };
     spi_send_cmd(0xA4, init_a4_2, sizeof(init_a4_2));
 
-    /* Vendor register-block lock. Writing 0xBB with eight zero bytes
-     * closes the vendor register window opened earlier in this init
-     * sequence (the matching 0x5A/0xA5 "unlock-key" variant is used
-     * by some other AXS15231B init blocks, e.g. the 320x480 Type-2
-     * sequence; Type-1 leaves the registers unlocked by default and
-     * only emits this lock at the end). */
-    static const uint8_t init_bb[] = {
+    /* Vendor register-block re-lock. Writing 0xBB with eight zero
+     * bytes (no 0x5A/0xA5 magic key) closes the vendor register
+     * window opened at the start of this sequence. */
+    static const uint8_t init_bb_lock[] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
-    spi_send_cmd(0xBB, init_bb, sizeof(init_bb));
+    spi_send_cmd(0xBB, init_bb_lock, sizeof(init_bb_lock));
 
     /* Memory Access Control (MADCTL). Decide portrait vs landscape
      * by comparing the configured logical width and height: if the
@@ -493,13 +507,25 @@ static void axs15231b_init_sequence(void)
     uint8_t madctl = (s_width > s_height) ? 0x60 : 0x00;
     spi_send_cmd(0x36, &madctl, 1);
 
-    /* Pixel format: 16 bpp (RGB565). */
-    static const uint8_t pixfmt[] = { 0x05 };
-    spi_send_cmd(0x3A, pixfmt, sizeof(pixfmt));
-
-    /* TE line on (V-blank only). */
+    /* TE line on (V-blank only). The matching IDF-native init at
+     * thingsapart/esp32_lcd_controllers also enables TE here; we
+     * read the GPIO directly in display_flush() instead of using
+     * an ISR, so the panel-side enable is what matters. */
     static const uint8_t te[] = { 0x00 };
     spi_send_cmd(0x35, te, sizeof(te));
+
+    /* COLMOD (0x3A) is intentionally NOT sent: the vendor 0xA0
+     * block above already sets the panel to 16 bpp RGB565 in QSPI
+     * mode, and issuing a MIPI COLMOD after the vendor regs were
+     * configured was observed to leave the panel in an
+     * intermediate state where it accepted display-on but did not
+     * latch streamed pixel data. The proven JC3248W535 init at
+     * thingsapart/esp32_lcd_controllers also omits COLMOD. */
+
+    /* Normal Display Mode On (NORON). Mirrors the working
+     * JC3248W535 init -- the panel needs to leave partial-mode
+     * before SLPOUT or the first frame after wakeup is dropped. */
+    spi_send_cmd(0x13, NULL, 0);
 
     /* Sleep out, wait, then display on. */
     spi_send_cmd(0x11, NULL, 0);
