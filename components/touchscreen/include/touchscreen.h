@@ -8,10 +8,16 @@ extern "C" {
 #include <stdint.h>
 
 /*
- * Touchscreen driver (AXS5106L over I2C) + LVGL pointer input device.
+ * Touchscreen driver + LVGL pointer input device.
  *
- * Compiled in only when CONFIG_DRAFTLING_TOUCHSCREEN is set. Initialize
- * from main.cpp after the LVGL port and the LCD have been brought up.
+ * Supports two controllers, selected at build time via
+ * CONFIG_DRAFTLING_TOUCH_CONTROLLER:
+ *   - AXS5106L (magic-packet I2C, e.g. Guition JC3248W535)
+ *   - GT911    (register-based I2C, e.g. M5Stack PaperS3)
+ *
+ * Compiled in only when CONFIG_DRAFTLING_TOUCHSCREEN is set.
+ * Initialize from main.cpp after the LVGL port and the LCD have
+ * been brought up.
  *
  * After touchscreen_init() returns:
  *   - An LVGL pointer indev is registered against the default display
@@ -34,7 +40,8 @@ typedef struct {
     int scl;            /* I2C SCL GPIO */
     int rst;            /* RST GPIO, -1 if tied to LCD reset / fixed */
     int intr;           /* INT GPIO, -1 if not wired */
-    uint8_t i2c_addr;   /* 7-bit I2C address (0x3B for AXS5106L) */
+    uint8_t i2c_addr;   /* 7-bit I2C address (0x3B for AXS5106L,
+                         * 0x5D primary / 0x14 backup for GT911). */
     int i2c_port;       /* 0 or 1 (I2C_NUM_0 / I2C_NUM_1) */
     uint32_t i2c_hz;    /* I2C clock, typically 400 kHz */
 

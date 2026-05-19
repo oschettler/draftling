@@ -79,9 +79,33 @@
 #define SD_SPI_CS_PIN   47
 #define SD_EN_PIN       -1
 
-/* I2C bus (BM8563 RTC and BMI270 IMU on the PaperS3) */
+/* I2C bus (BM8563 RTC, BMI270 IMU and GT911 capacitive touch
+ * controller on the PaperS3) */
 #define I2C_SDA_PIN     41
 #define I2C_SCL_PIN     42
+
+/* GT911 capacitive touch controller.
+ *
+ * Pin assignments match the M5GFX board definition for M5PaperS3
+ * (Touch_GT911 config: pin_int=GPIO48, pin_sda=GPIO41,
+ * pin_scl=GPIO42, no RST GPIO). The GT911 reset line is not wired
+ * to any ESP32-S3 pin on this board -- it is released by the
+ * power-rail RC, so the touchscreen driver cannot perform the
+ * INT-driven address-select reset sequence and instead probes
+ * both possible I2C addresses (0x5D primary, 0x14 backup).
+ *
+ * Native panel coordinate range as reported by the GT911 is
+ * 540 wide x 960 tall (portrait). The display driver calls M5GFX
+ * setRotation(1) to present a 960x540 landscape framebuffer, so
+ * the touch coordinates need swap_xy + mirror_y to line up. */
+#define TOUCH_I2C_ADDR  0x5D
+#define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
+#define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO
+#define TOUCH_NATIVE_W  540
+#define TOUCH_NATIVE_H  960
+#define TOUCH_SWAP_XY   1
+#define TOUCH_MIRROR_X  0
+#define TOUCH_MIRROR_Y  1
 
 /* Battery voltage monitor.
  *

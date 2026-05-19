@@ -45,6 +45,11 @@ the board you are building for:
 - **M5Stack PaperS3** -- 4.7" e-paper (ED047TC1, 540x960). Driver is
   a 1-bpp B/W shim over the official `m5stack/M5GFX` managed
   component; partial refresh and grayscale are not implemented yet.
+  Has an on-board GT911 capacitive touchscreen on the I2C bus
+  (SDA=GPIO41, SCL=GPIO42, INT=GPIO48); when
+  `CONFIG_DRAFTLING_TOUCHSCREEN` is enabled (default on this board)
+  the editor and menu lists accept the same tap / drag / swipe
+  gestures as on the JC3248W535.
 - **Generic ESP32 + color LCD: Waveshare ESP32-S3-Touch-LCD-3.49** --
   3.49" IPS color LCD (AXS15231B, 640x172, QSPI). Touch input is
   not currently wired up (the controller pinout is board-specific
@@ -132,9 +137,11 @@ Git repository via the GitHub REST API.
 
 ## Touch Operations
 
-On boards with a touchscreen (currently the Guition JC3248W535), touch
-input works alongside the Bluetooth keyboard -- you can use either, or
-both. All gestures are summarized below.
+On boards with a touchscreen (currently the Guition JC3248W535 with
+its on-board AXS5106L controller, and the M5Stack PaperS3 with its
+on-board GT911 controller), touch input works alongside the Bluetooth
+keyboard -- you can use either, or both. All gestures are summarized
+below.
 
 ### In the editor
 
@@ -147,6 +154,11 @@ both. All gestures are summarized below.
 
 A drag that moves more than a few pixels never moves the caret -- the
 tap-to-cursor action only fires for short, stationary taps.
+
+On the e-paper PaperS3 the gestures are the same, but the slower
+refresh rate (~80-150 ms per partial update, several seconds for a
+full refresh) means the visible response to a drag is less smooth
+than on the color-LCD JC3248W535.
 
 ### In menus and the file browser
 
@@ -161,9 +173,15 @@ imprecise taps.
 
 ### Wake from sleep
 
-On boards without user buttons (such as the JC3248W535), the touch
+On boards without user buttons (such as the JC3248W535) the touch
 controller's INT line is wired to the deep-sleep wake source, so any
 tap on the screen wakes the device.
+
+The M5Stack PaperS3 has a BOOT button on GPIO0 which is the default
+deep-sleep wake source; the GT911 touchscreen is used as a regular
+input device but not as a wake source by default. Set
+`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH=y` in menuconfig to wake on
+touch instead.
 
 ## Keyboard Layouts
 

@@ -2,28 +2,39 @@
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
 
 /*
- * AXS5106L touchscreen driver + LVGL pointer input device.
+ * I2C touchscreen driver + LVGL pointer input device.
  *
- * The AXS5106L (Guition JC3248W535) speaks a small "magic packet"
- * I2C protocol: the host writes an 8-byte read-request packet and
- * reads back 8 bytes containing a touch count and a single touch
- * point. The protocol is shared across Allystar's AXS5106 / AXS5106L
- * variants and matches the public LovyanGFX / Tactility / Arduino
- * implementations widely cited for this controller.
+ * Supports two controllers, picked at build time via
+ * CONFIG_DRAFTLING_TOUCH_CONTROLLER:
  *
- * The driver also registers an LVGL pointer indev which feeds touch
- * coordinates to the LVGL event system, so widgets receive standard
- * click / press / gesture events. When an INT GPIO is provided, the
- * driver only polls I2C when INT is low -- the controller pulses
- * INT for each frame of active touch, so we avoid the bus traffic
- * (and the I2C-mutex contention with other devices on the same bus)
- * when no finger is down.
+ *   * AXS5106L (Allystar, e.g. Guition JC3248W535):
+ *     Speaks a small "magic packet" I2C protocol -- the host writes
+ *     an 8-byte read-request packet and reads back 8 bytes
+ *     containing a touch count and a single point. The protocol is
+ *     shared across Allystar's AXS5106 / AXS5106L variants and
+ *     matches the public LovyanGFX / Tactility / Arduino
+ *     implementations widely cited for this controller.
  *
- * The transform from the controller's native portrait coordinates to
- * LVGL logical coordinates is parameterised in touchscreen_config_t
- * (mirror_x/mirror_y/swap_xy + native/logical sizes), so the same
- * driver works on touch panels mounted in different orientations
- * relative to the LCD without code changes.
+ *   * GT911 (Goodix, e.g. M5Stack PaperS3):
+ *     Register-addressed protocol -- 16-bit register address sent
+ *     MSB-first, status byte at 0x814E (bit 7 = buffer ready, low
+ *     nibble = touch-point count), point data at 0x814F+ (8 bytes
+ *     per point, X / Y little-endian). After reading, the host
+ *     must clear 0x814E so the controller can fill the next frame.
+ *     The GT911 listens on either 0x5D or 0x14 depending on the
+ *     INT level seen during its internal power-on reset; we probe
+ *     both before binding the I2C device. On boards where RST is
+ *     not wired to an ESP32 GPIO (PaperS3) the address-select
+ *     reset sequence cannot be performed, but probing covers it.
+ *
+ * In both cases the driver registers an LVGL pointer indev which
+ * feeds touch coordinates to the LVGL event system, so widgets
+ * receive standard click / press / gesture events. The transform
+ * from the controller's native coordinate space to LVGL logical
+ * coordinates is parameterised in touchscreen_config_t
+ * (mirror_x / mirror_y / swap_xy + native / logical sizes), so the
+ * same code works for panels mounted in different orientations
+ * relative to the LCD.
  */
 
 #include <cstring>
@@ -38,22 +49,6 @@
 #include "touchscreen.h"
 
 static const char *TAG = "Touch";
-
-/* AXS5106L "read 1 touch point" magic packet. Bytes 0-3 are the
- * vendor preamble (0xB5, 0xAB, 0xA5, 0x5A); the trailing 0x08 is
- * the number of bytes to return. The controller responds with 8
- * bytes laid out as:
- *   [0]      gesture id (unused)
- *   [1]      touch points (0 or 1)
- *   [2]      event | x_high (high nibble of x in bits 0..3)
- *   [3]      x_low
- *   [4]      finger id | y_high
- *   [5]      y_low
- *   [6..7]   weight / area (ignored)
- */
-static const uint8_t AXS5106_READ_CMD[8] = {
-    0xB5, 0xAB, 0xA5, 0x5A, 0x00, 0x00, 0x00, 0x08
-};
 
 static bool s_initialized = false;
 static touchscreen_config_t s_cfg;
@@ -100,9 +95,28 @@ static void native_to_logical(int nx, int ny, int *ox, int *oy)
     *oy = clamp(ly, 0, s_cfg.logical_height - 1);
 }
 
+/* ---- AXS5106L (magic-packet) driver ---- */
+#if defined(CONFIG_DRAFTLING_TOUCH_AXS5106L)
+
+/* AXS5106L "read 1 touch point" magic packet. Bytes 0-3 are the
+ * vendor preamble (0xB5, 0xAB, 0xA5, 0x5A); the trailing 0x08 is
+ * the number of bytes to return. The controller responds with 8
+ * bytes laid out as:
+ *   [0]      gesture id (unused)
+ *   [1]      touch points (0 or 1)
+ *   [2]      event | x_high (high nibble of x in bits 0..3)
+ *   [3]      x_low
+ *   [4]      finger id | y_high
+ *   [5]      y_low
+ *   [6..7]   weight / area (ignored)
+ */
+static const uint8_t AXS5106_READ_CMD[8] = {
+    0xB5, 0xAB, 0xA5, 0x5A, 0x00, 0x00, 0x00, 0x08
+};
+
 /* Issue a single read of the controller. Returns true if a touch is
  * currently active and fills *out_x / *out_y with logical coords. */
-static bool poll_controller(int *out_x, int *out_y)
+static bool poll_axs5106l(int *out_x, int *out_y)
 {
     if (!s_dev) return false;
 
@@ -143,6 +157,97 @@ static bool poll_controller(int *out_x, int *out_y)
     if (out_x) *out_x = lx;
     if (out_y) *out_y = ly;
     return true;
+}
+
+#endif /* CONFIG_DRAFTLING_TOUCH_AXS5106L */
+
+/* ---- GT911 (register-based) driver ---- */
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+
+/* GT911 register addresses (datasheet section 7). Sent over I2C as
+ * two bytes, high-byte first. */
+#define GT911_REG_STATUS    0x814E  /* status / buffer-ready / point count */
+#define GT911_REG_POINT1    0x814F  /* first touch point (8 bytes) */
+
+static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *buf, size_t len)
+{
+    uint8_t addr[2] = { (uint8_t)((reg >> 8) & 0xFF),
+                        (uint8_t)(reg & 0xFF) };
+    return i2c_master_transmit_receive(
+        s_dev, addr, sizeof(addr), buf, len, 50 /* ms */);
+}
+
+static esp_err_t gt911_write_reg(uint16_t reg, uint8_t val)
+{
+    uint8_t packet[3] = { (uint8_t)((reg >> 8) & 0xFF),
+                          (uint8_t)(reg & 0xFF),
+                          val };
+    return i2c_master_transmit(s_dev, packet, sizeof(packet), 50 /* ms */);
+}
+
+static bool poll_gt911(int *out_x, int *out_y)
+{
+    if (!s_dev) return false;
+
+    uint8_t status = 0;
+    if (gt911_read_reg(GT911_REG_STATUS, &status, 1) != ESP_OK) {
+        ESP_LOGD(TAG, "gt911 status read failed");
+        return false;
+    }
+
+    /* Buffer-ready bit (0x80) not set -> no new frame. The controller
+     * sets this bit when it has populated 0x814F+ with fresh point
+     * data; we must clear it after reading so the next frame can be
+     * written. Until then there is no usable data to fetch. */
+    if ((status & 0x80) == 0) {
+        /* Nothing to clear -- the controller has not flagged a new
+         * frame, so writing 0 is a no-op but also wastes an I2C
+         * transaction. Just return. */
+        return false;
+    }
+
+    bool pressed = false;
+    uint8_t cnt = status & 0x0F;
+    if (cnt >= 1 && cnt <= 5) {
+        /* Read only the first point (index 0). Each point is 8 bytes:
+         *   [0]    track id
+         *   [1..2] x (little-endian)
+         *   [3..4] y (little-endian)
+         *   [5..6] strength (LE, unused)
+         *   [7]    reserved
+         */
+        uint8_t pt[8] = { 0 };
+        if (gt911_read_reg(GT911_REG_POINT1, pt, sizeof(pt)) == ESP_OK) {
+            int nx = ((int)pt[2] << 8) | pt[1];
+            int ny = ((int)pt[4] << 8) | pt[3];
+            int lx, ly;
+            native_to_logical(nx, ny, &lx, &ly);
+            if (out_x) *out_x = lx;
+            if (out_y) *out_y = ly;
+            pressed = true;
+        } else {
+            ESP_LOGD(TAG, "gt911 point read failed");
+        }
+    }
+
+    /* Always clear the buffer-ready flag so the controller can fill
+     * the next frame -- even if we decided the frame was invalid. */
+    gt911_write_reg(GT911_REG_STATUS, 0x00);
+    return pressed;
+}
+
+#endif /* CONFIG_DRAFTLING_TOUCH_GT911 */
+
+/* Dispatch to the controller-specific poll. */
+static bool poll_controller(int *out_x, int *out_y)
+{
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    return poll_gt911(out_x, out_y);
+#elif defined(CONFIG_DRAFTLING_TOUCH_AXS5106L)
+    return poll_axs5106l(out_x, out_y);
+#else
+#  error "No touch controller driver selected (CONFIG_DRAFTLING_TOUCH_*)"
+#endif
 }
 
 /* INT is a brief per-frame pulse on the AXS15231B (not held low
@@ -240,6 +345,28 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         return;
     }
 
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    /* GT911 selects its I2C address (0x5D or 0x14) based on the INT
+     * level seen during its internal power-on reset. On boards where
+     * the GT911 RST line is not wired to an ESP32-S3 GPIO (M5Stack
+     * PaperS3) we cannot drive the address-select reset sequence,
+     * so probe both possible addresses and stick with whichever one
+     * acknowledges. The configured value (s_cfg.i2c_addr, typically
+     * 0x5D) is tried first; the alternate is the fallback. */
+    {
+        uint8_t primary = s_cfg.i2c_addr;
+        uint8_t alt     = (primary == 0x5D) ? 0x14 :
+                          (primary == 0x14) ? 0x5D : primary;
+        if (i2c_master_probe(s_bus, primary, 100) != ESP_OK &&
+            alt != primary &&
+            i2c_master_probe(s_bus, alt, 100) == ESP_OK) {
+            ESP_LOGI(TAG, "GT911 responded at 0x%02X (configured 0x%02X)",
+                     alt, primary);
+            s_cfg.i2c_addr = alt;
+        }
+    }
+#endif
+
     i2c_device_config_t dev_cfg = {};
     dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     dev_cfg.device_address  = s_cfg.i2c_addr;
@@ -266,9 +393,17 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "AXS5106L touchscreen initialized "
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    const char *ctrl = "GT911";
+#elif defined(CONFIG_DRAFTLING_TOUCH_AXS5106L)
+    const char *ctrl = "AXS5106L";
+#else
+    const char *ctrl = "?";
+#endif
+    ESP_LOGI(TAG, "%s touchscreen initialized "
                   "(I2C addr=0x%02X, INT=%d, native=%dx%d, logical=%dx%d, "
                   "mirror_x=%d mirror_y=%d swap_xy=%d)",
+             ctrl,
              s_cfg.i2c_addr, s_cfg.intr,
              s_cfg.native_width, s_cfg.native_height,
              s_cfg.logical_width, s_cfg.logical_height,
