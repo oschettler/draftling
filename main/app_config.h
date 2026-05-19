@@ -179,49 +179,31 @@
  */
 #define BOARD_NAME          "Guition JC3248W535"
 
-/* AXS15231B QSPI display interface.
- *
- * NOTE: This board does NOT wire a dedicated LCD reset line -- the
- * AXS15231B is reset internally via its vendor unlock/lock sequence.
- * GPIO4 on this board is the touch-controller SDA line (see below),
- * so LCD_RST_PIN MUST be -1; otherwise we would drive the I2C SDA
- * during display init. Verified against the AudunKodehode reference
- * driver which uses GFX_NOT_DEFINED for the AXS15231B reset pin. */
+/* AXS15231B QSPI display interface */
 #define LCD_QSPI_CS_PIN     45
 #define LCD_QSPI_SCK_PIN    47
 #define LCD_QSPI_D0_PIN     21
 #define LCD_QSPI_D1_PIN     48
 #define LCD_QSPI_D2_PIN     40
 #define LCD_QSPI_D3_PIN     39
-#define LCD_RST_PIN         -1
+#define LCD_RST_PIN         4
 #define LCD_TE_PIN          38
 #define LCD_BL_PIN          1
 
-/* SD card on a dedicated SPI bus.
- *
- * WARNING: The JC3248W535 reference does not document the SD wiring
- * and these pin assignments are unverified. GPIO11 (MOSI) collides
- * with the touch INT line and GPIO12 (SCK) collides with the touch
- * RST line on this board, so using the SD slot together with the
- * touchscreen is not currently supported. If you need SD on this
- * board, override SD_SPI_* in a board-specific patch and disable
- * CONFIG_DRAFTLING_TOUCHSCREEN. */
+/* SD card on a dedicated SPI bus */
 #define SD_SPI_MOSI_PIN     11
 #define SD_SPI_MISO_PIN     13
 #define SD_SPI_SCK_PIN      12
 #define SD_SPI_CS_PIN       10
 #define SD_EN_PIN           -1
 
-/* I2C bus carrying the AXS5106L touch controller. The pin map
- * (SDA=GPIO4, SCL=GPIO8) matches the AudunKodehode JC3248W535EN
- * reference library. */
-#define I2C_SDA_PIN         4
-#define I2C_SCL_PIN         8
+/* I2C bus (also carries the AXS5106L touch controller) */
+#define I2C_SDA_PIN         8
+#define I2C_SCL_PIN         9
 
-/* AXS5106L touch controller. INT defaults to GPIO11 (RTC-capable,
- * required for wake-on-touch) and RST to GPIO12, per the
- * AudunKodehode JC3248W535EN reference library. Both are
- * configurable via menuconfig for non-stock wiring.
+/* AXS5106L touch controller. INT defaults to GPIO3 (RTC-capable,
+ * required for wake-on-touch). The reset line is tied to the LCD
+ * reset on this board so we leave the dedicated touch RST at -1.
  *
  * The controller reports coordinates in the panel's native portrait
  * orientation (320 wide x 480 tall). The LCD backend software-

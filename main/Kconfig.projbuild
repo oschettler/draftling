@@ -189,7 +189,7 @@ config DRAFTLING_TOUCH_INT_GPIO
     int "Touchscreen INT GPIO"
     depends on DRAFTLING_TOUCHSCREEN
     range -1 48
-    default 11 if DRAFTLING_MODEL_JC3248W535
+    default 3 if DRAFTLING_MODEL_JC3248W535
     default -1
     help
         GPIO connected to the touch controller's interrupt (INT)
@@ -197,7 +197,7 @@ config DRAFTLING_TOUCH_INT_GPIO
         then poll I2C on every tick and CONFIG_DRAFTLING_STANDBY_
         WAKE_ON_TOUCH will be unusable).
 
-        Defaults verified for: Guition JC3248W535 (GPIO11, AXS5106L).
+        Defaults verified for: Guition JC3248W535 (GPIO3, AXS5106L).
 
 # Touchscreen reset GPIO. The reset line is often tied to the LCD
 # reset on combo touch+LCD boards; set to -1 to skip a software
@@ -206,7 +206,6 @@ config DRAFTLING_TOUCH_RST_GPIO
     int "Touchscreen RST GPIO (-1 = none)"
     depends on DRAFTLING_TOUCHSCREEN
     range -1 48
-    default 12 if DRAFTLING_MODEL_JC3248W535
     default -1
     help
         GPIO connected to the touch controller's reset (RST) line,
