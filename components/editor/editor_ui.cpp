@@ -1201,8 +1201,7 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
     if (slot < 0) {
         /* Tapped below the last visible line -- map to end-of-document. */
         size_t total = 0;
-        const char *flat = editor_get_text(&total);
-        (void)flat;
+        (void)editor_get_text(&total);
         *out_off = total;
         return true;
     }
