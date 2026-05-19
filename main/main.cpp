@@ -18,6 +18,7 @@
 #include "git_sync.h"
 #include "standby.h"
 #include "battery.h"
+#include "touchscreen.h"
 
 static const char *TAG = "Draftling";
 
@@ -231,6 +232,39 @@ extern "C" void app_main(void)
     /* Initialize Bluetooth keyboard */
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Initialize the touchscreen and register the LVGL pointer
+     * indev. Must run after the display (LVGL needs the default
+     * display) and before standby_init (standby queries the touch
+     * INT GPIO when CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH is set).
+     *
+     * Touch native orientation and mirror flags come from
+     * app_config.h's per-board block (TOUCH_NATIVE_W / _H /
+     * TOUCH_SWAP_XY / TOUCH_MIRROR_X / TOUCH_MIRROR_Y), so this
+     * code stays board-agnostic. logical_width / logical_height
+     * are the DISPLAY_SCALE-aware logical pixel counts that LVGL
+     * itself uses. */
+    ESP_LOGI(TAG, "Initializing touchscreen...");
+    {
+        touchscreen_config_t tcfg = {};
+        tcfg.sda      = I2C_SDA_PIN;
+        tcfg.scl      = I2C_SCL_PIN;
+        tcfg.rst      = TOUCH_RST_PIN;
+        tcfg.intr     = TOUCH_INT_PIN;
+        tcfg.i2c_addr = TOUCH_I2C_ADDR;
+        tcfg.i2c_port = 0;
+        tcfg.i2c_hz   = 400000;
+        tcfg.native_width   = TOUCH_NATIVE_W;
+        tcfg.native_height  = TOUCH_NATIVE_H;
+        tcfg.logical_width  = DISPLAY_LOGICAL_WIDTH;
+        tcfg.logical_height = DISPLAY_LOGICAL_HEIGHT;
+        tcfg.swap_xy  = TOUCH_SWAP_XY  ? true : false;
+        tcfg.mirror_x = TOUCH_MIRROR_X ? true : false;
+        tcfg.mirror_y = TOUCH_MIRROR_Y ? true : false;
+        touchscreen_init(&tcfg);
+    }
+#endif
 
     /* WiFi is lazy-initialized on first wifi_manager_connect() call.
      * On boards with a tight internal heap (e.g. M5Stack PaperS3, ~138 KB

@@ -169,7 +169,13 @@
  * widely shared in the LovyanGFX / LVGL community for this board;
  * verify against the actual silk-screen of your unit if init fails.
  *
- * Touch input (AXS5106L / I2C) is not used by Draftling.
+ * Touch input (AXS5106L capacitive controller, I2C address 0x3B)
+ * is used as a secondary input device on this board (the JC3248W535
+ * has no user buttons besides the power switch). The touch INT line
+ * doubles as the EXT0 deep-sleep wake source. The touch pins are
+ * configurable via menuconfig under "DRAFTLING Configuration ->
+ * Touchscreen INT/RST GPIO" so a non-stock wiring can be supported
+ * without code changes.
  */
 #define BOARD_NAME          "Guition JC3248W535"
 
@@ -191,16 +197,39 @@
 #define SD_SPI_CS_PIN       10
 #define SD_EN_PIN           -1
 
-/* I2C bus (touch controller, optional) */
+/* I2C bus (also carries the AXS5106L touch controller) */
 #define I2C_SDA_PIN         8
 #define I2C_SCL_PIN         9
+
+/* AXS5106L touch controller. INT defaults to GPIO3 (RTC-capable,
+ * required for wake-on-touch). The reset line is tied to the LCD
+ * reset on this board so we leave the dedicated touch RST at -1.
+ *
+ * The controller reports coordinates in the panel's native portrait
+ * orientation (320 wide x 480 tall). The LCD backend software-
+ * rotates to 480x320 landscape, so we swap XY and mirror X on the
+ * touch side to match. */
+#define TOUCH_I2C_ADDR      0x3B
+#define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
+#define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
+#define TOUCH_NATIVE_W      320
+#define TOUCH_NATIVE_H      480
+#define TOUCH_SWAP_XY       1
+#define TOUCH_MIRROR_X      1
+#define TOUCH_MIRROR_Y      0
 
 /* No on-board battery monitor on this dev board */
 #define BATT_ADC_PIN        -1
 #define BATT_EN_PIN         -1
 #define BATT_DIVIDER        1
 
-/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin). */
+/* Deep-sleep wakeup. The JC3248W535 has no BOOT button on an
+ * RTC-capable GPIO, so the only way to wake the device is via the
+ * touch INT line -- enabled by setting both DRAFTLING_TOUCHSCREEN
+ * and DRAFTLING_STANDBY_WAKE_ON_TOUCH (the per-board default).
+ * WAKEUP_GPIO_NUM below is just the fallback; the standby code
+ * overrides it with CONFIG_DRAFTLING_TOUCH_INT_GPIO when
+ * wake-on-touch is enabled. */
 #define WAKEUP_GPIO_NUM     0
 
 #elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_TDISPLAY_S3)

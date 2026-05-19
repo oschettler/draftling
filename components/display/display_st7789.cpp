@@ -72,6 +72,8 @@ static const char *TAG = "DisplayST7789";
  * display_set_backlight() (below) can reference it before the rest
  * of the static state is defined further down. */
 static int s_bl_pin = -1;
+static int s_bl_last_pct = 100;
+static bool s_panel_asleep = false;
 
 static void backlight_pwm_init(int bl_pin)
 {
@@ -98,9 +100,10 @@ static void backlight_pwm_init(int bl_pin)
 
 extern "C" void display_set_backlight(int percent)
 {
-    if (s_bl_pin < 0) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
+    s_bl_last_pct = percent;
+    if (s_bl_pin < 0) return;
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
@@ -518,6 +521,28 @@ extern "C" void display_full_refresh(void)
     /* Cancel any partial clip so the whole panel really gets pushed. */
     s_clip_w = s_clip_h = 0;
     display_flush();
+}
+
+extern "C" void display_sleep(void)
+{
+    if (s_panel_asleep) return;
+    s_panel_asleep = true;
+    display_set_backlight(0);
+    if (s_panel) {
+        esp_lcd_panel_disp_on_off(s_panel, false);
+    }
+}
+
+extern "C" void display_wake(void)
+{
+    if (!s_panel_asleep) return;
+    if (s_panel) {
+        esp_lcd_panel_disp_on_off(s_panel, true);
+    }
+    s_panel_asleep = false;
+    int pct = s_bl_last_pct > 0 ? s_bl_last_pct : 100;
+    display_set_backlight(pct);
+    display_full_refresh();
 }
 
 extern "C" uint8_t *display_get_buffer(void)

@@ -35,8 +35,12 @@ config DRAFTLING_MODEL_JC3248W535
     depends on IDF_TARGET_ESP32S3
     help
         Guition JC3248W535 development board: 3.5" IPS color LCD,
-        480x320, AXS15231B controller over QSPI. Touch input is
-        not used (Draftling is keyboard-driven).
+        480x320, AXS15231B controller over QSPI. Has an on-board
+        AXS5106L capacitive touchscreen which Draftling uses as a
+        secondary input (cursor, scroll, double-tap selection in
+        the editor; tap-to-select in menus). This board has no
+        user buttons besides the power switch; deep sleep is woken
+        by the touchscreen.
 
 config DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     bool "LilyGO T-Display-S3 (ST7789, 1.9\" color LCD, 320x170)"
@@ -141,6 +145,10 @@ config DRAFTLING_SD_SDMMC
 # component does not need to test individual model ids. The matching
 # WAKEUP_GPIO_NUM macro in main/app_config.h is kept in lock-step
 # for any code that includes app_config.h directly.
+#
+# When CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH is set the standby code
+# arms EXT0 on CONFIG_DRAFTLING_TOUCH_INT_GPIO instead, regardless of
+# this value.
 config DRAFTLING_WAKEUP_GPIO
     int
     default 18 if DRAFTLING_MODEL_WAVESHARE_RLCD42
@@ -149,6 +157,110 @@ config DRAFTLING_WAKEUP_GPIO
     default 0  if DRAFTLING_MODEL_JC3248W535
     default 0  if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     default 0
+
+# ---- Touchscreen support ----
+#
+# DRAFTLING_TOUCHSCREEN enables an I2C touch-controller driver
+# (currently only the AXS5106L on the Guition JC3248W535) and an
+# LVGL pointer input device. When enabled, the editor accepts tap
+# (move cursor), vertical swipe (scroll), and double-tap (select
+# word) gestures; list screens (main menu, settings, file browser)
+# accept tap-to-select on rows.
+#
+# The default is on for boards that have no user buttons besides the
+# power switch (Guition JC3248W535).
+config DRAFTLING_TOUCHSCREEN
+    bool "Enable touchscreen input"
+    default y if DRAFTLING_MODEL_JC3248W535
+    default n
+    help
+        Enable I2C touch-controller support and an LVGL pointer
+        input device. The editor and list screens become
+        touch-navigable in addition to the keyboard. Required on
+        boards that have no user buttons.
+
+# Touchscreen INT GPIO. The touch controller pulses this line low
+# on touch. Used by the LVGL pointer indev (the read_cb only polls
+# I2C when INT is low to avoid bus noise on every LVGL tick) and,
+# when CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH is set, as the EXT0
+# deep-sleep wake source. Must be RTC-capable (GPIO0-21 on the
+# ESP32-S3) for the wake-on-touch path to work.
+config DRAFTLING_TOUCH_INT_GPIO
+    int "Touchscreen INT GPIO"
+    depends on DRAFTLING_TOUCHSCREEN
+    range -1 48
+    default 3 if DRAFTLING_MODEL_JC3248W535
+    default -1
+    help
+        GPIO connected to the touch controller's interrupt (INT)
+        line. Set to -1 if INT is not wired (the LVGL indev will
+        then poll I2C on every tick and CONFIG_DRAFTLING_STANDBY_
+        WAKE_ON_TOUCH will be unusable).
+
+        Defaults verified for: Guition JC3248W535 (GPIO3, AXS5106L).
+
+# Touchscreen reset GPIO. The reset line is often tied to the LCD
+# reset on combo touch+LCD boards; set to -1 to skip a software
+# reset pulse during touchscreen_init.
+config DRAFTLING_TOUCH_RST_GPIO
+    int "Touchscreen RST GPIO (-1 = none)"
+    depends on DRAFTLING_TOUCHSCREEN
+    range -1 48
+    default -1
+    help
+        GPIO connected to the touch controller's reset (RST) line,
+        or -1 if it is tied to the LCD reset / a fixed pull-up.
+
+# ---- Standby behavior ----
+#
+# By default the standby manager enters real ESP32 deep sleep on
+# inactivity (or on "no keyboard within N seconds"). On boards with
+# no buttons that can wake the chip, two alternative paths are
+# available:
+#
+#   * DRAFTLING_STANDBY_DISPLAY_OFF -- keep the MCU running but blank
+#     the display (clear framebuffer + backlight off + DISPOFF + SLPIN
+#     on backends that support it). Wakes on any LVGL input event.
+#
+#   * DRAFTLING_STANDBY_WAKE_ON_TOUCH -- on deep sleep, arm EXT0 on
+#     the touch INT pin instead of the BOOT button. Lets a touch wake
+#     the device from real deep sleep. Requires DRAFTLING_TOUCHSCREEN
+#     and a touch INT pin on an RTC-capable GPIO (GPIO0-21).
+#
+# When both are set the WAKE_ON_TOUCH path is preferred (it draws
+# less power than keeping the MCU running). When neither is set the
+# behavior is the existing BOOT-button EXT0 wake.
+#
+# On the Guition JC3248W535 (no user buttons) we default to deep
+# sleep + wake-on-touch.
+config DRAFTLING_STANDBY_DISPLAY_OFF
+    bool "Standby: turn display off (keep MCU running) instead of deep sleep"
+    default n
+    help
+        On standby, blank the display and put the panel into its
+        low-power sleep mode instead of deep-sleeping the MCU.
+        Any LVGL input event (touch, BLE keyboard) wakes the
+        display.
+
+        Use this on boards with no RTC-capable wake source (no
+        BOOT button on an RTC GPIO and no touch INT on an RTC
+        GPIO). It draws more power than deep sleep -- prefer
+        DRAFTLING_STANDBY_WAKE_ON_TOUCH if you have a touch
+        controller wired to an RTC GPIO.
+
+config DRAFTLING_STANDBY_WAKE_ON_TOUCH
+    bool "Standby: wake from deep sleep on touchscreen tap"
+    depends on DRAFTLING_TOUCHSCREEN
+    default y if DRAFTLING_MODEL_JC3248W535
+    default n
+    help
+        On standby, enter real deep sleep and arm EXT0 on the
+        touch INT line so any tap wakes the device. Requires
+        DRAFTLING_TOUCH_INT_GPIO to be on an RTC-capable GPIO
+        (0-21 on ESP32-S3).
+
+        When this is set the touch INT pin overrides
+        DRAFTLING_WAKEUP_GPIO as the deep-sleep wake source.
 
 config DRAFTLING_DISPLAY_WIDTH
     int

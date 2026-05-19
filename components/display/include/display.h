@@ -87,6 +87,30 @@ bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
 void display_set_partial_clip(int x, int y, int w, int h);
 
 /*
+ * Put the display panel into low-power sleep mode.
+ *
+ * On color-LCD backends (AXS15231B, ST7789) this turns the backlight
+ * off and sends DISPOFF + SLPIN so the controller drops to its
+ * sleep current. On e-paper / reflective-LCD / RLCD backends where
+ * the panel retains its image without power the call is a no-op.
+ *
+ * Used by the standby manager's CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF
+ * code path, which keeps the MCU running but blanks the display
+ * until an input event arrives. Pair with display_wake() to bring
+ * the panel back without re-running the full init sequence.
+ */
+void display_sleep(void);
+
+/*
+ * Wake the display panel from display_sleep(). Sends SLPOUT + DISPON
+ * on backends that implement display_sleep(), turns the backlight
+ * back on, and (where supported) requests a full repaint on the
+ * next display_flush() so any framebuffer drift is corrected. No-op
+ * on backends with no display_sleep().
+ */
+void display_wake(void);
+
+/*
  * AXS15231B QSPI color-LCD driver init.
  *
  * Used by boards with CONFIG_DRAFTLING_DISPLAY_AXS15231B (Waveshare

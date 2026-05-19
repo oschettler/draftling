@@ -522,4 +522,15 @@ extern "C" void display_set_backlight(int /*percent*/)
     /* E-paper has no backlight. No-op. */
 }
 
+extern "C" void display_sleep(void)
+{
+    /* E-paper retains its image without power. No-op (the standby
+     * manager wipes the panel to white separately before deep sleep). */
+}
+
+extern "C" void display_wake(void)
+{
+    /* No-op (see display_sleep). */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_EPD */

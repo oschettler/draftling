@@ -2,14 +2,30 @@
  * Standby / deep-sleep manager.
  *
  * Tracks user inactivity via an esp_timer. When the configured
- * timeout expires the board enters deep sleep and wakes via EXT0
- * on the per-board RTC-capable GPIO selected by
- * CONFIG_DRAFTLING_WAKEUP_GPIO in main/Kconfig.projbuild
- * (active-low). This file is board-agnostic.
+ * timeout expires the board enters one of three power-save modes,
+ * picked at build time:
  *
- * The editor state lives in PSRAM/heap so it is lost on wake;
- * callers should auto-save before sleep. The timeout value is
- * persisted in NVS.
+ *   * Default (deep sleep + button wake):
+ *     esp_deep_sleep_start(); wake via EXT0 on
+ *     CONFIG_DRAFTLING_WAKEUP_GPIO (the per-board BOOT button).
+ *
+ *   * CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH (deep sleep + touch wake):
+ *     same as above but EXT0 is armed on the touchscreen INT pin
+ *     reported by touchscreen_get_int_gpio(), so any tap wakes the
+ *     device. Preferred on boards with no user buttons.
+ *
+ *   * CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF (display off, MCU
+ *     running): blank the display via display_sleep() and block in
+ *     a low-priority FreeRTOS poll loop until any input arrives
+ *     (touch INT low, or BLE keyboard press), then display_wake()
+ *     and return without losing editor state. Draws more power than
+ *     deep sleep but works on hardware with no RTC-capable wake
+ *     source.
+ *
+ * This file is otherwise board-agnostic. The editor state lives in
+ * PSRAM/heap and IS preserved across the display-off path; deep
+ * sleep loses it (callers should auto-save first). The timeout
+ * value is persisted in NVS.
  */
 
 #include <cstring>
@@ -28,6 +44,10 @@
 
 #include "standby.h"
 #include "ble_keyboard.h"
+#include "display.h"
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+#include "touchscreen.h"
+#endif
 
 static const char *TAG = "Standby";
 
@@ -54,6 +74,13 @@ static standby_pre_sleep_cb_t s_pre_sleep_cb = NULL;
  * (rather than registering a connect callback) because the BLE
  * connect-callback slot is already used by the editor UI. */
 static esp_timer_handle_t s_kb_wait_timer = NULL;
+
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
+/* Forward declaration -- the display-off wait loop is implemented
+ * further down, but standby_reset_timer() needs to flip this flag
+ * to wake the loop when a BLE key event arrives. */
+static volatile bool s_display_off_wake_req = false;
+#endif
 
 /* ---- timer callback ---- */
 
@@ -138,6 +165,13 @@ extern "C" void standby_init(void)
 
 extern "C" void standby_reset_timer(void)
 {
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
+    /* If the display is currently off, signal the wait loop to
+     * exit. Whichever code path delivered this activity (BLE key,
+     * touch, "Sleep now" cancelled) will then return through
+     * enter_display_off and continue normally. */
+    s_display_off_wake_req = true;
+#endif
     if (s_timeout_sec > 0) {
         start_timer();
     }
@@ -174,6 +208,83 @@ extern "C" void standby_set_pre_sleep_cb(standby_pre_sleep_cb_t cb)
     s_pre_sleep_cb = cb;
 }
 
+/* Pick the EXT0 wake GPIO. By default this is the per-board BOOT
+ * button from Kconfig; when wake-on-touch is enabled and the
+ * touchscreen driver has been initialised with an INT pin, that
+ * INT pin overrides the default. */
+static gpio_num_t resolve_wake_gpio(void)
+{
+    gpio_num_t g = WAKEUP_GPIO;
+#if defined(CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH) && defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    int tg = touchscreen_get_int_gpio();
+    if (tg >= 0 && rtc_gpio_is_valid_gpio((gpio_num_t)tg)) {
+        g = (gpio_num_t)tg;
+    } else if (tg >= 0) {
+        ESP_LOGW(TAG, "Touch INT GPIO%d is not RTC-capable; "
+                      "falling back to GPIO%d for EXT0 wake",
+                 tg, (int)WAKEUP_GPIO);
+    }
+#endif
+    return g;
+}
+
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
+
+/* Display-off standby: blank the display and idle the MCU until any
+ * input arrives. Implemented as a busy wait inline on the caller's
+ * task (the only caller is standby_enter_sleep, invoked from either
+ * the LVGL timer callback or the inactivity esp_timer). The poll
+ * loop checks:
+ *   - touch INT GPIO low (any tap), or
+ *   - BLE keyboard key event (ble_keyboard_is_connected -> reset
+ *     timer in editor_ui resumes us via standby_reset_timer)
+ * To keep this simple we poll only the touch INT and rely on
+ * standby_reset_timer() being called from the BLE callback path
+ * to invoke standby_display_off_wake() externally; in practice
+ * the polling loop returns as soon as a touch is detected, which
+ * is the primary input on display-off boards. */
+
+static void enter_display_off(void)
+{
+    ESP_LOGI(TAG, "Standby: turning display off");
+    if (s_pre_sleep_cb) {
+        s_pre_sleep_cb();
+    }
+    display_sleep();
+
+    s_display_off_wake_req = false;
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    int int_gpio = touchscreen_get_int_gpio();
+#else
+    int int_gpio = -1;
+#endif
+
+    /* Block until we see a wake signal. Poll every 100 ms; that is
+     * fast enough to feel instant after a tap (a touch frame is
+     * 10-20 ms) without burning the CPU. */
+    while (!s_display_off_wake_req) {
+        if (int_gpio >= 0 &&
+            gpio_get_level((gpio_num_t)int_gpio) == 0) {
+            break;
+        }
+        if (ble_keyboard_is_connected()) {
+            /* BLE keyboard events route through editor_ui's
+             * key handler which calls standby_reset_timer(); that
+             * function flips s_display_off_wake_req. */
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    ESP_LOGI(TAG, "Standby: waking display");
+    display_wake();
+    /* Rearm the inactivity timer so we go back to sleep after the
+     * user finishes interacting. */
+    start_timer();
+}
+
+#endif /* CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF */
+
 extern "C" void standby_enter_sleep(void)
 {
     stop_timer();
@@ -181,42 +292,55 @@ extern "C" void standby_enter_sleep(void)
         esp_timer_stop(s_kb_wait_timer);
     }
 
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
+    enter_display_off();
+    return;
+#else
+
     if (s_pre_sleep_cb) {
         s_pre_sleep_cb();
     }
 
+    gpio_num_t wake_gpio = resolve_wake_gpio();
+
     /* Enable the internal RTC pull-up on the wake pin and disable any
      * pull-down so the EXT0 wake-on-low source does not fire
-     * immediately. The supported boards (RLCD-4.2 button on GPIO18
+     * immediately. The supported buttons (RLCD-4.2 button on GPIO18
      * and PaperS3 BOOT on GPIO0 / strapping pin) already have
      * external pull-ups, so adding an internal pull-up here is
      * harmless: the two pull-ups simply parallel. We always enable
      * it so the behaviour is consistent across boards.
+     *
+     * On wake-on-touch boards (CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH)
+     * the same pull-up keeps the AXS5106L's open-drain INT line
+     * idle-high while no touch is active, so EXT0 only fires when
+     * the controller actually pulls INT low.
      *
      * rtc_gpio_pullup_en() routes through the RTC IO mux, so the
      * pull-up survives into deep sleep. Errors are logged but not
      * fatal: a non-RTC-capable GPIO will be rejected here, and we
      * still want to attempt deep sleep with whatever wake-up
      * configuration we can make work. */
-    if (rtc_gpio_is_valid_gpio(WAKEUP_GPIO)) {
-        esp_err_t err = rtc_gpio_pullup_en(WAKEUP_GPIO);
+    if (rtc_gpio_is_valid_gpio(wake_gpio)) {
+        esp_err_t err = rtc_gpio_pullup_en(wake_gpio);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "rtc_gpio_pullup_en(GPIO%d) failed: %s",
-                     (int)WAKEUP_GPIO, esp_err_to_name(err));
+                     (int)wake_gpio, esp_err_to_name(err));
         }
-        err = rtc_gpio_pulldown_dis(WAKEUP_GPIO);
+        err = rtc_gpio_pulldown_dis(wake_gpio);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "rtc_gpio_pulldown_dis(GPIO%d) failed: %s",
-                     (int)WAKEUP_GPIO, esp_err_to_name(err));
+                     (int)wake_gpio, esp_err_to_name(err));
         }
     } else {
         ESP_LOGW(TAG, "GPIO%d is not RTC-capable; cannot enable internal pull-up",
-                 (int)WAKEUP_GPIO);
+                 (int)wake_gpio);
     }
 
     /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */
-    ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(WAKEUP_GPIO, 0));
-    ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)WAKEUP_GPIO);
+    ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(wake_gpio, 0));
+    ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
     esp_deep_sleep_start();
     /* Does not return */
+#endif /* !CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF */
 }

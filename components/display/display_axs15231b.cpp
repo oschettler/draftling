@@ -80,6 +80,19 @@ static const char *TAG = "DisplayAXS";
  * of the static state is defined further down. */
 static int s_bl_pin = -1;
 
+/* Last user-requested backlight percent, cached so display_sleep()
+ * / display_wake() can restore the brightness after blanking the
+ * panel. Initialised to 100 so that an unsolicited display_wake()
+ * (before the editor has had a chance to call display_set_backlight)
+ * still gives a readable picture. */
+static int s_bl_last_pct = 100;
+
+/* True while the panel is in display_sleep() (SLPIN/DISPOFF). The
+ * flush path checks this and skips its CASET/RASET/pixel-write
+ * burst so a stray LVGL refresh does not wake the controller
+ * behind our back. */
+static bool s_panel_asleep = false;
+
 static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
@@ -108,9 +121,10 @@ static void backlight_pwm_init(int bl_pin)
 
 extern "C" void display_set_backlight(int percent)
 {
-    if (s_bl_pin < 0) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
+    s_bl_last_pct = percent;
+    if (s_bl_pin < 0) return;
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
@@ -860,6 +874,17 @@ extern "C" void display_flush(void)
 {
     if (s_dirty_x1 < 0) return;  /* nothing dirty */
 
+    /* While the panel is in display_sleep() (SLPIN), any pixel write
+     * would be silently dropped and -- on some AXS15231B units --
+     * leaves the controller in a state where the next SLPOUT does
+     * not bring the image back. Just clear the accumulator so a
+     * later display_wake() + dirty-marking refresh starts clean. */
+    if (s_panel_asleep) {
+        s_dirty_x1 = s_dirty_y1 = s_dirty_x2 = s_dirty_y2 = -1;
+        s_clip_w = s_clip_h = 0;
+        return;
+    }
+
     int x1 = s_dirty_x1, y1 = s_dirty_y1;
     int x2 = s_dirty_x2, y2 = s_dirty_y2;
 
@@ -999,6 +1024,59 @@ extern "C" void display_full_refresh(void)
     /* Cancel any partial clip so the whole panel really gets pushed. */
     s_clip_w = s_clip_h = 0;
     display_flush();
+}
+
+/* Put the panel into low-power sleep.
+ *
+ * 1. Backlight off (LEDC duty 0) -- by far the biggest power drain
+ *    on a TFT LCD, and the most user-visible signal that the device
+ *    is asleep.
+ * 2. DISPOFF (0x28) -- blank the panel without losing register state.
+ * 3. SLPIN  (0x10) -- drop the controller into its ~100 uA sleep
+ *    current; framebuffer contents are retained.
+ *
+ * The matching display_wake() reverses the sequence. We deliberately
+ * do not turn off the LCD's logic rail / cut SPI: bringing the bus
+ * down and back up takes ~200 ms and risks contention with the SD
+ * card on the same SPI3 host, which would be more disruptive than
+ * the few mW the controller still draws in SLPIN.
+ */
+extern "C" void display_sleep(void)
+{
+    if (s_panel_asleep) return;
+    s_panel_asleep = true;
+    display_set_backlight(0);
+    /* spi_send_cmd takes the bus via the spi_device handle, which
+     * serialises with display_flush()'s acquire-bus call. */
+    spi_send_cmd(0x28, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    spi_send_cmd(0x10, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    ESP_LOGI(TAG, "panel asleep (SLPIN)");
+    /* Note: s_bl_last_pct was clobbered by the
+     * display_set_backlight(0) call above; restore it so
+     * display_wake() brings the user-configured brightness back. */
+    s_bl_last_pct = s_bl_last_pct ? s_bl_last_pct : 100;
+}
+
+extern "C" void display_wake(void)
+{
+    if (!s_panel_asleep) return;
+    /* SLPOUT (0x11), spec-mandated 120 ms wait, then DISPON (0x29). */
+    spi_send_cmd(0x11, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    spi_send_cmd(0x29, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    s_panel_asleep = false;
+    /* Restore the user's backlight brightness. If it was never set
+     * (s_bl_last_pct still 0), default to 100. */
+    int pct = s_bl_last_pct > 0 ? s_bl_last_pct : 100;
+    display_set_backlight(pct);
+    /* The framebuffer in PSRAM is still valid -- just mark the whole
+     * panel dirty so the next flush re-pushes pixels (the controller's
+     * own RAM may have drifted while asleep on some panel revisions). */
+    display_full_refresh();
+    ESP_LOGI(TAG, "panel awake (SLPOUT)");
 }
 
 extern "C" uint8_t *display_get_buffer(void)

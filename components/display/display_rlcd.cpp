@@ -223,4 +223,17 @@ extern "C" void display_set_backlight(int /*percent*/)
     /* The reflective LCD has no backlight. No-op. */
 }
 
+extern "C" void display_sleep(void)
+{
+    /* The reflective LCD has no backlight to switch off, and the
+     * panel retains its image without power. The standby manager
+     * uses deep sleep on this board anyway, so this is just a
+     * defensive no-op. */
+}
+
+extern "C" void display_wake(void)
+{
+    /* No-op (see display_sleep). */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_RLCD */
