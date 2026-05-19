@@ -1132,6 +1132,7 @@ static void settings_activate_item(int idx);
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
 
 #include <cctype>
+#include <cstdlib>
 
 /* Treat as a "word" character: ASCII alnum / underscore, and any
  * UTF-8 continuation/start byte (>= 0x80). This makes word-select
@@ -1273,7 +1274,7 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
     case MD_LINE_BLOCKQUOTE:
     case MD_LINE_NUMBERED:
     case MD_LINE_PARAGRAPH:
-    case MD_LINE_CODE:
+    case MD_LINE_CODE_CONTENT:
     default:
         /* Display is mi.content unchanged; the raw line skipped
          * (mi.content - lt) bytes for the markdown marker. */
@@ -1351,8 +1352,8 @@ static void editor_touch_event_cb(lv_event_t *e)
         uint32_t now = lv_tick_get();
         bool is_double = (now - s_last_tap_ms) <= TOUCH_DOUBLE_TAP_MS &&
                           (s_last_tap_x >= 0) &&
-                          (lv_abs(pt.x - s_last_tap_x) <= TOUCH_DOUBLE_TAP_PX) &&
-                          (lv_abs(pt.y - s_last_tap_y) <= TOUCH_DOUBLE_TAP_PX);
+                          (std::abs((int)(pt.x - s_last_tap_x)) <= TOUCH_DOUBLE_TAP_PX) &&
+                          (std::abs((int)(pt.y - s_last_tap_y)) <= TOUCH_DOUBLE_TAP_PX);
         s_last_tap_ms = now;
         s_last_tap_x  = pt.x;
         s_last_tap_y  = pt.y;
