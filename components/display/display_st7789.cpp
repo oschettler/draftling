@@ -102,8 +102,11 @@ extern "C" void display_set_backlight(int percent)
 {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    s_bl_last_pct = percent;
+    /* Only cache the value once we know the hardware was actually
+     * driven; otherwise display_wake() would later "restore" a
+     * brightness that never made it out to the panel. */
     if (s_bl_pin < 0) return;
+    s_bl_last_pct = percent;
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
@@ -527,10 +530,15 @@ extern "C" void display_sleep(void)
 {
     if (s_panel_asleep) return;
     s_panel_asleep = true;
+    /* Capture the user's brightness BEFORE display_set_backlight(0)
+     * overwrites s_bl_last_pct, so display_wake() can restore it
+     * accurately. */
+    int saved_pct = s_bl_last_pct;
     display_set_backlight(0);
     if (s_panel) {
         esp_lcd_panel_disp_on_off(s_panel, false);
     }
+    s_bl_last_pct = saved_pct ? saved_pct : 100;
 }
 
 extern "C" void display_wake(void)

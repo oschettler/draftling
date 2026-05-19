@@ -123,8 +123,11 @@ extern "C" void display_set_backlight(int percent)
 {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    s_bl_last_pct = percent;
+    /* Only cache the value once we know the hardware was actually
+     * driven; otherwise display_wake() would later "restore" a
+     * brightness that never made it out to the panel. */
     if (s_bl_pin < 0) return;
+    s_bl_last_pct = percent;
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
@@ -1045,6 +1048,10 @@ extern "C" void display_sleep(void)
 {
     if (s_panel_asleep) return;
     s_panel_asleep = true;
+    /* Capture the user's brightness BEFORE display_set_backlight(0)
+     * overwrites s_bl_last_pct, so display_wake() can restore it
+     * accurately. */
+    int saved_pct = s_bl_last_pct;
     display_set_backlight(0);
     /* spi_send_cmd takes the bus via the spi_device handle, which
      * serialises with display_flush()'s acquire-bus call. */
@@ -1053,10 +1060,9 @@ extern "C" void display_sleep(void)
     spi_send_cmd(0x10, NULL, 0);
     vTaskDelay(pdMS_TO_TICKS(120));
     ESP_LOGI(TAG, "panel asleep (SLPIN)");
-    /* Note: s_bl_last_pct was clobbered by the
-     * display_set_backlight(0) call above; restore it so
-     * display_wake() brings the user-configured brightness back. */
-    s_bl_last_pct = s_bl_last_pct ? s_bl_last_pct : 100;
+    /* Restore the cached brightness so display_wake() brings the
+     * user-configured value back. */
+    s_bl_last_pct = saved_pct ? saved_pct : 100;
 }
 
 extern "C" void display_wake(void)
