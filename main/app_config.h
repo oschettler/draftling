@@ -180,7 +180,25 @@
 #define LCD_QSPI_D3_PIN     14
 #define LCD_RST_PIN         21
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
-#define LCD_BL_PIN          8
+/* LCD_BL_PIN intentionally set to -1: GPIO 8 is the panel's
+ * backlight enable on this board, but the Waveshare reference
+ * firmware (Examples/ESP-IDF/11_FactoryProgram/main/main.cpp) never
+ * configures it as an output or drives it. Instead the board has an
+ * external pull-up that holds GPIO 8 HIGH = backlight ON whenever
+ * the pin is left as a high-Z input. Driving the pin from LEDC PWM
+ * (even at near-100 % duty) interacts badly with the BL boost
+ * circuit on this specific board: the backlight stays dark during
+ * normal operation, and only flashes ON briefly when
+ * display_sleep() sets the duty to 0 (pin held LOW) -- producing
+ * the "picture appears just before deep sleep" symptom. Leaving
+ * LCD_BL_PIN = -1 makes backlight_pwm_init() and
+ * display_set_backlight() no-op on this board so the external
+ * pull-up keeps the backlight permanently on, exactly as the
+ * Waveshare FactoryProgram does. The matching
+ * CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT default is overridden to
+ * n for this model in main/Kconfig.projbuild so the F1 -> Backlight
+ * settings entry is hidden too. */
+#define LCD_BL_PIN          -1
 
 /* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
  * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map
