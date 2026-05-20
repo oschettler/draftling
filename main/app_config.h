@@ -182,22 +182,19 @@
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
 /* GPIO 8 drives the BL boost-converter enable, with an external
  * pull-up on the board that latches the BL ON whenever the pin is
- * left high-Z -- which is exactly what Waveshare's own FactoryProgram
- * (Examples/ESP-IDF/11_FactoryProgram) does (it never configures or
- * drives GPIO 8). We deliberately do NOT drive this pin from the
- * ESP32 for two reasons:
- *   1. LEDC PWM at any duty leaves the BL boost circuit dark and
- *      only flashes bright when the duty hits 0 (the "picture only
- *      appears at deep-sleep entry" symptom).
- *   2. A previous attempt to drive the pin as a binary on/off
- *      output (with gpio_hold_en to keep it LOW through deep sleep)
- *      reintroduced the same symptom on cold boot, and this board
- *      has no battery (BATT_ADC_PIN = -1) so cutting the BL during
- *      deep sleep saves no measurable power anyway.
- * Setting LCD_BL_PIN = -1 leaves the pin high-Z so the external
- * pull-up holds the BL on for the lifetime of the session, which
- * is the known-good configuration. */
-#define LCD_BL_PIN          -1
+ * left high-Z. The boost circuit does not tolerate LEDC PWM at any
+ * duty (the "picture only appears at deep-sleep entry" symptom), so
+ * we drive the pin as a plain binary on/off output -- see
+ * CONFIG_DRAFTLING_BL_GPIO_BINARY in main/Kconfig.projbuild, which
+ * defaults to y on this board. backlight_pwm_init() configures the
+ * pin as a digital output with the internal pull-up enabled and
+ * drives it HIGH (BL on) on every boot, so cold boot stays bright.
+ * On entry to deep sleep, display_deep_sleep_prepare() drives the
+ * pin LOW + arms gpio_hold_en + gpio_deep_sleep_hold_en so the BL
+ * is actually off (overriding the external pull-up) for the whole
+ * sleep interval, saving power. backlight_pwm_init() releases the
+ * hold on every boot before reconfiguring the pin. */
+#define LCD_BL_PIN          8
 
 /* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
  * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map

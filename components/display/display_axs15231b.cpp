@@ -1231,21 +1231,41 @@ extern "C" int display_get_buffer_size(void)
 
 extern "C" void display_deep_sleep_prepare(void)
 {
-    /* Blank the panel content first so any visible flicker as the
-     * BL drops happens against a uniform background. display_sleep()
-     * also drives BL to 0 internally, but it leaves the BL pin in
-     * its normal (post-init) output mode -- once esp_deep_sleep_start
-     * lets the IO mux release the pad, the external pull-up on
-     * GPIO 8 (Waveshare Touch-LCD-3.49) would yank it HIGH again and
-     * the backlight would re-light through deep sleep. We need to
-     * actively hold the pin LOW. */
-    display_sleep();
+    /* Deliberately do NOT call display_sleep() here.
+     *
+     * display_sleep() sends DISPOFF (0x28) + SLPIN (0x10) to the
+     * AXS15231B. On wake-from-deep-sleep that turns out to be a
+     * trap: deep-sleep wake on the ESP32-S3 is a chip reset, so
+     * hw_reset() pulses LCD_RST LOW for 250 ms while the controller
+     * is already sitting in SLPIN with the analog rails still up.
+     * Some AXS15231B revisions do not fully re-init their internal
+     * state machine from that "warm RST while in SLPIN" corner
+     * case: the controller comes out of the pulse still believing
+     * it is asleep, swallows the subsequent SLPOUT / DISPON, and
+     * the panel stays black for the rest of the session (the
+     * black-screen-on-wake symptom on the Waveshare Touch-LCD-3.49,
+     * see docs/deep-sleep-black-screen-investigation.md).
+     *
+     * Leaving the controller in its normal display-on state across
+     * deep sleep avoids that corner case entirely. The panel
+     * content is irrelevant during sleep because we cut the
+     * backlight below; cutting the BL gives a cleaner visual
+     * transition than DISPOFF anyway. */
 
-    if (s_bl_pin < 0) return;
+    if (s_bl_pin < 0) {
+        /* Backlight is not driven by us (e.g. a board that relies
+         * on an external pull-up and never wires the BL pin to the
+         * ESP32). Nothing we can do to save power here. */
+        return;
+    }
 
-    /* Make sure the pin is driven LOW (display_sleep() already does
-     * this via display_set_backlight(0); the call here is defensive
-     * in case a future change reorders things). */
+    /* Release any digital-IO hold left from a previous deep-sleep
+     * cycle before reconfiguring the pin: gpio_set_level() is
+     * silently ignored on a held pin. */
+    gpio_hold_dis((gpio_num_t)s_bl_pin);
+    gpio_deep_sleep_hold_dis();
+
+    /* Drive BL LOW (off). */
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
     gpio_set_level((gpio_num_t)s_bl_pin, 0);
 #else
@@ -1269,7 +1289,7 @@ extern "C" void display_deep_sleep_prepare(void)
                  s_bl_pin, esp_err_to_name(err));
     }
     gpio_deep_sleep_hold_en();
-    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep", s_bl_pin);
+    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep (panel left in display-on state)", s_bl_pin);
 }
 
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

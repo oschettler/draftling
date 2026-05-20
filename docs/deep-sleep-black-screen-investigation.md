@@ -17,8 +17,9 @@ ESP32-S3 is a full CPU reset). The code that initialises the panel is
 the same in both cases:
 
 1. `main/main.cpp:94-143` -- builds `display_axs15231b_config_t` from
-   `app_config.h` (`LCD_RST_PIN = 21`, `LCD_BL_PIN = -1`,
-   `LCD_QSPI_*` on GPIO 9..14, `swap_xy = true`,
+   `app_config.h` (`LCD_RST_PIN = 21`, `LCD_BL_PIN = -1` at the time
+   this section was written; see "Resolution" below for the post-fix
+   value), `LCD_QSPI_*` on GPIO 9..14, `swap_xy = true`,
    `skip_vendor_init = true`) and calls `display_axs15231b_init()`.
 2. `components/display/display_axs15231b.cpp:760-883`:
    - `gpio_config(LCD_RST)` as output, `gpio_set_level(LCD_RST, 1)`
@@ -184,3 +185,37 @@ resolve the symptom outright:
 ## Files touched while investigating
 
 None. This document is the only change.
+
+## Resolution
+
+User feedback confirmed that the backlight stays lit during the
+"black screen after wake" symptom (i.e. the panel really is blank,
+the BL really is on) and that the BL is also lit through deep sleep
+(wasting battery). The fix therefore addresses both:
+
+1. **Before deep sleep, do NOT blank the panel.** Removed the
+   `display_sleep()` call (DISPOFF + SLPIN) from
+   `display_deep_sleep_prepare()` in
+   `components/display/display_axs15231b.cpp`. The controller is
+   left in its normal display-on state for the whole sleep
+   interval, eliminating the "warm RST while in SLPIN" corner case
+   that was the most likely root cause per section "Most likely
+   root cause" above.
+
+2. **Before deep sleep, turn the backlight OFF.** Re-enabled
+   driving `LCD_BL_PIN = 8` on the Touch-LCD-3.49 (`main/app_config.h`)
+   with `DRAFTLING_BL_GPIO_BINARY=y` as the new per-model default in
+   `main/Kconfig.projbuild`. Binary mode drives the pin HIGH on
+   every boot (matching the external pull-up, so cold boot stays
+   bright and avoids the LEDC-PWM "panel only flashes at sleep
+   entry" symptom). On entry to deep sleep the pin is driven LOW
+   and latched with `gpio_hold_en()` + `gpio_deep_sleep_hold_en()`
+   so the BL boost converter is actually off through the whole
+   sleep window. `backlight_pwm_init()` calls `gpio_hold_dis()`
+   on every boot to release the latch before reconfiguring the
+   pin.
+
+The visual transition on entering sleep is now "BL drops, panel
+content does not change". The visual transition on wake is "panel
+content already valid (or driven by the freshly-init'd backend),
+then BL comes back HIGH". The cold-boot path is unchanged.
