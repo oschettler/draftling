@@ -87,6 +87,15 @@ static const char *TAG = "DisplayAXS";
  * of the static state is defined further down. */
 static int s_bl_pin = -1;
 
+/* Deep-sleep-only BL cut pin (see display_axs15231b_config_t::
+ * bl_deep_sleep_cut). -1 = unused. When >= 0, this pin is left
+ * untouched during normal operation; display_deep_sleep_prepare()
+ * drives it LOW + latches with gpio_hold_en + gpio_deep_sleep_hold_en
+ * before deep sleep, and display_axs15231b_init() calls
+ * gpio_hold_dis() on every boot to release the latch and return
+ * the pin to high-Z (so an external pull-up re-lights the BL). */
+static int s_bl_deep_sleep_cut_pin = -1;
+
 /* Last user-requested backlight percent, cached so display_sleep()
  * / display_wake() can restore the brightness after blanking the
  * panel. Initialised to 100 so that a wake before the editor has
@@ -768,6 +777,20 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_te_pin  = cfg->te;
     s_bl_pin  = cfg->bl;
     s_cs_pin  = cfg->cs;
+    s_bl_deep_sleep_cut_pin = cfg->bl_deep_sleep_cut;
+
+    /* If a deep-sleep-only BL cut pin is configured, release any
+     * hold latched by a previous deep-sleep cycle and explicitly
+     * leave the pin in high-Z (no gpio_config call). The whole
+     * point of this mechanism is that the pin is NOT driven during
+     * normal operation -- an external pull-up holds it HIGH and any
+     * active drive from the ESP32 breaks the BL boost circuit. See
+     * display_axs15231b_config_t::bl_deep_sleep_cut for details. */
+    if (s_bl_deep_sleep_cut_pin >= 0) {
+        gpio_hold_dis((gpio_num_t)s_bl_deep_sleep_cut_pin);
+        gpio_deep_sleep_hold_dis();
+        gpio_reset_pin((gpio_num_t)s_bl_deep_sleep_cut_pin);
+    }
 
     /* Reset / TE / Backlight GPIOs */
     if (s_rst_pin >= 0) {
@@ -1252,44 +1275,75 @@ extern "C" void display_deep_sleep_prepare(void)
      * backlight below; cutting the BL gives a cleaner visual
      * transition than DISPOFF anyway. */
 
-    if (s_bl_pin < 0) {
-        /* Backlight is not driven by us (e.g. a board that relies
-         * on an external pull-up and never wires the BL pin to the
-         * ESP32). Nothing we can do to save power here. */
+    /* Pick the BL pin to drive LOW. Two paths:
+     *
+     *   1. Boards whose BL pin is driven normally (LEDC PWM or
+     *      binary on/off) use s_bl_pin: we cut the duty (LEDC) or
+     *      drive LOW (binary), then latch with gpio_hold_en.
+     *
+     *   2. Boards whose BL pin is NOT driven during normal
+     *      operation (the boost circuit only works with the pin
+     *      high-Z + external pull-up -- e.g. Waveshare ESP32-S3-
+     *      Touch-LCD-3.49) use s_bl_deep_sleep_cut_pin: we
+     *      configure that pin as a plain digital output, drive
+     *      it LOW (active LOW is tolerated by the boost circuit;
+     *      only active HIGH breaks it), and latch with
+     *      gpio_hold_en. On the next boot,
+     *      display_axs15231b_init() releases the hold and resets
+     *      the pin back to high-Z so the external pull-up takes
+     *      over again. */
+    int cut_pin = (s_bl_pin >= 0) ? s_bl_pin : s_bl_deep_sleep_cut_pin;
+    if (cut_pin < 0) {
+        /* Backlight is not under our control at all (e.g. a
+         * reflective / e-paper panel). Nothing we can do to save
+         * power here. */
         return;
     }
 
     /* Release any digital-IO hold left from a previous deep-sleep
      * cycle before reconfiguring the pin: gpio_set_level() is
      * silently ignored on a held pin. */
-    gpio_hold_dis((gpio_num_t)s_bl_pin);
+    gpio_hold_dis((gpio_num_t)cut_pin);
     gpio_deep_sleep_hold_dis();
 
-    /* Drive BL LOW (off). */
+    if (s_bl_pin < 0) {
+        /* Path (2): configure the cut pin as a plain output. We
+         * never touched it during normal operation, so it is in
+         * whatever state the boot ROM left it in (typically
+         * input + high-Z, BL held HIGH by external pull-up). */
+        gpio_config_t g = {};
+        g.intr_type    = GPIO_INTR_DISABLE;
+        g.mode         = GPIO_MODE_OUTPUT;
+        g.pin_bit_mask = (1ULL << cut_pin);
+        g.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        g.pull_up_en   = GPIO_PULLUP_DISABLE;
+        ESP_ERROR_CHECK(gpio_config(&g));
+        gpio_set_level((gpio_num_t)cut_pin, 0);
+    } else {
+        /* Path (1): pin is already configured by backlight_pwm_init. */
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
-    gpio_set_level((gpio_num_t)s_bl_pin, 0);
+        gpio_set_level((gpio_num_t)cut_pin, 0);
 #else
-    /* For LEDC mode, duty 0 means the LEDC output is LOW; the pad
-     * itself is still driven by LEDC. We rely on gpio_hold_en()
-     * snapshotting the current output level. */
-    ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0));
-    ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
+        /* For LEDC mode, duty 0 means the LEDC output is LOW; the
+         * pad itself is still driven by LEDC. We rely on
+         * gpio_hold_en() snapshotting the current output level. */
+        ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0));
+        ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
 #endif
+    }
 
     /* gpio_hold_en() latches the current output level so it survives
      * peripheral reconfiguration; gpio_deep_sleep_hold_en() extends
      * that into deep sleep (the IO mux is otherwise powered down).
-     * Together these keep the BL pin at LOW through deep sleep,
-     * overriding any external pull-up. Both calls are harmless on
-     * any GPIO; gpio_hold_en specifically requires the pad to be
-     * configured as an output, which backlight_pwm_init() ensured. */
-    esp_err_t err = gpio_hold_en((gpio_num_t)s_bl_pin);
+     * Together these keep the pin at LOW through deep sleep,
+     * overriding any external pull-up. */
+    esp_err_t err = gpio_hold_en((gpio_num_t)cut_pin);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "gpio_hold_en(BL=GPIO%d) failed: %s",
-                 s_bl_pin, esp_err_to_name(err));
+                 cut_pin, esp_err_to_name(err));
     }
     gpio_deep_sleep_hold_en();
-    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep (panel left in display-on state)", s_bl_pin);
+    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep (panel left in display-on state)", cut_pin);
 }
 
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

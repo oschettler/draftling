@@ -115,11 +115,13 @@ config DRAFTLING_DISPLAY_EPD
 # Settings menu (persisted in NVS) on these boards only.
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
-    # The Waveshare ESP32-S3-Touch-LCD-3.49 drives GPIO 8 as a plain
-    # binary on/off output (DRAFTLING_BL_GPIO_BINARY=y) because the
-    # BL boost circuit does not tolerate LEDC PWM at any duty.
-    # Binary on/off has no slider to expose, so leave HAS_BACKLIGHT
-    # off on this board even though LCD_BL_PIN >= 0.
+    # The Waveshare ESP32-S3-Touch-LCD-3.49 deliberately leaves
+    # GPIO 8 (BL) high-Z so the external pull-up holds the BL ON
+    # (LCD_BL_PIN = -1 in app_config.h); no GPIO drive, no slider.
+    # GPIO 8 is still cut LOW + held through deep sleep via
+    # LCD_BL_DEEP_SLEEP_CUT_PIN to save battery (only the active-
+    # HIGH drive breaks the boost circuit; an active-LOW drive is
+    # fine).
     default n if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
@@ -127,17 +129,20 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
 
 # DRAFTLING_BL_GPIO_BINARY tells the display backend to drive the
 # backlight enable GPIO as a plain on/off digital output instead of
-# an LEDC PWM channel. The Waveshare ESP32-S3-Touch-LCD-3.49 needs
-# this: GPIO 8 drives the BL boost-converter enable through an
-# external pull-up, and that circuit does not tolerate LEDC PWM at
-# any duty (the panel only flashes bright when the duty hits 0 --
-# the "picture only appears at deep-sleep entry" symptom). Binary
-# mode drives the pin HIGH (BL on) on every boot and lets
-# display_deep_sleep_prepare() drive it LOW + hold through deep
-# sleep so the BL actually goes off while the MCU sleeps.
+# an LEDC PWM channel. Kept available for future boards whose BL
+# boost circuit does not tolerate LEDC PWM, but no current board
+# defaults it to y -- the Waveshare ESP32-S3-Touch-LCD-3.49 used to
+# do so, but driving GPIO 8 (even as a static digital output)
+# reproduced the same "black screen, picture only at reset" symptom
+# the LEDC PWM did, so that board now leaves the pin high-Z
+# (LCD_BL_PIN = -1) and relies on the external pull-up. Power
+# savings during deep sleep are handled separately by
+# LCD_BL_DEEP_SLEEP_CUT_PIN in main/app_config.h, which only drives
+# the pin at sleep entry (active-LOW is tolerated by the boost
+# circuit; only the active-HIGH drive during normal operation is
+# not).
 config DRAFTLING_BL_GPIO_BINARY
     bool
-    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
 
 # DRAFTLING_HAS_BATTERY is set automatically on boards that wire

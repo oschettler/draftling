@@ -202,18 +202,30 @@ the BL really is on) and that the BL is also lit through deep sleep
    that was the most likely root cause per section "Most likely
    root cause" above.
 
-2. **Before deep sleep, turn the backlight OFF.** Re-enabled
-   driving `LCD_BL_PIN = 8` on the Touch-LCD-3.49 (`main/app_config.h`)
-   with `DRAFTLING_BL_GPIO_BINARY=y` as the new per-model default in
-   `main/Kconfig.projbuild`. Binary mode drives the pin HIGH on
-   every boot (matching the external pull-up, so cold boot stays
-   bright and avoids the LEDC-PWM "panel only flashes at sleep
-   entry" symptom). On entry to deep sleep the pin is driven LOW
-   and latched with `gpio_hold_en()` + `gpio_deep_sleep_hold_en()`
-   so the BL boost converter is actually off through the whole
-   sleep window. `backlight_pwm_init()` calls `gpio_hold_dis()`
-   on every boot to release the latch before reconfiguring the
-   pin.
+2. **Before deep sleep, turn the backlight OFF.** First attempt
+   re-enabled `LCD_BL_PIN = 8` on the Touch-LCD-3.49 in binary
+   on/off mode (`DRAFTLING_BL_GPIO_BINARY=y`) and drove the pin
+   HIGH during normal operation. This regressed: even an active
+   digital HIGH on GPIO 8 breaks the BL boost circuit on this
+   board (panel stays dark until the user presses RESET) -- a
+   symptom previously documented in the stored memory "Waveshare
+   Touch-LCD-3.49: do NOT drive BL GPIO 8".
+
+   The corrected fix uses a separate concept: a "deep-sleep-only
+   BL cut pin" carried on `display_axs15231b_config_t::
+   bl_deep_sleep_cut` and surfaced in `main/app_config.h` as
+   `LCD_BL_DEEP_SLEEP_CUT_PIN` (defaulting to -1, set to 8 on the
+   Touch-LCD-3.49 only). The pin is left completely high-Z during
+   normal operation so the external pull-up holds the BL HIGH
+   exactly as before; `LCD_BL_PIN` stays at -1 and the LEDC
+   path / binary on-off path are not used. At deep-sleep entry,
+   `display_deep_sleep_prepare()` configures the cut pin as a
+   plain digital output, drives it LOW (active-LOW is tolerated
+   by the boost circuit; only active-HIGH breaks it), and latches
+   the level with `gpio_hold_en()` + `gpio_deep_sleep_hold_en()`.
+   On the next boot, `display_axs15231b_init()` calls
+   `gpio_hold_dis()` and `gpio_reset_pin()` on the cut pin so it
+   returns to high-Z and the external pull-up re-lights the BL.
 
 The visual transition on entering sleep is now "BL drops, panel
 content does not change". The visual transition on wake is "panel

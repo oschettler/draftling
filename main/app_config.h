@@ -182,19 +182,35 @@
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
 /* GPIO 8 drives the BL boost-converter enable, with an external
  * pull-up on the board that latches the BL ON whenever the pin is
- * left high-Z. The boost circuit does not tolerate LEDC PWM at any
- * duty (the "picture only appears at deep-sleep entry" symptom), so
- * we drive the pin as a plain binary on/off output -- see
- * CONFIG_DRAFTLING_BL_GPIO_BINARY in main/Kconfig.projbuild, which
- * defaults to y on this board. backlight_pwm_init() configures the
- * pin as a digital output with the internal pull-up enabled and
- * drives it HIGH (BL on) on every boot, so cold boot stays bright.
- * On entry to deep sleep, display_deep_sleep_prepare() drives the
- * pin LOW + arms gpio_hold_en + gpio_deep_sleep_hold_en so the BL
- * is actually off (overriding the external pull-up) for the whole
- * sleep interval, saving power. backlight_pwm_init() releases the
- * hold on every boot before reconfiguring the pin. */
-#define LCD_BL_PIN          8
+ * left high-Z. The boost circuit does not tolerate the ESP32
+ * actively driving the pin during normal operation -- neither
+ * LEDC PWM at any duty NOR a static digital HIGH from
+ * gpio_set_level(). Both produce the "panel dark for the whole
+ * session, only flashes bright at deep-sleep entry / reset"
+ * symptom. The only configuration that keeps the BL lit is leaving
+ * the pin completely undriven (high-Z) and letting the external
+ * pull-up hold it HIGH. Therefore LCD_BL_PIN stays at -1: no
+ * gpio_config(), no LEDC, no display_set_backlight() ever touches
+ * the pin during normal operation, and there is no brightness
+ * slider to expose (DRAFTLING_DISPLAY_HAS_BACKLIGHT = n). */
+#define LCD_BL_PIN          -1
+
+/* Deep-sleep-only BL cut pin.
+ *
+ * We still want to drop the BL boost converter while the MCU is
+ * in deep sleep so we are not wasting battery on a lit panel no
+ * one can see. Driving GPIO 8 LOW (briefly, then latched with
+ * gpio_hold_en + gpio_deep_sleep_hold_en across deep sleep) is
+ * actually tolerated by the boost circuit -- only the active-
+ * HIGH drive is the problem. So the AXS15231B backend configures
+ * this pin as a plain digital output and drives it LOW exactly
+ * once, in display_deep_sleep_prepare(), then arms the deep-
+ * sleep hold so the LOW level survives the sleep interval. On
+ * the next boot the backend calls gpio_hold_dis() on the pin
+ * and returns it to high-Z (does NOT reconfigure as an output),
+ * so the external pull-up re-lights the BL exactly as on a true
+ * cold boot. Set to -1 on boards where this is not needed. */
+#define LCD_BL_DEEP_SLEEP_CUT_PIN   8
 
 /* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
  * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map
@@ -386,4 +402,14 @@
 
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."
+#endif
+
+/* Default: no deep-sleep-only BL cut pin. Boards whose BL cannot
+ * be cut via the normal LCD_BL_PIN path (because the BL boost
+ * circuit does not tolerate the ESP32 driving the BL enable pin
+ * during normal operation) may override this to drive a separate
+ * pin LOW only at deep-sleep entry. See the Waveshare ESP32-S3-
+ * Touch-LCD-3.49 block above for the canonical example. */
+#ifndef LCD_BL_DEEP_SLEEP_CUT_PIN
+#define LCD_BL_DEEP_SLEEP_CUT_PIN   -1
 #endif

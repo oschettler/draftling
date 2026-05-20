@@ -199,6 +199,24 @@ typedef struct {
      * Set true on boards whose panel does NOT need our JC3248W535
      * vendor block; leave false (default) on JC3248W535 itself. */
     bool skip_vendor_init;
+    /* Optional: GPIO pin to drive LOW + hold across deep sleep to
+     * cut the backlight, when the normal `bl` field is not suitable.
+     *
+     * Used by boards whose BL-enable pin cannot be actively driven
+     * during normal operation (the boost circuit only works when the
+     * pin is left high-Z, with an external pull-up holding it HIGH),
+     * but CAN be driven LOW to cut power. On those boards, `bl` is
+     * -1 (no normal-operation drive) and `bl_deep_sleep_cut` carries
+     * the GPIO number that display_deep_sleep_prepare() drives LOW
+     * + latches with gpio_hold_en + gpio_deep_sleep_hold_en before
+     * esp_deep_sleep_start. On the next boot, display_axs15231b_init
+     * calls gpio_hold_dis on this pin and returns it to high-Z (no
+     * gpio_config call), so the external pull-up re-lights the BL
+     * exactly as on a true cold boot.
+     *
+     * Set to -1 (default) on boards that do not need this. Known
+     * usage: Waveshare ESP32-S3-Touch-LCD-3.49 (GPIO 8). */
+    int bl_deep_sleep_cut;
 } display_axs15231b_config_t;
 
 /*
