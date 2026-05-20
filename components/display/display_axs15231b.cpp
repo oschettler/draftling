@@ -379,6 +379,24 @@ static void axs15231b_init_sequence(void)
      * issued near the end of this block re-locks the registers
      * once the panel is configured. */
 
+    /* Sleep Out FIRST, before any vendor-register writes. On cold
+     * power-up the AXS15231B boots into sleep mode with its analog
+     * stages unpowered; writes to the power-related vendor registers
+     * (0xA0, 0xA2, 0xD0, 0xC1, ...) ACK on the QSPI bus but do not
+     * actually latch in the analog domain until SLPOUT brings up
+     * the internal regulators. Without this early SLPOUT the panel
+     * powered on with mostly-default vendor regs and stayed black
+     * until the user pressed the RESET button (warm reset masked
+     * the bug because the panel was still out of sleep from the
+     * previous boot). The trailing SLPOUT issued at the end of
+     * this sequence is now a no-op but is kept for safety.
+     *
+     * Mirrors the panel_init() ordering of the reference IDF-native
+     * driver at thingsapart/esp32_lcd_controllers and the NorthernMan54
+     * JC3248W535EN BSP it is adapted from. */
+    spi_send_cmd(0x11, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
+
     /* Vendor register unlock (magic key 0x5A, 0xA5). */
     static const uint8_t init_bb_unlock[] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0xA5
@@ -609,9 +627,10 @@ static void axs15231b_init_sequence(void)
      * before SLPOUT or the first frame after wakeup is dropped. */
     spi_send_cmd(0x13, NULL, 0);
 
-    /* Sleep out, wait, then display on. */
+    /* Sleep out (no-op on the already-awake panel; the real SLPOUT
+     * is issued at the very top of this sequence), then display on. */
     spi_send_cmd(0x11, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(10));
     spi_send_cmd(0x29, NULL, 0);
     vTaskDelay(pdMS_TO_TICKS(100));
 
