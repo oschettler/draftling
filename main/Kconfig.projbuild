@@ -115,14 +115,6 @@ config DRAFTLING_DISPLAY_EPD
 # Settings menu (persisted in NVS) on these boards only.
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
-    # The Waveshare ESP32-S3-Touch-LCD-3.49 deliberately leaves
-    # GPIO 8 (BL) high-Z so the external pull-up holds the BL ON
-    # (LCD_BL_PIN = -1 in app_config.h); no GPIO drive, no slider.
-    # GPIO 8 is still cut LOW + held through deep sleep via
-    # LCD_BL_DEEP_SLEEP_CUT_PIN to save battery (only the active-
-    # HIGH drive breaks the boost circuit; an active-LOW drive is
-    # fine).
-    default n if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
     default n
