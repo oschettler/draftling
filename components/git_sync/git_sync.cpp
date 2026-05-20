@@ -545,10 +545,16 @@ static esp_err_t push_file(const char *name)
     esp_err_t ret = sd_card_read_file(local, &content, &content_len);
     if (ret != ESP_OK) return ret;
 
-    /* Limit file size for base64 encoding (256KB source -> ~350KB encoded) */
-    if (content_len > 256 * 1024) {
+    /* Upper bound on pushable file size.  The Contents API requires us to
+     * base64-encode the file (~1.34x growth) and wrap it in a JSON body,
+     * so the transient SPIRAM peak is roughly 3x the raw size (raw +
+     * base64 + cJSON-printed body).  2 MB covers any realistic Markdown
+     * document while leaving headroom for BLE / WiFi / LVGL on an 8 MB
+     * PSRAM module. */
+    if (content_len > 2 * 1024 * 1024) {
         free(content);
-        ESP_LOGW(TAG, "File too large to push: %s", name);
+        ESP_LOGW(TAG, "File too large to push: %s (%u bytes)",
+                 name, (unsigned)content_len);
         return ESP_ERR_NO_MEM;
     }
 
