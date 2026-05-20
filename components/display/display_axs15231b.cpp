@@ -105,6 +105,19 @@ static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
 
+    /* Release any digital-IO hold that may still be active from a
+     * previous deep-sleep cycle. display_deep_sleep_prepare() arms
+     * gpio_hold_en() + gpio_deep_sleep_hold_en() on this pin before
+     * esp_deep_sleep_start(); ESP-IDF preserves that hold across the
+     * deep-sleep wake (which is a chip reset), so on every boot that
+     * follows a deep sleep the BL pin stays latched LOW until we
+     * explicitly call gpio_hold_dis(). Without this, gpio_config()
+     * and gpio_set_level() below are silently ignored and the BL
+     * stays off for the entire session, producing the "screen black
+     * at startup, only flashes bright at reset" symptom. */
+    gpio_hold_dis((gpio_num_t)bl_pin);
+    gpio_deep_sleep_hold_dis();
+
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
     /* Binary BL mode: drive the BL enable as a plain digital output.
      * Skip LEDC entirely. The pin starts HIGH (BL on); display_set_
