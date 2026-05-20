@@ -17,7 +17,7 @@ from that choice.
 |-------|---------|-------|---------|-------------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300, SPI | -- | GPIO4 ADC (3:1) | GPIO18 button | On-board MicroSD (SDMMC 1-bit) |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper ED047TC1, 540x960, parallel I80 (via `m5stack/M5GFX`) | GT911 (I2C) | GPIO3 ADC (1:2) | BOOT (GPIO0); optionally touch (`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`) | On-board MicroSD (SPI3) |
-| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | not wired (pinout unverified) | -- | BOOT (GPIO0) | External SD on SPI |
+| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | AXS5106-family (I2C addr 0x3B) | -- | BOOT (GPIO0) | External SD on SPI |
 | Guition JC3248W535 | 3.5" IPS color, 480x320, AXS15231B QSPI | AXS5106L (I2C) | -- | Touch INT (no user buttons) | External SD on SPI |
 | [LilyGO T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3) | 1.9" IPS color, 320x170, ST7789 8-bit i80 | -- | GPIO4 ADC (1:2) | BOOT (GPIO0) | External SD on SPI (no on-board slot) |
 
@@ -57,10 +57,10 @@ secondary / pocket device. It has no on-board MicroSD slot, so an
 external SD card must be wired to a free SPI bus (default pins
 documented in `main/app_config.h`).
 
-The **Waveshare ESP32-S3-Touch-LCD-3.49** is currently the least
-polished target: the AXS15231B QSPI panel works, but the touch
-controller pinout has not been verified, so touch input is not wired
-up. The BOOT button on GPIO0 is used for deep-sleep wake.
+The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
+AXS15231B color LCD (natively 172x640 portrait, software-rotated to
+landscape) and an AXS5106-family capacitive touch controller at I2C
+address 0x3B. The BOOT button on GPIO0 is the deep-sleep wake source.
 
 UC8179-based e-paper displays (such as those used by the Seeed Studio
 reTerminal E1001 and the Waveshare E-Paper Driver HAT) were previously

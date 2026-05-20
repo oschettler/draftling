@@ -571,10 +571,10 @@ static void axs15231b_init_sequence(void)
      * software rotation via display_axs15231b_config_t.swap_xy,
      * which display_flush() honours by transposing per-row into
      * the DMA scratch buffer and addressing the panel in its
-     * native portrait coords. Boards whose panel is natively
-     * landscape (e.g. Waveshare Touch-LCD-3.49, 640x172) leave
-     * swap_xy false and write to the panel in landscape directly.
-     * RGB pixel order. */
+     * native portrait coords. Both currently-supported boards
+     * (Guition JC3248W535, 320x480 native; Waveshare Touch-LCD-3.49,
+     * 172x640 native) are mounted in portrait and use the swap_xy
+     * software-rotation path. RGB pixel order. */
     uint8_t madctl = 0x00;
     spi_send_cmd(0x36, &madctl, 1);
 
@@ -925,10 +925,12 @@ extern "C" void display_flush(void)
 
     if (!s_swap_xy) {
         /* Direct path: framebuffer orientation matches panel
-         * orientation, so a logical row is a panel row. Preserves
-         * the original RAMWRC (0x3C) preamble that the Waveshare
-         * Touch-LCD-3.49 (640x172 native landscape) was validated
-         * against. */
+         * orientation, so a logical row is a panel row. No board
+         * currently uses this path -- both supported AXS15231B
+         * boards (JC3248W535, Touch-LCD-3.49) are mounted in
+         * portrait and use the swap_xy rotation path below -- but
+         * the code is kept for any future natively-landscape AXS
+         * panel. */
         set_addr_window(x1, y1, w, h);
 
         /* Pixel-write burst. Drive CS low ourselves and keep it low

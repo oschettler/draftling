@@ -173,6 +173,7 @@ config DRAFTLING_TOUCHSCREEN
     bool "Enable touchscreen input"
     default y if DRAFTLING_MODEL_JC3248W535
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
     help
         Enable I2C touch-controller support and an LVGL pointer
@@ -191,6 +192,7 @@ config DRAFTLING_TOUCH_AXS5106L
     bool
     depends on DRAFTLING_TOUCHSCREEN
     default y if DRAFTLING_MODEL_JC3248W535
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
     help
         Allystar AXS5106L / AXS5106. Uses a fixed 8-byte read-request

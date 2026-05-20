@@ -156,36 +156,62 @@
 #elif defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
 /* ----- Waveshare ESP32-S3-Touch-LCD-3.49 -----
  *
- * 3.49" IPS color LCD, 640 x 172, AXS15231B controller over QSPI.
- * Pin assignments below match the Waveshare wiki schematic
- * (https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49); they
- * may need adjustment if Waveshare revises the board.
+ * 3.49" IPS color LCD, 172 x 640 native portrait (presented as
+ * 640 x 172 landscape via software rotation), AXS15231B controller
+ * over QSPI. Pin assignments below are taken verbatim from the
+ * official Waveshare reference firmware
+ * (Examples/Arduino/09_LVGL_V8_Test/user_config.h at
+ * https://github.com/waveshareteam/ESP32-S3-Touch-LCD-3.49); they
+ * differ from the placeholder values used during early bring-up.
  *
- * Touch input (CST816 / I2C) is not used by Draftling.
+ * Touch input is an Allystar AXS5106-family capacitive controller
+ * sharing the AXS15231B's I2C protocol family. INT and RST are not
+ * wired to the ESP32 on this board (Waveshare's own example also
+ * sets both to -1).
  */
 #define BOARD_NAME          "Waveshare ESP32-S3-Touch-LCD-3.49"
 
 /* AXS15231B QSPI display interface */
-#define LCD_QSPI_CS_PIN     10
-#define LCD_QSPI_SCK_PIN    12
+#define LCD_QSPI_CS_PIN     9
+#define LCD_QSPI_SCK_PIN    10
 #define LCD_QSPI_D0_PIN     11
-#define LCD_QSPI_D1_PIN     13
-#define LCD_QSPI_D2_PIN     14
-#define LCD_QSPI_D3_PIN     9
-#define LCD_RST_PIN         17
-#define LCD_TE_PIN          18
-#define LCD_BL_PIN          2
+#define LCD_QSPI_D1_PIN     12
+#define LCD_QSPI_D2_PIN     13
+#define LCD_QSPI_D3_PIN     14
+#define LCD_RST_PIN         21
+#define LCD_TE_PIN          -1   /* TE not wired on this board */
+#define LCD_BL_PIN          8
 
-/* SD card on a dedicated SPI bus */
+/* SD card on a dedicated SPI bus. The Touch-LCD-3.49 has no
+ * on-board MicroSD slot, so these are recommended free GPIOs for
+ * an external SD module; sd_card_init_spi fails gracefully if no
+ * card is wired and the editor falls back to read-only. */
 #define SD_SPI_MOSI_PIN     6
 #define SD_SPI_MISO_PIN     5
 #define SD_SPI_SCK_PIN      4
 #define SD_SPI_CS_PIN       7
 #define SD_EN_PIN           -1
 
-/* I2C bus (touch controller and other peripherals) */
-#define I2C_SDA_PIN         15
-#define I2C_SCL_PIN         16
+/* I2C bus carrying the AXS15231-family touch controller. Pins match
+ * Touch_SDA_NUM / Touch_SCL_NUM in Waveshare's user_config.h. */
+#define I2C_SDA_PIN         17
+#define I2C_SCL_PIN         18
+
+/* AXS5106-family touch controller. INT and RST are not wired on
+ * this board (both -1 in Waveshare's reference). The controller
+ * reports coordinates in the panel's landscape orientation
+ * (640 wide x 172 tall) but with both axes flipped relative to
+ * the LCD scan-out (per Waveshare's USER_DISP_ROT_90 touch handler:
+ * data->point.x = LCD_H_RES - pointX, data->point.y = LCD_V_RES -
+ * pointY), so mirror both X and Y. */
+#define TOUCH_I2C_ADDR      0x3B
+#define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
+#define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
+#define TOUCH_NATIVE_W      640
+#define TOUCH_NATIVE_H      172
+#define TOUCH_SWAP_XY       0
+#define TOUCH_MIRROR_X      1
+#define TOUCH_MIRROR_Y      1
 
 /* No on-board battery monitor on this dev board */
 #define BATT_ADC_PIN        -1

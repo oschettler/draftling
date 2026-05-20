@@ -113,8 +113,12 @@ extern "C" void app_main(void)
          * driver for this board), so the backend has to software-
          * rotate at flush time to present the 320x480 portrait
          * panel as 480x320 landscape. Waveshare's Touch-LCD-3.49
-         * is natively 640x172 landscape and needs no rotation. */
-#if defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
+         * is mounted with the same AXS15231B silicon but a 172x640
+         * portrait panel; its reference firmware also software-
+         * rotates to 640x172 landscape (USER_DISP_ROT_90), so we
+         * take the same path. */
+#if defined(CONFIG_DRAFTLING_MODEL_JC3248W535) || \
+    defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
         cfg.swap_xy = true;
 #else
         cfg.swap_xy = false;
