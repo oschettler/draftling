@@ -123,6 +123,22 @@ extern "C" void app_main(void)
 #else
         cfg.swap_xy = false;
 #endif
+        /* The hand-coded vendor-register block in display_axs15231b.cpp
+         * was adapted from the Guition JC3248W535 reference and is
+         * required to drive that 480x320 panel out of its weak factory
+         * defaults. The Waveshare Touch-LCD-3.49's 172x640 panel
+         * already ships with correct factory POR values -- the
+         * upstream Espressif esp_lcd_axs15231b driver lets users
+         * supply only {SLPOUT, DISPON} for that board, which is what
+         * Waveshare's reference firmware does. Sending the JC3248W535
+         * recipe to that panel clobbers its correct defaults and
+         * leaves the display black on cold boot until the user
+         * presses RESET. Skip the vendor block on Touch-LCD-3.49. */
+#if defined(CONFIG_DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349)
+        cfg.skip_vendor_init = true;
+#else
+        cfg.skip_vendor_init = false;
+#endif
         display_axs15231b_init(&cfg);
     }
 #elif defined(CONFIG_DRAFTLING_DISPLAY_ST7789)

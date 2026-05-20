@@ -202,6 +202,7 @@ static int s_height = 0;
  * display_flush() to decide between the direct and the transposed
  * per-row path. */
 static bool s_swap_xy = false;
+static bool s_skip_vendor_init = false;
 static int s_rst_pin = -1;
 static int s_te_pin  = -1;
 static int s_cs_pin  = -1;
@@ -404,6 +405,7 @@ static void axs15231b_init_sequence(void)
     spi_send_cmd(0x11, NULL, 0);
     vTaskDelay(pdMS_TO_TICKS(120));
 
+    if (!s_skip_vendor_init) {
     /* Vendor register unlock (magic key 0x5A, 0xA5). */
     static const uint8_t init_bb_unlock[] = {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5A, 0xA5
@@ -597,6 +599,7 @@ static void axs15231b_init_sequence(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
     spi_send_cmd(0xBB, init_bb_lock, sizeof(init_bb_lock));
+    } /* !s_skip_vendor_init */
 
     /* Memory Access Control (MADCTL). Always 0x00 on this driver:
      * not every AXS15231B silicon revision honours the MV
@@ -686,6 +689,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_width  = cfg->width;
     s_height = cfg->height;
     s_swap_xy = cfg->swap_xy;
+    s_skip_vendor_init = cfg->skip_vendor_init;
     s_rst_pin = cfg->rst;
     s_te_pin  = cfg->te;
     s_bl_pin  = cfg->bl;

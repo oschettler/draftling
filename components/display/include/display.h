@@ -151,6 +151,32 @@ typedef struct {
      * 640x172 panel is natively landscape and works with
      * MADCTL=0x00 directly. */
     bool swap_xy;
+    /* Skip the long AXS15231B vendor-register init block
+     * (0xBB unlock + 0xA0/0xA2/0xC1/0xC4..0xE2/... + 0xBB lock).
+     *
+     * The vendor block our driver sends was hand-copied from the
+     * Guition JC3248W535 reference; it is the panel-vendor recipe
+     * for that board's 480x320 panel and is required to make it
+     * display anything (the JC3248W535 ships with vendor regs at
+     * defaults that produce only a brief flash of garbage on
+     * display-on). Other AXS15231B boards may ship pre-tuned at
+     * their factory POR defaults and do NOT want our JC3248W535
+     * recipe written on top -- the Waveshare ESP32-S3-Touch-LCD-3.49
+     * is one such board: its 172x640 panel is correct out of POR,
+     * and its reference firmware (using the upstream
+     * `espressif/esp_lcd_axs15231b` IDF component) supplies only
+     * `{SLPOUT, DISPON}` as init commands. Sending the JC3248W535
+     * vendor values to that panel clobbers the correct factory
+     * defaults with values intended for a different panel geometry,
+     * producing a black screen on cold boot until the user presses
+     * RESET (warm reset masks the bug because the panel had pixels
+     * in internal RAM from the previous run, and the 250 ms RST-LOW
+     * pulse does not fully wipe that state on a panel whose VCC
+     * has been continuous).
+     *
+     * Set true on boards whose panel does NOT need our JC3248W535
+     * vendor block; leave false (default) on JC3248W535 itself. */
+    bool skip_vendor_init;
 } display_axs15231b_config_t;
 
 /*
