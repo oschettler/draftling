@@ -563,4 +563,16 @@ extern "C" int display_get_buffer_size(void)
     return (int)(s_fb_pixels * sizeof(uint16_t));
 }
 
+extern "C" void display_deep_sleep_prepare(void)
+{
+    /* Blank the panel via DISPOFF + SLPIN and cut the backlight.
+     * On the T-Display-S3 the BL is wired through an external
+     * MOSFET driven from GPIO; LEDC duty 0 holds the pin LOW and
+     * the MOSFET turns the BL off. We do not bother latching the
+     * pin through deep sleep here because the T-Display-S3 has no
+     * external pull-up on its BL line -- once the IO mux releases
+     * the pin it floats low and the BL stays off. */
+    display_sleep();
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_ST7789 */

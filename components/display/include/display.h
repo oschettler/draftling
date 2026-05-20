@@ -111,6 +111,28 @@ void display_sleep(void);
 void display_wake(void);
 
 /*
+ * Prepare the panel + backlight to survive deep sleep with the
+ * display visibly OFF.
+ *
+ * Unlike display_sleep() (which is paired with display_wake() and
+ * is used when the MCU stays running), this is a one-shot call
+ * made by the standby manager just before esp_deep_sleep_start().
+ * After this call returns, deep sleep is expected to follow
+ * immediately; there is no symmetric "after-deep-sleep" routine
+ * because deep sleep wake is a hard reset that re-runs all init
+ * code from scratch.
+ *
+ * On backends with a controllable backlight GPIO this drives the
+ * pin to its OFF level and uses gpio_hold_en() +
+ * gpio_deep_sleep_hold_en() so the LOW level survives into deep
+ * sleep (otherwise the IO mux releases the pin and any external
+ * pull-up would re-light the backlight). On backends without a
+ * controllable backlight (reflective LCD, e-paper) this is a
+ * no-op.
+ */
+void display_deep_sleep_prepare(void);
+
+/*
  * AXS15231B QSPI color-LCD driver init.
  *
  * Used by boards with CONFIG_DRAFTLING_DISPLAY_AXS15231B (Waveshare

@@ -105,6 +105,23 @@ static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
 
+#if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
+    /* Binary BL mode: drive the BL enable as a plain digital output.
+     * Skip LEDC entirely. The pin starts HIGH (BL on); display_set_
+     * backlight(0) drives it LOW (off), any other percent drives it
+     * HIGH (on). Used on boards whose BL boost circuit does not
+     * tolerate LEDC PWM at any duty (e.g. Waveshare ESP32-S3-Touch-
+     * LCD-3.49 -- see LCD_BL_PIN comment in main/app_config.h). */
+    gpio_config_t g = {};
+    g.intr_type    = GPIO_INTR_DISABLE;
+    g.mode         = GPIO_MODE_OUTPUT;
+    g.pin_bit_mask = (1ULL << bl_pin);
+    g.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    g.pull_up_en   = GPIO_PULLUP_ENABLE;
+    ESP_ERROR_CHECK(gpio_config(&g));
+    gpio_set_level((gpio_num_t)bl_pin, 1);
+    return;
+#else
     /* Pre-configure the BL pin as a plain GPIO output with the
      * internal pull-up enabled BEFORE ledc_channel_config() routes
      * it through the LEDC peripheral. Waveshare's reference
@@ -155,6 +172,7 @@ static void backlight_pwm_init(int bl_pin)
     c.duty       = BL_LEDC_DUTY_MAX;
     c.hpoint     = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&c));
+#endif
 }
 
 extern "C" void display_set_backlight(int percent)
@@ -166,9 +184,14 @@ extern "C" void display_set_backlight(int percent)
      * brightness that never made it out to the panel. */
     if (s_bl_pin < 0) return;
     s_bl_last_pct = percent;
+#if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
+    /* Binary mode: any positive percent is "on", 0 is "off". */
+    gpio_set_level((gpio_num_t)s_bl_pin, percent > 0 ? 1 : 0);
+#else
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
+#endif
 }
 
 
@@ -1191,6 +1214,49 @@ extern "C" uint8_t *display_get_buffer(void)
 extern "C" int display_get_buffer_size(void)
 {
     return (int)(s_fb_pixels * sizeof(uint16_t));
+}
+
+extern "C" void display_deep_sleep_prepare(void)
+{
+    /* Blank the panel content first so any visible flicker as the
+     * BL drops happens against a uniform background. display_sleep()
+     * also drives BL to 0 internally, but it leaves the BL pin in
+     * its normal (post-init) output mode -- once esp_deep_sleep_start
+     * lets the IO mux release the pad, the external pull-up on
+     * GPIO 8 (Waveshare Touch-LCD-3.49) would yank it HIGH again and
+     * the backlight would re-light through deep sleep. We need to
+     * actively hold the pin LOW. */
+    display_sleep();
+
+    if (s_bl_pin < 0) return;
+
+    /* Make sure the pin is driven LOW (display_sleep() already does
+     * this via display_set_backlight(0); the call here is defensive
+     * in case a future change reorders things). */
+#if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
+    gpio_set_level((gpio_num_t)s_bl_pin, 0);
+#else
+    /* For LEDC mode, duty 0 means the LEDC output is LOW; the pad
+     * itself is still driven by LEDC. We rely on gpio_hold_en()
+     * snapshotting the current output level. */
+    ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0));
+    ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
+#endif
+
+    /* gpio_hold_en() latches the current output level so it survives
+     * peripheral reconfiguration; gpio_deep_sleep_hold_en() extends
+     * that into deep sleep (the IO mux is otherwise powered down).
+     * Together these keep the BL pin at LOW through deep sleep,
+     * overriding any external pull-up. Both calls are harmless on
+     * any GPIO; gpio_hold_en specifically requires the pad to be
+     * configured as an output, which backlight_pwm_init() ensured. */
+    esp_err_t err = gpio_hold_en((gpio_num_t)s_bl_pin);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "gpio_hold_en(BL=GPIO%d) failed: %s",
+                 s_bl_pin, esp_err_to_name(err));
+    }
+    gpio_deep_sleep_hold_en();
+    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep", s_bl_pin);
 }
 
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

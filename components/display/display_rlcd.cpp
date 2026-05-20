@@ -236,4 +236,11 @@ extern "C" void display_wake(void)
     /* No-op (see display_sleep). */
 }
 
+extern "C" void display_deep_sleep_prepare(void)
+{
+    /* The reflective LCD has no backlight, retains its image
+     * without power, and the panel goes dark naturally once VDD
+     * drops in deep sleep. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_RLCD */

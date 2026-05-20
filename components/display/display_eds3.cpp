@@ -533,4 +533,12 @@ extern "C" void display_wake(void)
     /* No-op (see display_sleep). */
 }
 
+extern "C" void display_deep_sleep_prepare(void)
+{
+    /* E-paper retains its image without power and has no
+     * backlight. The standby manager wipes the panel to white via
+     * the pre_sleep_cb before this call, which is the visible
+     * "off" state on e-paper. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_EPD */

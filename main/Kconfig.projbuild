@@ -115,15 +115,28 @@ config DRAFTLING_DISPLAY_EPD
 # Settings menu (persisted in NVS) on these boards only.
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
-    # The Waveshare ESP32-S3-Touch-LCD-3.49 has its backlight held
-    # on by an external pull-up on GPIO 8; the official Waveshare
-    # FactoryProgram never drives that pin, and our earlier attempts
-    # at LEDC PWM control caused the backlight to stay dark in
-    # normal operation and flash on briefly only at deep-sleep
-    # entry. See the LCD_BL_PIN comment in main/app_config.h.
+    # On the Waveshare ESP32-S3-Touch-LCD-3.49 the BL GPIO can only
+    # be driven as binary on/off (see DRAFTLING_BL_GPIO_BINARY); a
+    # 0..100 brightness slider would be misleading, so no Settings
+    # entry is exposed on that board. The driver still uses the BL
+    # GPIO to cut the backlight at deep-sleep entry.
     default n if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
+    default n
+
+# DRAFTLING_BL_GPIO_BINARY tells the display backend to drive the
+# backlight enable GPIO as a plain on/off digital output instead of
+# an LEDC PWM channel. Required on boards whose BL boost circuit
+# does not tolerate the LEDC PWM waveform: on the Waveshare
+# ESP32-S3-Touch-LCD-3.49 LEDC PWM at any duty leaves the panel
+# dark, while a high level (matching the external pull-up) drives
+# it full-bright and a low level cuts it off cleanly. The
+# display_set_backlight() API still works in this mode but only
+# distinguishes percent == 0 (off) from percent > 0 (on).
+config DRAFTLING_BL_GPIO_BINARY
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
 
 # DRAFTLING_HAS_BATTERY is set automatically on boards that wire

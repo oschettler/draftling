@@ -315,6 +315,12 @@ extern "C" void standby_enter_sleep(void)
         s_pre_sleep_cb();
     }
 
+    /* Turn the panel off (BL off + SLPIN/DISPOFF on color backends)
+     * and latch the BL GPIO LOW so the external pull-up does not
+     * re-light the panel through deep sleep. No-op on reflective /
+     * e-paper backends that have no backlight. */
+    display_deep_sleep_prepare();
+
     gpio_num_t wake_gpio = resolve_wake_gpio();
 
     /* Enable the internal RTC pull-up on the wake pin and disable any
