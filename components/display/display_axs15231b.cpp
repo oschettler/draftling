@@ -64,16 +64,23 @@
 
 static const char *TAG = "DisplayAXS";
 
-/* LEDC PWM configuration for the backlight. We keep timer 0 / channel
- * 0 dedicated to the LCD backlight; nothing else in Draftling uses
- * LEDC. 5 kHz is well above any visible flicker and is comfortably
- * within the LEDC peripheral's range at 10-bit duty resolution. */
-#define BL_LEDC_TIMER       LEDC_TIMER_0
+/* LEDC PWM configuration for the backlight.
+ *
+ * Settings mirror Waveshare's verified `lcd_bl_pwm_bsp.c` for the
+ * ESP32-S3-Touch-LCD-3.49 reference firmware (LEDC_TIMER_3 / channel
+ * 1, 50 kHz, 8-bit, RC_FAST clock). Earlier we used 5 kHz / 10-bit /
+ * AUTO_CLK; that combination left the panel's backlight visibly dark
+ * during normal operation -- the GPIO would only flash bright as the
+ * MCU entered deep sleep and the LEDC peripheral released the pin
+ * back to its external pull-up. RC_FAST + 50 kHz + 8-bit is what the
+ * Waveshare reference uses and has been verified to drive the
+ * backlight reliably at all intermediate duty cycles. */
+#define BL_LEDC_TIMER       LEDC_TIMER_3
 #define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
-#define BL_LEDC_CHANNEL     LEDC_CHANNEL_0
-#define BL_LEDC_DUTY_RES    LEDC_TIMER_10_BIT
-#define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
-#define BL_LEDC_FREQ_HZ     5000
+#define BL_LEDC_CHANNEL     LEDC_CHANNEL_1
+#define BL_LEDC_DUTY_RES    LEDC_TIMER_8_BIT
+#define BL_LEDC_DUTY_MAX    ((1 << 8) - 1)
+#define BL_LEDC_FREQ_HZ     50000
 
 /* Backlight GPIO captured at init(); declared here so
  * display_set_backlight() (below) can reference it before the rest
@@ -82,9 +89,10 @@ static int s_bl_pin = -1;
 
 /* Last user-requested backlight percent, cached so display_sleep()
  * / display_wake() can restore the brightness after blanking the
- * panel. Initialised to 100 so that an unsolicited display_wake()
- * (before the editor has had a chance to call display_set_backlight)
- * still gives a readable picture. */
+ * panel. Initialised to 100 so that a wake before the editor has
+ * called display_set_backlight() still gives a fully-lit panel, and
+ * so that backlight_pwm_init()'s initial duty (which is also 100 %
+ * -- see comment there) is reflected in the cache. */
 static int s_bl_last_pct = 100;
 
 /* True while the panel is in display_sleep() (SLPIN/DISPOFF). The
@@ -97,12 +105,38 @@ static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0) return;
 
+    /* Pre-configure the BL pin as a plain GPIO output with the
+     * internal pull-up enabled BEFORE ledc_channel_config() routes
+     * it through the LEDC peripheral. Waveshare's reference
+     * `lcd_bl_pwm_bsp.c` for the ESP32-S3-Touch-LCD-3.49 does this
+     * same gpio_config() step first; without it, the BL line can sit
+     * in an indeterminate state during the brief window between
+     * power-on and ledc_channel_config()'s first PWM cycle (long
+     * enough on cold boot for the on-board BL driver to latch into a
+     * permanently-off state on some board revisions, so the panel
+     * stayed black through the whole session and only flashed bright
+     * as the MCU entered deep sleep and the LEDC released the pin
+     * back to the external pull-up). */
+    gpio_config_t g = {};
+    g.intr_type    = GPIO_INTR_DISABLE;
+    g.mode         = GPIO_MODE_OUTPUT;
+    g.pin_bit_mask = (1ULL << bl_pin);
+    g.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    g.pull_up_en   = GPIO_PULLUP_ENABLE;
+    ESP_ERROR_CHECK(gpio_config(&g));
+    gpio_set_level((gpio_num_t)bl_pin, 1);
+
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_LEDC_MODE;
     t.duty_resolution = BL_LEDC_DUTY_RES;
     t.timer_num       = BL_LEDC_TIMER;
     t.freq_hz         = BL_LEDC_FREQ_HZ;
-    t.clk_cfg         = LEDC_AUTO_CLK;
+    /* RC_FAST (~17.5 MHz internal oscillator) matches Waveshare's
+     * reference and survives APB-clock changes when BLE/Wi-Fi enable
+     * dynamic frequency scaling. AUTO_CLK previously picked APB,
+     * which produced an unreliable PWM that left the BL effectively
+     * dark for the user. */
+    t.clk_cfg         = LEDC_USE_RC_FAST_CLK;
     ESP_ERROR_CHECK(ledc_timer_config(&t));
 
     ledc_channel_config_t c = {};
@@ -111,10 +145,14 @@ static void backlight_pwm_init(int bl_pin)
     c.channel    = BL_LEDC_CHANNEL;
     c.timer_sel  = BL_LEDC_TIMER;
     c.intr_type  = LEDC_INTR_DISABLE;
-    /* Start at 0 (off) -- the caller bumps the duty up to the
-     * configured brightness after panel init so the user never sees a
-     * black/garbage flash. */
-    c.duty       = 0;
+    /* Start at full brightness so the panel is lit the moment the
+     * first frame reaches the framebuffer; the editor's
+     * editor_ui_init() will lower the duty to the NVS-persisted
+     * value shortly after. Initialising to 0 (off) instead caused a
+     * black-screen window from boot until editor_ui_init() ran, and
+     * if the LEDC clock source then failed to drive intermediate
+     * duties reliably the panel stayed dark for the whole session. */
+    c.duty       = BL_LEDC_DUTY_MAX;
     c.hpoint     = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&c));
 }
@@ -716,11 +754,16 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
         gpio_set_level((gpio_num_t)s_rst_pin, 1);
     }
     if (s_bl_pin >= 0) {
-        /* Backlight is driven by LEDC PWM. The LEDC channel is set
-         * up here with duty 0 (off); the editor calls
-         * display_set_backlight() with the user-configured
-         * (NVS-persisted) percent after the panel is fully
-         * initialised, so there is no black/garbage flash. */
+        /* Backlight is driven by LEDC PWM. backlight_pwm_init() now
+         * starts the channel at FULL duty (100 %) so the panel is
+         * lit immediately as soon as the first frame reaches the
+         * framebuffer; the editor's editor_ui_init() lowers the duty
+         * to the NVS-persisted user value shortly after. Earlier we
+         * initialised at duty 0 (off) and relied on editor_ui_init()
+         * to turn the BL on, which left the panel black for the
+         * whole session on the Waveshare Touch-LCD-3.49 when the
+         * LEDC clock source (AUTO_CLK / APB) failed to drive
+         * intermediate duties reliably. */
         backlight_pwm_init(s_bl_pin);
     }
     if (s_te_pin >= 0) {
