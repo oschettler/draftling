@@ -6,6 +6,7 @@
 
 #include "editor.h"
 #include "sd_card.h"
+#include "git_sync.h"
 
 static const char *TAG = "Editor";
 
@@ -83,11 +84,12 @@ extern "C" void editor_init(void)
          * Clamped to a sensible min/max so very small or very large
          * PSRAM configurations still get a usable editor:
          *   - Min 64 KB per buffer keeps editor_open_file() useful.
-         *   - Max 4 MB per buffer matches the previous Kconfig ceiling
-         *     and avoids creating a single allocation larger than any
-         *     realistic Markdown file the editor needs to load. */
+         *   - Max GIT_SYNC_MAX_FILE_SIZE per buffer: git_sync cannot
+         *     push anything larger than that, and Git is the tighter
+         *     of the two constraints, so it determines the effective
+         *     maximum file size for the whole application. */
         const size_t MIN_BUF = 64  * 1024;
-        const size_t MAX_BUF = 4   * 1024 * 1024;
+        const size_t MAX_BUF = GIT_SYNC_MAX_FILE_SIZE;
         const size_t RUNTIME_RESERVE = 2 * 1024 * 1024;
         const size_t ALIGN   = 4 * 1024;
 
