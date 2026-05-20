@@ -131,9 +131,9 @@ static void backlight_pwm_init(int bl_pin)
     /* Binary BL mode: drive the BL enable as a plain digital output.
      * Skip LEDC entirely. The pin starts HIGH (BL on); display_set_
      * backlight(0) drives it LOW (off), any other percent drives it
-     * HIGH (on). Used on boards whose BL boost circuit does not
-     * tolerate LEDC PWM at any duty (e.g. Waveshare ESP32-S3-Touch-
-     * LCD-3.49 -- see LCD_BL_PIN comment in main/app_config.h). */
+     * HIGH (on). Kept available for boards whose BL boost circuit
+     * does not tolerate LEDC PWM at any duty; no current board
+     * defaults DRAFTLING_BL_GPIO_BINARY to y. */
     gpio_config_t g = {};
     g.intr_type    = GPIO_INTR_DISABLE;
     g.mode         = GPIO_MODE_OUTPUT;

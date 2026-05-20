@@ -183,7 +183,7 @@
 /* GPIO 8 drives the BL boost-converter enable. Waveshare's own
  * reference firmware (Examples/ESP-IDF/09_LVGL_V8_Test/components/
  * lcd_bl_pwm_bsp/lcd_bl_pwm_bsp.c) drives this pin with an LEDC
- * PWM channel (LEDC_TIMER_3 / channel 1, LEDC_SLOW_CLK_RC_FAST,
+ * PWM channel (LEDC_TIMER_3 / channel 1, RC_FAST clock source,
  * 50 kHz, 8-bit, gpio_config with PULLUP_ENABLE, initial duty
  * 255) and varies brightness in a loop, so PWM is the supported
  * way to drive the BL on this board. The AXS15231B backend's
