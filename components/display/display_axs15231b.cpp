@@ -66,15 +66,22 @@ static const char *TAG = "DisplayAXS";
 
 /* LEDC PWM configuration for the backlight.
  *
- * Settings mirror Waveshare's verified `lcd_bl_pwm_bsp.c` for the
- * ESP32-S3-Touch-LCD-3.49 reference firmware (LEDC_TIMER_3 / channel
- * 1, 50 kHz, 8-bit, RC_FAST clock). Earlier we used 5 kHz / 10-bit /
- * AUTO_CLK; that combination left the panel's backlight visibly dark
- * during normal operation -- the GPIO would only flash bright as the
- * MCU entered deep sleep and the LEDC peripheral released the pin
- * back to its external pull-up. RC_FAST + 50 kHz + 8-bit is what the
- * Waveshare reference uses and has been verified to drive the
- * backlight reliably at all intermediate duty cycles. */
+ * Settings mirror Waveshare's `lcd_bl_pwm_bsp.c` reference firmware
+ * (LEDC_TIMER_3 / channel 1, 50 kHz, 8-bit, RC_FAST clock). Used by
+ * boards whose BL pin is safe to drive (currently the Guition
+ * JC3248W535). The earlier 5 kHz / 10-bit / AUTO_CLK combination
+ * left the panel's backlight visibly dark during normal operation --
+ * the GPIO would only flash bright as the MCU entered deep sleep and
+ * the LEDC peripheral released the pin back to its external pull-up.
+ *
+ * NOTE: even this Waveshare-recommended LEDC configuration is NOT
+ * safe to apply on the Waveshare ESP32-S3-Touch-LCD-3.49 -- on the
+ * boards we have on hand any active drive of GPIO 8 (LEDC PWM or
+ * static digital HIGH) breaks the BL boost circuit and reproduces
+ * the same "panel dark, flashes only at reset" symptom. That board
+ * therefore sets LCD_BL_PIN = -1 (the BL pin is left high-Z, with
+ * the external pull-up driving the boost circuit) and uses the
+ * separate `bl_deep_sleep_cut` path below for deep-sleep power. */
 #define BL_LEDC_TIMER       LEDC_TIMER_3
 #define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
 #define BL_LEDC_CHANNEL     LEDC_CHANNEL_1
