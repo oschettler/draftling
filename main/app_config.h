@@ -180,22 +180,24 @@
 #define LCD_QSPI_D3_PIN     14
 #define LCD_RST_PIN         21
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
-/* GPIO 8 drives the BL boost-converter enable. The board has an
- * external pull-up so leaving the pin high-Z latches the BL ON,
- * which is what the Waveshare FactoryProgram does. We do drive
- * the pin (CONFIG_DRAFTLING_BL_GPIO_BINARY = y for this board),
- * but only as a plain digital output: HIGH = on (matching the
- * pull-up), LOW = off. LEDC PWM at any duty does NOT work on
- * this board's BL circuit (panel stays dark and only flashes
- * bright briefly when the duty hits 0 -- the "picture only
- * appears at deep-sleep entry" symptom), so we cannot offer
- * smooth dimming. The binary drive does let us cut the BL
- * cleanly at deep-sleep entry, with gpio_hold_en holding the
- * LOW level through deep sleep so the external pull-up does not
- * re-light the panel. CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT is
- * still default n so the F1 -> Backlight slider is hidden (a
- * 0..100 slider would be misleading when only on/off works). */
-#define LCD_BL_PIN          8
+/* GPIO 8 drives the BL boost-converter enable, with an external
+ * pull-up on the board that latches the BL ON whenever the pin is
+ * left high-Z -- which is exactly what Waveshare's own FactoryProgram
+ * (Examples/ESP-IDF/11_FactoryProgram) does (it never configures or
+ * drives GPIO 8). We deliberately do NOT drive this pin from the
+ * ESP32 for two reasons:
+ *   1. LEDC PWM at any duty leaves the BL boost circuit dark and
+ *      only flashes bright when the duty hits 0 (the "picture only
+ *      appears at deep-sleep entry" symptom).
+ *   2. A previous attempt to drive the pin as a binary on/off
+ *      output (with gpio_hold_en to keep it LOW through deep sleep)
+ *      reintroduced the same symptom on cold boot, and this board
+ *      has no battery (BATT_ADC_PIN = -1) so cutting the BL during
+ *      deep sleep saves no measurable power anyway.
+ * Setting LCD_BL_PIN = -1 leaves the pin high-Z so the external
+ * pull-up holds the BL on for the lifetime of the session, which
+ * is the known-good configuration. */
+#define LCD_BL_PIN          -1
 
 /* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
  * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map

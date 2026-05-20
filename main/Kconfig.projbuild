@@ -115,11 +115,9 @@ config DRAFTLING_DISPLAY_EPD
 # Settings menu (persisted in NVS) on these boards only.
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
-    # On the Waveshare ESP32-S3-Touch-LCD-3.49 the BL GPIO can only
-    # be driven as binary on/off (see DRAFTLING_BL_GPIO_BINARY); a
-    # 0..100 brightness slider would be misleading, so no Settings
-    # entry is exposed on that board. The driver still uses the BL
-    # GPIO to cut the backlight at deep-sleep entry.
+    # The Waveshare ESP32-S3-Touch-LCD-3.49 deliberately leaves
+    # GPIO 8 (BL) high-Z so the external pull-up holds the BL ON
+    # (LCD_BL_PIN = -1 in app_config.h); no GPIO drive, no slider.
     default n if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
@@ -127,16 +125,15 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
 
 # DRAFTLING_BL_GPIO_BINARY tells the display backend to drive the
 # backlight enable GPIO as a plain on/off digital output instead of
-# an LEDC PWM channel. Required on boards whose BL boost circuit
-# does not tolerate the LEDC PWM waveform: on the Waveshare
-# ESP32-S3-Touch-LCD-3.49 LEDC PWM at any duty leaves the panel
-# dark, while a high level (matching the external pull-up) drives
-# it full-bright and a low level cuts it off cleanly. The
-# display_set_backlight() API still works in this mode but only
-# distinguishes percent == 0 (off) from percent > 0 (on).
+# an LEDC PWM channel. Kept available for future boards whose BL
+# boost circuit does not tolerate LEDC PWM, but no current board
+# defaults it to y -- the Waveshare ESP32-S3-Touch-LCD-3.49 used to
+# do so, but driving GPIO 8 (even as a static digital output)
+# reproduced the same "black screen, picture only at reset" symptom
+# the LEDC PWM did, so that board now leaves the pin high-Z
+# (LCD_BL_PIN = -1) and relies on the external pull-up.
 config DRAFTLING_BL_GPIO_BINARY
     bool
-    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
 
 # DRAFTLING_HAS_BATTERY is set automatically on boards that wire
