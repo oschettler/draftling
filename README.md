@@ -92,7 +92,9 @@ Git repository via the GitHub REST API.
   code / strikethrough
 - **Gap buffer** text engine for efficient editing. The document size
   limit is sized at boot from the PSRAM that is free when the editor
-  starts (clamped to [64 KB, 2 MB] per buffer) and surfaced read-only
+  starts (with a minimum of 64 KB and an upper bound queried from the
+  Git sync client, so the editor cannot produce a document larger than
+  what Git can push) and surfaced read-only
   in F1 -> Settings. Typical limits range from a few hundred KB to a
   few MB depending on the board.
 - **WiFi** station mode with credentials from NVS or `/sdcard/wifi.cfg`

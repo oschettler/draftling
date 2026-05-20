@@ -6,20 +6,23 @@ extern "C" {
 
 #include <esp_err.h>
 #include <stdbool.h>
+#include <stddef.h>
 
-/* Maximum size of a single file that git_sync can push to GitHub.
+/* Maximum size (in bytes) of a single file that git_sync can currently
+ * push to GitHub.
  *
- * The Contents API requires us to base64-encode the file (~1.34x growth)
- * and wrap it in a JSON body, so the transient SPIRAM peak is roughly
- * 3x the raw size (raw + base64 + cJSON-printed body).  2 MB covers any
- * realistic Markdown document while leaving headroom for BLE / WiFi /
- * LVGL on an 8 MB PSRAM module.
+ * Not a fixed constant: derived at call time from the SPIRAM that is
+ * free *right now*. The GitHub Contents API requires the file to be
+ * base64-encoded (~1.34x growth) and wrapped in a JSON body, so the
+ * transient peak during a push is roughly 3x the raw size (raw +
+ * base64 + cJSON-printed body). We additionally reserve some headroom
+ * for the HTTPS / TLS buffers and any other concurrent allocations.
  *
- * The editor uses this as the upper bound on its gap-buffer size so
- * the in-memory document limit matches what git_sync can actually
- * push -- Git is the tighter constraint and therefore determines the
- * effective maximum file size for the whole application. */
-#define GIT_SYNC_MAX_FILE_SIZE (2 * 1024 * 1024)
+ * The editor uses this same function at editor_init() time to clamp
+ * its own per-buffer ceiling, so the editor never produces a document
+ * larger than what git_sync can push. Git is the tighter constraint
+ * and therefore the determining factor for the maximum file size. */
+size_t git_sync_max_file_size(void);
 
 typedef enum {
     GIT_SYNC_IDLE,

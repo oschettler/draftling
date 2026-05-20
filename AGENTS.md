@@ -171,8 +171,10 @@ The largest component. Contains:
   sized dynamically at `editor_init()` from the PSRAM that is free
   when the editor starts (the gap buffer and flat cache are each
   allocated at that size, so the editor's SPIRAM cost is ~2x the
-  limit; the value is clamped to [64 KB, 2 MB] per buffer and a
-  ~2 MB headroom is reserved for BLE / WiFi / Git sync / LVGL
+  limit; the value is clamped to a minimum of 64 KB and an upper
+  bound returned by `git_sync_max_file_size()` -- so the editor never
+  produces a document larger than what git_sync can push -- and a
+  ~512 KB headroom is reserved for BLE / WiFi / Git sync / LVGL
   widget growth). Exposes `editor_get_max_doc_size()` for the UI,
   which surfaces the value read-only in F1 -> Settings. Provides
   cursor movement, selection, clipboard, insert/delete, and file I/O.

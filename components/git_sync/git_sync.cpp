@@ -57,6 +57,26 @@ static void notify(git_sync_state_t st, const char *msg)
     if (s_callback) s_callback(st, msg);
 }
 
+/* See doc comment on git_sync_max_file_size() in include/git_sync.h.
+ *
+ * Returns the largest file size (raw bytes) that the next push could
+ * accommodate given the SPIRAM that is free at this moment. The factor
+ * of 4 (rather than the ~3x actual peak) leaves a small safety margin
+ * for malloc fragmentation and concurrent allocations from BLE / WiFi /
+ * LVGL. The MIN floor keeps editor_init() from clamping to a useless
+ * value on devices where almost no PSRAM is free at startup (the push
+ * itself will still fail cleanly in that case). */
+extern "C" size_t git_sync_max_file_size(void)
+{
+    const size_t MIN_CAP = 64 * 1024;
+    const size_t RESERVE = 512 * 1024;
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t usable = (free_psram > RESERVE) ? (free_psram - RESERVE) : (free_psram / 2);
+    size_t cap = usable / 4;
+    if (cap < MIN_CAP) cap = MIN_CAP;
+    return cap;
+}
+
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
@@ -545,12 +565,14 @@ static esp_err_t push_file(const char *name)
     esp_err_t ret = sd_card_read_file(local, &content, &content_len);
     if (ret != ESP_OK) return ret;
 
-    /* Upper bound on pushable file size; see GIT_SYNC_MAX_FILE_SIZE in
+    /* Upper bound on pushable file size; computed dynamically from
+     * currently-free SPIRAM. See git_sync_max_file_size() in
      * include/git_sync.h for the rationale. */
-    if (content_len > GIT_SYNC_MAX_FILE_SIZE) {
+    size_t max_size = git_sync_max_file_size();
+    if (content_len > max_size) {
         free(content);
-        ESP_LOGW(TAG, "File too large to push: %s (%u bytes)",
-                 name, (unsigned)content_len);
+        ESP_LOGW(TAG, "File too large to push: %s (%u bytes, max %u)",
+                 name, (unsigned)content_len, (unsigned)max_size);
         return ESP_ERR_NO_MEM;
     }
 

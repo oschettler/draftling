@@ -84,12 +84,16 @@ extern "C" void editor_init(void)
          * Clamped to a sensible min/max so very small or very large
          * PSRAM configurations still get a usable editor:
          *   - Min 64 KB per buffer keeps editor_open_file() useful.
-         *   - Max GIT_SYNC_MAX_FILE_SIZE per buffer: git_sync cannot
-         *     push anything larger than that, and Git is the tighter
-         *     of the two constraints, so it determines the effective
-         *     maximum file size for the whole application. */
+         *   - Max git_sync_max_file_size() per buffer: git_sync cannot
+         *     push anything larger than what its base64 + JSON encode
+         *     transient fits into the currently-free PSRAM. Git is the
+         *     tighter of the two constraints, so it determines the
+         *     effective maximum file size for the whole application.
+         *     Querying it *now* (before we take our own buffers) yields
+         *     the most generous bound that still matches what git_sync
+         *     could push at this point in startup. */
         const size_t MIN_BUF = 64  * 1024;
-        const size_t MAX_BUF = GIT_SYNC_MAX_FILE_SIZE;
+        const size_t MAX_BUF = git_sync_max_file_size();
         const size_t RUNTIME_RESERVE = 2 * 1024 * 1024;
         const size_t ALIGN   = 4 * 1024;
 
