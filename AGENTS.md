@@ -308,7 +308,11 @@ seconds (default 180, 0 = disabled). When the timer fires it polls
 `ble_keyboard_is_connected()` and only enters deep sleep if no
 Bluetooth keyboard has paired by then. This conserves battery when
 the device is powered on accidentally or no paired keyboard is in
-range.
+range. The countdown is only armed on boards with
+`CONFIG_DRAFTLING_HAS_BATTERY` -- USB-powered dev boards without a
+battery (Waveshare Touch-LCD-3.49, Guition JC3248W535) skip it,
+since there is nothing to conserve and unexpectedly blanking the
+display during bring-up is more disruptive than helpful.
 
 Public API: `standby_init()`, `standby_reset_timer()`,
 `standby_set_timeout()`, `standby_set_pre_sleep_cb()`,

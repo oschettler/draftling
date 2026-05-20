@@ -146,8 +146,17 @@ extern "C" void standby_init(void)
     /* Arm the "no keyboard connected" deep-sleep countdown. When the
      * timer fires kb_wait_cb checks ble_keyboard_is_connected() and
      * only sleeps if no keyboard is paired by then. A value of 0
-     * disables the feature (keep scanning indefinitely). */
-#if CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC > 0
+     * disables the feature (keep scanning indefinitely).
+     *
+     * The entire purpose of this countdown is to conserve battery on
+     * portable boards that may have been powered on accidentally or
+     * out of range of their paired keyboard. On USB-powered dev
+     * boards with no battery (Waveshare Touch-LCD-3.49, Guition
+     * JC3248W535) deep-sleeping after 3 minutes of no keyboard just
+     * blanks the display unexpectedly while the user is still
+     * setting things up, so we gate the arming on
+     * CONFIG_DRAFTLING_HAS_BATTERY. */
+#if CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC > 0 && defined(CONFIG_DRAFTLING_HAS_BATTERY)
     {
         esp_timer_create_args_t kb_args = {};
         kb_args.callback = kb_wait_cb;
@@ -158,6 +167,9 @@ extern "C" void standby_init(void)
         ESP_LOGI(TAG, "No-keyboard sleep armed (%d s)",
                  CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC);
     }
+#else
+    ESP_LOGI(TAG, "No-keyboard sleep disabled "
+                  "(no battery on this board, or timer = 0)");
 #endif
 
     ESP_LOGI(TAG, "Standby initialized, timeout=%" PRIu32 " s", s_timeout_sec);
