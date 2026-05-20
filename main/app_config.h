@@ -182,14 +182,16 @@
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
 #define LCD_BL_PIN          8
 
-/* SD card on a dedicated SPI bus. The Touch-LCD-3.49 has no
- * on-board MicroSD slot, so these are recommended free GPIOs for
- * an external SD module; sd_card_init_spi fails gracefully if no
- * card is wired and the editor falls back to read-only. */
-#define SD_SPI_MOSI_PIN     6
-#define SD_SPI_MISO_PIN     5
-#define SD_SPI_SCK_PIN      4
-#define SD_SPI_CS_PIN       7
+/* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
+ * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map
+ * (https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49): SD_CS=38,
+ * SD_MOSI=39, SD_MISO=40, SD_SCLK=41. The earlier placeholder values
+ * on GPIO 4-7 were both wrong (the board really does have an on-board
+ * SD slot) and conflicted with the on-board BAT_ADC on IO4. */
+#define SD_SPI_MOSI_PIN     39
+#define SD_SPI_MISO_PIN     40
+#define SD_SPI_SCK_PIN      41
+#define SD_SPI_CS_PIN       38
 #define SD_EN_PIN           -1
 
 /* I2C bus carrying the AXS15231-family touch controller. Pins match

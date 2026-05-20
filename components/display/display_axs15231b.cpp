@@ -343,19 +343,26 @@ static void hw_reset(void)
      * right after gpio_config, so both cold boot and warm reset see the
      * same starting state). A short settle gives panel VCC time to be
      * fully stable before we pulse reset. */
-    vTaskDelay(pdMS_TO_TICKS(50));
-    /* Active-low reset pulse. The AXS15231B datasheet requires RST low
-     * for at least 10 us, but real panels need 10+ ms to guarantee a
-     * clean reset across temperature / VCC corners. */
+    vTaskDelay(pdMS_TO_TICKS(30));
+    /* Active-low reset pulse, 250 ms. Matches the official Waveshare
+     * ESP32-S3-Touch-LCD-3.49 LVGL reference firmware
+     * (Examples/ESP-IDF/09_LVGL_V8_Test/main/main.cpp): it pulls RST
+     * LOW for 250 ms. A 50 ms pulse worked on warm reset (panel
+     * analog rails were still stable from the previous boot) but was
+     * too short on cold boot -- the AXS15231B's internal POR didn't
+     * complete, leaving the panel in a half-initialised state where
+     * the subsequent vendor-register writes did not latch and the
+     * display stayed black until the user pressed RESET. The
+     * datasheet only requires ~10 us LOW, but real panels need the
+     * long pulse to recover from cold-VCC corners. */
     gpio_set_level((gpio_num_t)s_rst_pin, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(250));
     gpio_set_level((gpio_num_t)s_rst_pin, 1);
-    /* Post-reset settle: the controller's internal POR needs ~120 ms
-     * to finish before it will accept SPI commands. Anything shorter
-     * caused cold-boot init to silently fail on the Waveshare
-     * Touch-LCD-3.49 (warm reset masked the bug because the panel
-     * had already completed its previous POR). */
-    vTaskDelay(pdMS_TO_TICKS(200));
+    /* Post-reset settle. The Waveshare reference uses only 30 ms here
+     * because esp_lcd_panel_init() then sends SLPOUT with its own
+     * 100 ms wait. Our axs15231b_init_sequence() also starts with
+     * SLPOUT + 120 ms, so 30 ms of settle is sufficient. */
+    vTaskDelay(pdMS_TO_TICKS(30));
 }
 
 static void axs15231b_init_sequence(void)
