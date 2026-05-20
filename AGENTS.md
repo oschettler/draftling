@@ -174,8 +174,8 @@ The largest component. Contains:
   limit; the value is clamped to a minimum of 64 KB and an upper
   bound returned by `git_sync_max_file_size()` -- so the editor never
   produces a document larger than what git_sync can push -- and a
-  ~512 KB headroom is reserved for BLE / WiFi / Git sync / LVGL
-  widget growth). Exposes `editor_get_max_doc_size()` for the UI,
+  ~512 KB headroom is reserved inside git_sync_max_file_size() for
+  BLE / WiFi / Git sync / LVGL widget growth). Exposes `editor_get_max_doc_size()` for the UI,
   which surfaces the value read-only in F1 -> Settings. Provides
   cursor movement, selection, clipboard, insert/delete, and file I/O.
 - **editor_ui.cpp** -- LVGL-based user interface: title bar with battery
