@@ -339,12 +339,23 @@ static void spi_send_pixels_cont(const uint8_t *data, size_t n_bytes)
 static void hw_reset(void)
 {
     if (s_rst_pin < 0) return;
-    gpio_set_level((gpio_num_t)s_rst_pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    /* Precondition: RST is already HIGH (driven so by display_axs15231b_init
+     * right after gpio_config, so both cold boot and warm reset see the
+     * same starting state). A short settle gives panel VCC time to be
+     * fully stable before we pulse reset. */
+    vTaskDelay(pdMS_TO_TICKS(50));
+    /* Active-low reset pulse. The AXS15231B datasheet requires RST low
+     * for at least 10 us, but real panels need 10+ ms to guarantee a
+     * clean reset across temperature / VCC corners. */
     gpio_set_level((gpio_num_t)s_rst_pin, 0);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level((gpio_num_t)s_rst_pin, 1);
-    vTaskDelay(pdMS_TO_TICKS(120));
+    /* Post-reset settle: the controller's internal POR needs ~120 ms
+     * to finish before it will accept SPI commands. Anything shorter
+     * caused cold-boot init to silently fail on the Waveshare
+     * Touch-LCD-3.49 (warm reset masked the bug because the panel
+     * had already completed its previous POR). */
+    vTaskDelay(pdMS_TO_TICKS(200));
 }
 
 static void axs15231b_init_sequence(void)
@@ -661,6 +672,18 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
         g.mode         = GPIO_MODE_OUTPUT;
         g.pin_bit_mask = (1ULL << s_rst_pin);
         ESP_ERROR_CHECK(gpio_config(&g));
+        /* Drive RST HIGH (de-asserted) immediately. Without this, on
+         * cold boot the GPIO output register defaults to 0, so RST
+         * would be held LOW for the entire SPI-bus / heap setup that
+         * follows (~tens of ms) -- holding the panel in reset across
+         * the moment its VCC stabilises. Then hw_reset()'s short
+         * pulse was not enough to let the controller complete its
+         * internal POR, and the entire vendor-register init sequence
+         * was silently dropped, leaving the panel black until power
+         * was cycled. Warm reset masked the bug because the GPIO
+         * output register retained its last-written HIGH value from
+         * the previous hw_reset(). */
+        gpio_set_level((gpio_num_t)s_rst_pin, 1);
     }
     if (s_bl_pin >= 0) {
         /* Backlight is driven by LEDC PWM. The LEDC channel is set
