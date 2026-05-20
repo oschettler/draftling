@@ -91,6 +91,7 @@ static void inactivity_cb(void *arg)
     standby_enter_sleep();
 }
 
+#if CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC > 0 && defined(CONFIG_DRAFTLING_HAS_BATTERY)
 static void kb_wait_cb(void *arg)
 {
     (void)arg;
@@ -102,6 +103,7 @@ static void kb_wait_cb(void *arg)
              CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC);
     standby_enter_sleep();
 }
+#endif
 
 /* ---- helpers ---- */
 
