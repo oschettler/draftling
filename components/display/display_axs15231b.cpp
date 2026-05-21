@@ -59,6 +59,8 @@
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 #include <driver/ledc.h>
+#include <esp_system.h>
+#include <esp_sleep.h>
 
 #include "display.h"
 
@@ -821,6 +823,29 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_bl_deep_sleep_cut_pin = cfg->bl_deep_sleep_cut;
     s_bl_active_low = cfg->bl_active_low;
 
+    /* Detect deep-sleep wake. On a true cold boot the AXS15231B
+     * powers up at silicon defaults; on deep-sleep wake the panel's
+     * analog rails stayed up the whole time and the controller is
+     * sitting in DISPOFF + SLPIN with all of our previous-session
+     * register writes still in place (see
+     * docs/deep-sleep-black-screen-investigation.md). This boolean
+     * is used below to (a) release any RST-pin deep-sleep hold and
+     * (b) force a full vendor-init replay on boards that normally
+     * skip it (Touch-LCD-3.49) -- the bare-bones SLPOUT/MADCTL/
+     * TE/NORON/DISPON sequence cannot recover a controller stuck
+     * in warm-RST-while-in-SLPIN, but re-running the 0xBB unlock +
+     * full vendor-reg block does. */
+    const esp_reset_reason_t reset_reason = esp_reset_reason();
+    const bool waking_from_deep_sleep = (reset_reason == ESP_RST_DEEPSLEEP);
+    ESP_LOGI(TAG, "init: reset_reason=%d wake_cause=%d",
+             (int)reset_reason, (int)esp_sleep_get_wakeup_cause());
+
+    if (waking_from_deep_sleep && s_skip_vendor_init) {
+        ESP_LOGI(TAG, "deep-sleep wake: overriding skip_vendor_init "
+                      "to force panel re-init out of warm-RST/SLPIN");
+        s_skip_vendor_init = false;
+    }
+
     /* If a deep-sleep-only BL cut pin is configured, release any
      * hold latched by a previous deep-sleep cycle and explicitly
      * leave the pin in high-Z (no gpio_config call). The whole
@@ -836,6 +861,15 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
 
     /* Reset / TE / Backlight GPIOs */
     if (s_rst_pin >= 0) {
+        /* Release any deep-sleep hold on the RST pin from a
+         * previous sleep cycle, otherwise the subsequent
+         * gpio_config / gpio_set_level / hw_reset pulses are
+         * silently ignored (the IO mux output stays latched
+         * HIGH). display_deep_sleep_prepare() arms this hold to
+         * keep RST stable through deep sleep -- see the comment
+         * there for the rationale. */
+        gpio_hold_dis((gpio_num_t)s_rst_pin);
+        gpio_deep_sleep_hold_dis();
         gpio_config_t g = {};
         g.intr_type    = GPIO_INTR_DISABLE;
         g.mode         = GPIO_MODE_OUTPUT;
@@ -1384,6 +1418,31 @@ extern "C" void display_deep_sleep_prepare(void)
     gpio_deep_sleep_hold_en();
     ESP_LOGI(TAG, "BL pin GPIO%d held %s for deep sleep (panel left in display-on state)",
              cut_pin, (s_bl_pin >= 0 && s_bl_active_low) ? "HIGH" : "LOW");
+
+    /* Hold LCD_RST HIGH through deep sleep. Otherwise the RST pin is
+     * released to high-Z by the IO mux power-down at deep-sleep entry,
+     * and whatever pull (or absence of pull) the board has on the
+     * RST net determines what the panel sees -- a slow drift through
+     * the LOW threshold during sleep can leave the controller in an
+     * indeterminate state by the time we run hw_reset() on wake.
+     * Latching the pin HIGH guarantees a clean RST line for the
+     * entire sleep window so that the only RST edge the panel sees
+     * is the deliberate 250 ms LOW pulse from hw_reset(). The
+     * matching gpio_hold_dis() lives in display_axs15231b_init().
+     * See docs/deep-sleep-black-screen-investigation.md. */
+    if (s_rst_pin >= 0) {
+        gpio_set_level((gpio_num_t)s_rst_pin, 1);
+        esp_err_t rst_err = gpio_hold_en((gpio_num_t)s_rst_pin);
+        if (rst_err != ESP_OK) {
+            ESP_LOGW(TAG, "gpio_hold_en(RST=GPIO%d) failed: %s",
+                     s_rst_pin, esp_err_to_name(rst_err));
+        } else {
+            ESP_LOGI(TAG, "RST pin GPIO%d held HIGH for deep sleep",
+                     s_rst_pin);
+        }
+        /* gpio_deep_sleep_hold_en() is already enabled above for the
+         * BL pin; it is a global flag, one call covers both pins. */
+    }
 }
 
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

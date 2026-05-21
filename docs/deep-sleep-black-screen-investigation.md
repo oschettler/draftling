@@ -234,3 +234,41 @@ The visual transition on entering sleep is now "panel goes to
 DISPOFF, BL drops". The visual transition on wake is "panel
 re-inits from scratch and BL ramps back up under LEDC control".
 The cold-boot path is unchanged.
+
+## Resolution -- follow-up fix
+
+The symptom returned in field testing: after deep-sleep wake the BL
+came back on but the panel stayed blank. The mitigation claimed in
+the previous "Resolution" section ("the unconditional SLPOUT +
+vendor-reg replay in the init sequence brings it back") does not
+actually apply to the Touch-LCD-3.49 because that board sets
+`skip_vendor_init = true`, so on every boot
+`axs15231b_init_sequence()` only runs SLPOUT / MADCTL / TE / NORON /
+SLPOUT / DISPON -- no vendor-reg replay. That bare-bones sequence
+is enough on cold boot (panel comes from analog-POR defaults) but
+cannot recover the controller from the "warm RST while in SLPIN"
+stuck state. Two changes in `components/display/display_axs15231b.cpp`
+address this:
+
+1. **Force vendor-init replay on deep-sleep wake**
+   (`display_axs15231b_init` reads `esp_reset_reason()` and, when it
+   equals `ESP_RST_DEEPSLEEP`, overrides `s_skip_vendor_init` to
+   false for this boot). Re-asserting the full 0xBB unlock +
+   0xA0/0xA2/0xD0/0xC1/... block is exactly what the JC3248W535
+   does on every boot, and it is what unsticks the controller from
+   warm-RST-while-in-SLPIN. On cold boot the original
+   `skip_vendor_init = true` behaviour is preserved so the
+   factory POR defaults are not clobbered.
+
+2. **Hold LCD_RST HIGH through deep sleep**
+   (`display_deep_sleep_prepare` calls `gpio_hold_en` on `s_rst_pin`
+   after driving it HIGH; `display_axs15231b_init` calls
+   `gpio_hold_dis` on the same pin before reconfiguring it). This
+   removes the RST high-Z float window during deep sleep so the
+   only RST edge the controller sees is the deliberate 250 ms LOW
+   pulse from `hw_reset()` on wake.
+
+`display_axs15231b_init` now also logs `esp_reset_reason()` and
+`esp_sleep_get_wakeup_cause()` so post-wake symptoms are trivial
+to confirm from the serial monitor.
+
