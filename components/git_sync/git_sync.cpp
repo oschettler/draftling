@@ -507,7 +507,7 @@ static esp_err_t do_pull(void)
         /* Download file */
         {
             char pmsg[96];
-            snprintf(pmsg, sizeof(pmsg), "Pulling %d/%d: %.70s",
+            snprintf(pmsg, sizeof(pmsg), "Pulling %d/%d: %.60s",
                      seen_md, total_md, name);
             notify(GIT_SYNC_IN_PROGRESS, pmsg);
         }
@@ -1116,7 +1116,7 @@ static esp_err_t do_push(void)
         attempted++;
         {
             char pmsg[96];
-            snprintf(pmsg, sizeof(pmsg), "Pushing %d/%d: %.70s",
+            snprintf(pmsg, sizeof(pmsg), "Pushing %d/%d: %.60s",
                      attempted, total_md, name);
             notify(GIT_SYNC_IN_PROGRESS, pmsg);
         }
