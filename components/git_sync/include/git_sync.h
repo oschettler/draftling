@@ -13,10 +13,12 @@ extern "C" {
  *
  * Not a fixed constant: derived at call time from the SPIRAM that is
  * free *right now*. The GitHub Contents API requires the file to be
- * base64-encoded (~1.34x growth) and wrapped in a JSON body, so the
- * transient peak during a push is roughly 3x the raw size (raw +
- * base64 + cJSON-printed body). We additionally reserve some headroom
- * for the HTTPS / TLS buffers and any other concurrent allocations.
+ * base64-encoded (~1.34x growth) and wrapped in a JSON body, but the
+ * push path stream-encodes the base64 into a temporary file on the SD
+ * card and streams the HTTP PUT body in small chunks, so the transient
+ * peak in PSRAM is dominated by the raw file content alone (~1x raw
+ * size). We additionally reserve some headroom for the HTTPS / TLS
+ * buffers and any other concurrent allocations.
  *
  * The editor uses this same function at editor_init() time to clamp
  * its own per-buffer ceiling, so the editor never produces a document

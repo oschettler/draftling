@@ -60,19 +60,22 @@ static void notify(git_sync_state_t st, const char *msg)
 /* See doc comment on git_sync_max_file_size() in include/git_sync.h.
  *
  * Returns the largest file size (raw bytes) that the next push could
- * accommodate given the SPIRAM that is free at this moment. The factor
- * of 4 (rather than the ~3x actual peak) leaves a small safety margin
- * for malloc fragmentation and concurrent allocations from BLE / WiFi /
- * LVGL. The MIN floor keeps editor_init() from clamping to a useless
- * value on devices where almost no PSRAM is free at startup (the push
- * itself will still fail cleanly in that case). */
+ * accommodate given the SPIRAM that is free at this moment. The push
+ * path now stream-encodes the base64 into a temp file on the SD card
+ * and streams the HTTP body, so the only large transient PSRAM
+ * allocation during a push is the raw file content itself (~1x N).
+ * The factor of 2 (rather than 1) leaves a safety margin for malloc
+ * fragmentation, HTTPS/TLS buffers, and concurrent allocations from
+ * BLE / WiFi / LVGL. The MIN floor keeps editor_init() from clamping
+ * to a useless value on devices where almost no PSRAM is free at
+ * startup (the push itself will still fail cleanly in that case). */
 extern "C" size_t git_sync_max_file_size(void)
 {
     const size_t MIN_CAP = 64 * 1024;
     const size_t RESERVE = 512 * 1024;
     size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     size_t usable = (free_psram > RESERVE) ? (free_psram - RESERVE) : (free_psram / 2);
-    size_t cap = usable / 4;
+    size_t cap = usable / 2;
     if (cap < MIN_CAP) cap = MIN_CAP;
     return cap;
 }
@@ -554,6 +557,226 @@ static esp_err_t do_pull(void)
 
 /* ---- Push: upload local .md files ---- */
 
+/* Append `s` to `dst` with JSON string escaping for `"` and `\`.
+ * Returns false on overflow.  Used for the small dynamic strings that
+ * go into the manually-constructed JSON request body (no big strings
+ * are passed through this -- the base64 file content is streamed
+ * separately and is base64, which is JSON-safe by construction). */
+static bool json_escape_append(char *dst, size_t cap, size_t *len, const char *s)
+{
+    size_t i = *len;
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') {
+            if (i + 2 >= cap) return false;
+            dst[i++] = '\\';
+            dst[i++] = (char)c;
+        } else if (c < 0x20) {
+            /* control char -- \u00XX */
+            if (i + 6 >= cap) return false;
+            int n = snprintf(dst + i, cap - i, "\\u%04x", c);
+            if (n < 0 || (size_t)n >= cap - i) return false;
+            i += (size_t)n;
+        } else {
+            if (i + 1 >= cap) return false;
+            dst[i++] = (char)c;
+        }
+    }
+    dst[i] = '\0';
+    *len = i;
+    return true;
+}
+
+/* Stream-encode the raw file at `src_path` into base64 written to
+ * `dst_path`.  Returns the number of base64 bytes written via
+ * `out_b64_len`, or ESP_FAIL on any I/O / encode error.  Both paths are
+ * absolute paths on the SD card mount (or any FAT-mounted VFS). */
+static esp_err_t encode_file_base64(const char *src_path, const char *dst_path,
+                                    size_t *out_b64_len)
+{
+    /* 3072 raw bytes -> 4096 base64 bytes per chunk; both are multiples
+     * of the base64 group size (3 raw -> 4 b64), so only the very last
+     * chunk produces padding. */
+    const size_t RAW_CHUNK = 3072;
+    const size_t B64_CHUNK = 4096 + 1; /* +1 for the NUL mbedtls writes */
+
+    FILE *fin = fopen(src_path, "rb");
+    if (!fin) {
+        ESP_LOGE(TAG, "encode_file_base64: cannot open %s", src_path);
+        return ESP_FAIL;
+    }
+    FILE *fout = fopen(dst_path, "wb");
+    if (!fout) {
+        ESP_LOGE(TAG, "encode_file_base64: cannot open %s for write", dst_path);
+        fclose(fin);
+        return ESP_FAIL;
+    }
+
+    unsigned char *raw = (unsigned char *)heap_caps_malloc(RAW_CHUNK, MALLOC_CAP_SPIRAM);
+    unsigned char *enc = (unsigned char *)heap_caps_malloc(B64_CHUNK, MALLOC_CAP_SPIRAM);
+    if (!raw || !enc) {
+        if (raw) heap_caps_free(raw);
+        if (enc) heap_caps_free(enc);
+        fclose(fin);
+        fclose(fout);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t total = 0;
+    esp_err_t result = ESP_OK;
+    while (true) {
+        size_t n = fread(raw, 1, RAW_CHUNK, fin);
+        if (n == 0) {
+            if (ferror(fin)) result = ESP_FAIL;
+            break;
+        }
+        size_t enc_len = 0;
+        int rc = mbedtls_base64_encode(enc, B64_CHUNK, &enc_len, raw, n);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "base64 encode failed: -0x%04x", -rc);
+            result = ESP_FAIL;
+            break;
+        }
+        if (fwrite(enc, 1, enc_len, fout) != enc_len) {
+            result = ESP_FAIL;
+            break;
+        }
+        total += enc_len;
+        if (n < RAW_CHUNK) break; /* EOF (last chunk, included padding) */
+    }
+
+    heap_caps_free(raw);
+    heap_caps_free(enc);
+    if (fclose(fout) != 0) result = ESP_FAIL;
+    fclose(fin);
+
+    if (out_b64_len) *out_b64_len = total;
+    return result;
+}
+
+/* Issue a streaming PUT to `url` whose request body is the
+ * concatenation of `prefix` + the contents of `b64_path` + `suffix`.
+ * The response body is accumulated into `s_resp_buf` exactly as
+ * api_request() does.  This avoids ever holding the full base64
+ * payload (or the full JSON body) in PSRAM. */
+static esp_err_t api_put_streamed(const char *url,
+                                  const char *prefix, size_t prefix_len,
+                                  const char *b64_path, size_t b64_len,
+                                  const char *suffix, size_t suffix_len,
+                                  int *status_out)
+{
+    /* Reset response buffer */
+    s_resp_len = 0;
+    if (s_resp_buf) s_resp_buf[0] = '\0';
+
+    esp_http_client_config_t cfg = {};
+    cfg.url = url;
+    cfg.method = HTTP_METHOD_PUT;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.timeout_ms = 30000;
+    cfg.buffer_size = 4096;
+    cfg.buffer_size_tx = 4096;
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) return ESP_FAIL;
+
+    char auth[180];
+    snprintf(auth, sizeof(auth), "Bearer %.127s", s_cfg.token);
+    esp_http_client_set_header(client, "Authorization", auth);
+    esp_http_client_set_header(client, "Accept", "application/vnd.github.v3+json");
+    esp_http_client_set_header(client, "User-Agent", "Draftling/1.0");
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+
+    int total_len = (int)(prefix_len + b64_len + suffix_len);
+    esp_err_t err = esp_http_client_open(client, total_len);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return err;
+    }
+
+    esp_err_t result = ESP_OK;
+
+    /* Write prefix */
+    if (esp_http_client_write(client, prefix, (int)prefix_len) != (int)prefix_len) {
+        result = ESP_FAIL;
+        goto close_client;
+    }
+
+    /* Stream b64 file in chunks */
+    {
+        FILE *fb = fopen(b64_path, "rb");
+        if (!fb) { result = ESP_FAIL; goto close_client; }
+
+        const size_t CHUNK = 4096;
+        char *buf = (char *)heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM);
+        if (!buf) { fclose(fb); result = ESP_ERR_NO_MEM; goto close_client; }
+
+        size_t sent = 0;
+        while (sent < b64_len) {
+            size_t want = b64_len - sent;
+            if (want > CHUNK) want = CHUNK;
+            size_t got = fread(buf, 1, want, fb);
+            if (got == 0) { result = ESP_FAIL; break; }
+            if (esp_http_client_write(client, buf, (int)got) != (int)got) {
+                result = ESP_FAIL;
+                break;
+            }
+            sent += got;
+        }
+
+        heap_caps_free(buf);
+        fclose(fb);
+        if (result != ESP_OK) goto close_client;
+    }
+
+    /* Write suffix */
+    if (esp_http_client_write(client, suffix, (int)suffix_len) != (int)suffix_len) {
+        result = ESP_FAIL;
+        goto close_client;
+    }
+
+    /* Read response */
+    {
+        int content_length = esp_http_client_fetch_headers(client);
+        (void)content_length;
+
+        char read_buf[512];
+        while (true) {
+            int n = esp_http_client_read(client, read_buf, sizeof(read_buf));
+            if (n <= 0) break;
+            int needed = s_resp_len + n + 1;
+            if (needed > s_resp_cap) {
+                int new_cap = needed + 4096;
+                char *nb = (char *)heap_caps_realloc(s_resp_buf, new_cap, MALLOC_CAP_SPIRAM);
+                if (!nb) { result = ESP_ERR_NO_MEM; break; }
+                s_resp_buf = nb;
+                s_resp_cap = new_cap;
+            }
+            memcpy(s_resp_buf + s_resp_len, read_buf, n);
+            s_resp_len += n;
+            s_resp_buf[s_resp_len] = '\0';
+        }
+    }
+
+close_client:
+    {
+        int status = esp_http_client_get_status_code(client);
+        if (status_out) *status_out = status;
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+
+        if (result != ESP_OK) return result;
+        if (status < 200 || status >= 300) {
+            if (status == 404)
+                ESP_LOGW(TAG, "HTTP 404 (not found) for %s", url);
+            else
+                ESP_LOGE(TAG, "HTTP %d for %s", status, url);
+            return ESP_FAIL;
+        }
+        return ESP_OK;
+    }
+}
+
 static esp_err_t push_file(const char *name)
 {
     /* Read local file */
@@ -589,16 +812,25 @@ static esp_err_t push_file(const char *name)
         return ESP_OK;
     }
 
-    /* Base64 encode */
-    size_t b64_len = 0;
-    mbedtls_base64_encode(NULL, 0, &b64_len, (const unsigned char *)content, content_len);
-    char *b64 = (char *)heap_caps_malloc(b64_len + 1, MALLOC_CAP_SPIRAM);
-    if (!b64) { free(content); return ESP_ERR_NO_MEM; }
-    mbedtls_base64_encode((unsigned char *)b64, b64_len + 1, &b64_len,
-                          (const unsigned char *)content, content_len);
-    b64[b64_len] = '\0';
-
+    /* The raw content is no longer needed: from here on we only need
+     * its base64 form, which we will stream-encode straight from the
+     * source file on the SD card into a temp file (also on SD).  Free
+     * the PSRAM copy now so it does not coexist with the HTTPS / TLS
+     * buffers during the upload. */
     free(content);
+    content = NULL;
+
+    /* Stream-encode the file into a temp file on SD card.  This keeps
+     * the ~1.34x base64 expansion off PSRAM entirely. */
+    char b64_path[512];
+    snprintf(b64_path, sizeof(b64_path), "%.255s/.git_b64.tmp", s_cfg.local_path);
+
+    size_t b64_len = 0;
+    if (encode_file_base64(local, b64_path, &b64_len) != ESP_OK) {
+        remove(b64_path);
+        ESP_LOGE(TAG, "Failed to base64-encode %s to %s", local, b64_path);
+        return ESP_FAIL;
+    }
 
     /* Check if file exists remotely to get its SHA */
     char url[768];
@@ -622,30 +854,89 @@ static esp_err_t push_file(const char *name)
     if (sha[0] && strcmp(local_sha, sha) == 0) {
         ESP_LOGI(TAG, "Skipped (unchanged): %s", name);
         set_saved_sha(name, local_sha);
-        heap_caps_free(b64);
+        remove(b64_path);
         return ESP_OK;
     }
 
-    /* Build PUT body */
-    cJSON *body = cJSON_CreateObject();
-    char msg[128];
-    snprintf(msg, sizeof(msg), "Update %.100s from Draftling", name);
-    cJSON_AddStringToObject(body, "message", msg);
-    cJSON_AddStringToObject(body, "content", b64);
-    cJSON_AddStringToObject(body, "branch", s_cfg.branch);
-    if (sha[0]) cJSON_AddStringToObject(body, "sha", sha);
+    /* Build the JSON request body manually as a prefix + (streamed
+     * base64 from SD) + suffix.  Only the small dynamic fields
+     * (filename, branch, remote SHA) need JSON-escaping; the base64
+     * payload is JSON-safe by construction. */
+    char prefix[512];
+    char suffix[256];
+    size_t plen = 0, slen = 0;
 
-    char *body_str = cJSON_PrintUnformatted(body);
-    cJSON_Delete(body);
-    heap_caps_free(b64);
+    /* prefix: {"message":"Update <name> from Draftling","content":" */
+    {
+        const char *p1 = "{\"message\":\"Update ";
+        size_t l1 = strlen(p1);
+        if (l1 >= sizeof(prefix)) { remove(b64_path); return ESP_FAIL; }
+        memcpy(prefix, p1, l1);
+        plen = l1;
+        prefix[plen] = '\0';
 
-    if (!body_str) return ESP_ERR_NO_MEM;
+        /* Truncate name to ~100 chars before escaping, matching the
+         * old "Update %.100s from Draftling" behavior. */
+        char name_trunc[101];
+        snprintf(name_trunc, sizeof(name_trunc), "%.100s", name);
+        if (!json_escape_append(prefix, sizeof(prefix), &plen, name_trunc)) {
+            remove(b64_path);
+            return ESP_FAIL;
+        }
 
-    /* PUT the file */
+        const char *p2 = " from Draftling\",\"content\":\"";
+        size_t l2 = strlen(p2);
+        if (plen + l2 >= sizeof(prefix)) { remove(b64_path); return ESP_FAIL; }
+        memcpy(prefix + plen, p2, l2);
+        plen += l2;
+        prefix[plen] = '\0';
+    }
+
+    /* suffix: ","branch":"<branch>"[,"sha":"<sha>"]} */
+    {
+        const char *s1 = "\",\"branch\":\"";
+        size_t l1 = strlen(s1);
+        if (l1 >= sizeof(suffix)) { remove(b64_path); return ESP_FAIL; }
+        memcpy(suffix, s1, l1);
+        slen = l1;
+        suffix[slen] = '\0';
+
+        if (!json_escape_append(suffix, sizeof(suffix), &slen, s_cfg.branch)) {
+            remove(b64_path);
+            return ESP_FAIL;
+        }
+
+        if (sha[0]) {
+            const char *s2 = "\",\"sha\":\"";
+            size_t l2 = strlen(s2);
+            if (slen + l2 >= sizeof(suffix)) { remove(b64_path); return ESP_FAIL; }
+            memcpy(suffix + slen, s2, l2);
+            slen += l2;
+            suffix[slen] = '\0';
+
+            if (!json_escape_append(suffix, sizeof(suffix), &slen, sha)) {
+                remove(b64_path);
+                return ESP_FAIL;
+            }
+        }
+
+        const char *s3 = "\"}";
+        size_t l3 = strlen(s3);
+        if (slen + l3 >= sizeof(suffix)) { remove(b64_path); return ESP_FAIL; }
+        memcpy(suffix + slen, s3, l3);
+        slen += l3;
+        suffix[slen] = '\0';
+    }
+
+    /* PUT the file with a streamed body */
     snprintf(url, sizeof(url), "%.255s/contents/%.127s%.255s",
              s_cfg.api_url, s_cfg.remote_path, name);
-    ret = api_request(url, HTTP_METHOD_PUT, body_str, &status);
-    cJSON_free(body_str);
+    ret = api_put_streamed(url, prefix, plen, b64_path, b64_len,
+                           suffix, slen, &status);
+
+    /* Always clean up the temp file -- even on failure, so a stale
+     * .git_b64.tmp does not remain on the SD card. */
+    remove(b64_path);
 
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Pushed: %s", name);
