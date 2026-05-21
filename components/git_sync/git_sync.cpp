@@ -33,8 +33,15 @@ static char s_last_error[128] = "";
 static char s_last_sync[32]   = "";
 
 /* Task stack + TCB allocated from SPIRAM so that the sync task does not
- * compete for scarce internal DRAM with BLE and WiFi. */
-#define GIT_SYNC_STACK_SIZE  (8 * 1024)
+ * compete for scarce internal DRAM with BLE and WiFi.
+ *
+ * Sized for the streaming push path: mbedTLS/HTTPS alone burns several
+ * KB during the TLS handshake and record encryption, and push_file() +
+ * api_put_streamed() add ~3 KB of their own small stack buffers
+ * (filename / url / sha / JSON prefix+suffix scratch). 8 KB used to
+ * overflow with a ~300 KB file; 16 KB leaves comfortable headroom and
+ * is essentially free since the stack lives in SPIRAM. */
+#define GIT_SYNC_STACK_SIZE  (16 * 1024)
 static StackType_t *s_stack_buf = NULL;
 static StaticTask_t s_task_tcb;
 
