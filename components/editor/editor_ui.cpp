@@ -3635,11 +3635,6 @@ static void wifi_connect_async(void)
     }
 }
 
-/* Set to true while a Git sync is running so that WiFi connection
- * state changes do not overwrite the on-screen Git progress
- * messages in the status bar. */
-static volatile bool s_git_sync_active = false;
-
 /* ---- WiFi state callback ----
  * Called from the WiFi manager (event handler context) when the
  * connection state changes.  Must take the LVGL lock before touching
@@ -3651,9 +3646,13 @@ static void wifi_state_cb(wifi_state_t state)
     /* While a Git sync is running, do not overwrite the on-screen
      * progress messages with WiFi state notifications -- the user
      * would otherwise see "WiFi: SSID (IP)" flicker in between
-     * "Git: Pulling i/N" messages. The WiFi icon is still
-     * refreshed below so the title bar stays accurate. */
-    if (!s_git_sync_active) {
+     * "Git: Pulling i/N" messages. Query the authoritative git_sync
+     * state (set synchronously inside git_sync_start before the sync
+     * task spawns) instead of a UI-side flag, so events that arrive
+     * before the first GIT_SYNC_IN_PROGRESS callback are also
+     * suppressed. The WiFi icon is still refreshed below so the
+     * title bar stays accurate. */
+    if (git_sync_get_state() != GIT_SYNC_IN_PROGRESS) {
         switch (state) {
         case WIFI_STATE_CONNECTED:
         {
@@ -3703,7 +3702,6 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     switch (state) {
     case GIT_SYNC_IN_PROGRESS:
     {
-        s_git_sync_active = true;
         char buf[80];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "syncing...");
@@ -3712,7 +3710,6 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     }
     case GIT_SYNC_SUCCESS:
     {
-        s_git_sync_active = false;
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "sync complete");
@@ -3741,7 +3738,6 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     }
     case GIT_SYNC_ERROR:
     {
-        s_git_sync_active = false;
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "error");
