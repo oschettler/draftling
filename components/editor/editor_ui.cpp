@@ -1698,15 +1698,11 @@ extern "C" void editor_ui_show_file_browser(void)
     editor_close_file();
     refresh_file_list();
 
-    /* Show wifi status in the browser status bar */
-    if (wifi_manager_is_connected()) {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
-                 wifi_manager_get_ssid(), wifi_manager_get_ip());
-        if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, buf);
-    } else {
-        if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status,
-                                                "F1:Menu  N:New file");
+    /* The Wi-Fi connection state is conveyed by the Wi-Fi icon; the
+     * status bar shows the static hint so it doesn't compete with
+     * transient messages (e.g. Git-sync progress). */
+    if (s_lbl_br_status) {
+        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
     }
 
     lv_scr_load(s_scr_browser);
@@ -1767,8 +1763,10 @@ static void update_status_visibility(void)
 
 /* Restore the status bar of both screens to its standard, no-message
  * state (the same text the screens show when they are first entered).
- * The browser status mirrors editor_ui_show_file_browser() so that the
- * Wi-Fi state -- if any -- is reflected. */
+ * The WiFi connection state is communicated by the Wi-Fi icon in the
+ * title / status bar, so the default text never mentions it -- otherwise
+ * it would reappear between transient Git-sync progress messages and
+ * confuse the user. */
 static void restore_default_status(void)
 {
     if (s_lbl_status) {
@@ -1776,14 +1774,7 @@ static void restore_default_status(void)
     }
     update_status_visibility();
     if (s_lbl_br_status) {
-        if (wifi_manager_is_connected()) {
-            char buf[80];
-            snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
-                     wifi_manager_get_ssid(), wifi_manager_get_ip());
-            lv_label_set_text(s_lbl_br_status, buf);
-        } else {
-            lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
-        }
+        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
     }
 }
 
