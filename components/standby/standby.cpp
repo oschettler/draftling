@@ -45,6 +45,7 @@
 #include "standby.h"
 #include "ble_keyboard.h"
 #include "display.h"
+#include "power.h"
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
 #include "touchscreen.h"
 #endif
@@ -153,11 +154,10 @@ extern "C" void standby_init(void)
      * The entire purpose of this countdown is to conserve battery on
      * portable boards that may have been powered on accidentally or
      * out of range of their paired keyboard. On USB-powered dev
-     * boards with no battery (Waveshare Touch-LCD-3.49, Guition
-     * JC3248W535) deep-sleeping after 3 minutes of no keyboard just
-     * blanks the display unexpectedly while the user is still
-     * setting things up, so we gate the arming on
-     * CONFIG_DRAFTLING_HAS_BATTERY. */
+     * boards with no battery (Guition JC3248W535) deep-sleeping
+     * after 3 minutes of no keyboard just blanks the display
+     * unexpectedly while the user is still setting things up, so we
+     * gate the arming on CONFIG_DRAFTLING_HAS_BATTERY. */
 #if CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC > 0 && defined(CONFIG_DRAFTLING_HAS_BATTERY)
     {
         esp_timer_create_args_t kb_args = {};
@@ -323,6 +323,25 @@ extern "C" void standby_enter_sleep(void)
      * for the rationale. No-op on reflective / e-paper backends
      * that have no backlight. */
     display_deep_sleep_prepare();
+
+#if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
+    /* On boards with a hardware power latch (Waveshare Touch-LCD-
+     * 3.49) the cleanest "deep sleep" is a full power-off: cut the
+     * battery rail via the TCA9554 latch and let the user re-apply
+     * VBAT with the PWR button to cold-boot. This is also the only
+     * way to reliably extinguish the LCD on this board -- the
+     * controller and BL boost circuit are downstream of the latch,
+     * so as long as the rail is up the panel keeps drawing power
+     * and may still show its last frame.
+     *
+     * power_off() returns when there is no battery to cut (USB-only
+     * supply), in which case we fall through to the usual deep
+     * sleep below so the chip still saves what little power it can. */
+    ESP_LOGI(TAG, "Cutting power latch (battery shutdown)...");
+    power_off();
+    ESP_LOGI(TAG, "Power latch had no effect (USB power?) -- "
+                  "falling back to deep sleep");
+#endif
 
     gpio_num_t wake_gpio = resolve_wake_gpio();
 

@@ -19,6 +19,7 @@
 #include "standby.h"
 #include "battery.h"
 #include "touchscreen.h"
+#include "power.h"
 
 static const char *TAG = "Draftling";
 
@@ -78,6 +79,25 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+#if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
+    /* Close the hardware power latch first thing after NVS so the
+     * battery rail stays alive when the user releases the boot-time
+     * PWR button press. power_init() also arms a polling timer that
+     * watches the PWR button for a long-press (= power off). The
+     * pre-off callback is wired up after the editor is created so
+     * the long-press save can flush dirty document state. */
+    ESP_LOGI(TAG, "Initializing power latch...");
+    {
+        power_config_t pcfg = {};
+        pcfg.pwr_button_gpio = PWR_BUTTON_GPIO;
+        pcfg.i2c_sda         = PWR_I2C_SDA_PIN;
+        pcfg.i2c_scl         = PWR_I2C_SCL_PIN;
+        pcfg.tca9554_addr    = PWR_TCA9554_ADDR;
+        pcfg.latch_bit       = PWR_TCA9554_LATCH_BIT;
+        power_init(&pcfg);
+    }
+#endif
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
@@ -303,6 +323,13 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
     standby_set_pre_sleep_cb(pre_sleep_autosave);
+
+#if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
+    /* Same auto-save hook fires when the user long-presses PWR. The
+     * editor is fully up by now, so it is safe to flush dirty state
+     * from the power-button polling timer context. */
+    power_set_pre_off_cb(pre_sleep_autosave);
+#endif
 
     ESP_LOGI(TAG, "Draftling ready. Waiting for Bluetooth keyboard...");
 }

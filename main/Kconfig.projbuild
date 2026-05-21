@@ -170,7 +170,22 @@ config DRAFTLING_HAS_BATTERY
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
+    default n
+
+# DRAFTLING_HAS_POWER_LATCH is set automatically on boards that wire
+# the battery rail through a hardware latch (typically a TCA9554 IO
+# expander pin) so that the firmware can fully power the device off.
+# The `power` component implements the latch + PWR button handling;
+# when this symbol is set, the standby manager cuts the power latch
+# instead of entering deep sleep on battery, and the editor exposes
+# a Power-Off menu entry. Currently only the Waveshare ESP32-S3-
+# Touch-LCD-3.49 wires this circuitry; on every other board the
+# device falls back to a regular ESP32 deep-sleep cycle.
+config DRAFTLING_HAS_POWER_LATCH
+    bool
+    default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default n
 
 # DRAFTLING_SD_SDMMC selects the on-chip SDMMC peripheral (1-bit

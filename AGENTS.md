@@ -64,6 +64,7 @@ components/                 Reusable IDF components
   fonts/                    Custom LVGL bitmap fonts (Greybeard family)
   git_sync/                 GitHub REST API file synchronization
   kb_layout/                Keyboard layout translation (US/UA/DE/FR)
+  power/                    TCA9554-latched battery rail + PWR-button driver
   sd_card/                  SD card (SDMMC 1-bit) file operations
   standby/                  Deep-sleep / standby inactivity timer
   wifi_manager/             WiFi STA connection manager
@@ -309,14 +310,46 @@ seconds (default 180, 0 = disabled). When the timer fires it polls
 Bluetooth keyboard has paired by then. This conserves battery when
 the device is powered on accidentally or no paired keyboard is in
 range. The countdown is only armed on boards with
-`CONFIG_DRAFTLING_HAS_BATTERY` -- USB-powered dev boards without a
-battery (Waveshare Touch-LCD-3.49, Guition JC3248W535) skip it,
-since there is nothing to conserve and unexpectedly blanking the
-display during bring-up is more disruptive than helpful.
+`CONFIG_DRAFTLING_HAS_BATTERY` -- the USB-only Guition JC3248W535
+skips it, since there is nothing to conserve and unexpectedly
+blanking the display during bring-up is more disruptive than helpful.
 
 Public API: `standby_init()`, `standby_reset_timer()`,
 `standby_set_timeout()`, `standby_set_pre_sleep_cb()`,
 `standby_enter_sleep()`.
+
+### components/power/
+
+Hardware power-latch + PWR-button driver. Compiled in only on
+boards with `CONFIG_DRAFTLING_HAS_POWER_LATCH` (currently just the
+Waveshare ESP32-S3-Touch-LCD-3.49); on every other board the
+public functions are no-op stubs.
+
+The Touch-LCD-3.49 keeps the battery rail alive through a TCA9554
+I2C IO-expander pin (IO6 by default): the pin must be driven HIGH
+at boot or the rail collapses as soon as the user releases the
+boot-time PWR button press, and driving it LOW cuts the rail and
+fully powers the board off. The dedicated PWR button on GPIO 16
+is monitored by a 50 ms-period `esp_timer`; a hold of
+`POWER_LONG_PRESS_MS` (1500 ms) or longer triggers the pre-off
+callback (typically the editor auto-save) and then `power_off()`.
+A short press is intentionally ignored -- short presses are how
+the user *powers on* the board from a fully-off state.
+
+`standby_enter_sleep()` calls `power_off()` before falling back
+to `esp_deep_sleep_start()`, so on battery the inactivity timer
+cleanly powers the board down (and the LCD goes truly dark
+because its supply is downstream of the latch) while on USB the
+latch has no effect and the chip just deep-sleeps.
+
+The TCA9554 is reached over a dedicated I2C bus (SDA/SCL pins +
+address + latch bit all carried by `power_config_t` so this
+component stays board-agnostic). The bus is opened with the
+ESP-IDF v5.x `i2c_master_*` API; we issue only two register writes
+(Output and Configuration) so this component does not pull in a
+heavy `esp_io_expander_tca9554` dependency.
+
+Public API: `power_init()`, `power_set_pre_off_cb()`, `power_off()`.
 
 ### components/wifi_manager/
 
@@ -460,7 +493,8 @@ in C / C++ code:
 | DRAFTLING_DISPLAY_ST7789          | Selects `display_st7789.cpp`      | T-Display-S3 |
 | DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B + ST7789 boards |
 | DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings; calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards |
-| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, T-Display-S3 |
+| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T-Display-S3 |
+| DRAFTLING_HAS_POWER_LATCH         | Enables the `power` component: TCA9554-latched battery rail + PWR-button long-press = power off; standby cuts the latch before falling back to deep sleep | Touch-LCD-3.49 |
 | DRAFTLING_SD_SDMMC                | Routes SD init through the on-chip SDMMC peripheral (1-bit) instead of generic SPI | RLCD-4.2 |
 | DRAFTLING_WAKEUP_GPIO             | RTC-capable EXT0 wake-up GPIO; consumed by `components/standby/standby.cpp` | per-model defaults |
 

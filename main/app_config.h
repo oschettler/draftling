@@ -242,12 +242,48 @@
 #define TOUCH_MIRROR_X      1
 #define TOUCH_MIRROR_Y      1
 
-/* No on-board battery monitor on this dev board */
-#define BATT_ADC_PIN        -1
+/* On-board battery monitor.
+ *
+ * The Touch-LCD-3.49 wires the LiPo cell through a 2:1 resistive
+ * divider into GPIO 4 (ADC1_CH3). Matches the Waveshare BAT_ADC pin
+ * map in the official wiki and the `07_BATT_PWR_Test` reference
+ * firmware. The cell voltage is recovered by multiplying the
+ * measured pin voltage by BATT_DIVIDER (=2). */
+#define BATT_ADC_PIN        4
 #define BATT_EN_PIN         -1
-#define BATT_DIVIDER        1
+#define BATT_DIVIDER        2
 
-/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin). */
+/* Power management.
+ *
+ * The Touch-LCD-3.49 has a hardware power latch that keeps the
+ * battery rail alive after the user releases the PWR button: a
+ * TCA9554 I2C IO-expander pin 6 must be driven HIGH at boot to keep
+ * the latch closed, and driving it LOW cuts the battery rail and
+ * fully powers the board off. The PWR button itself is wired to
+ * GPIO 16 (active LOW) -- a momentary press on the unpowered board
+ * applies VBAT just long enough for the firmware to latch IO6 HIGH;
+ * holding the same button while powered triggers the firmware's
+ * long-press handler which auto-saves and cuts the latch.
+ *
+ * The TCA9554 lives on a *second* I2C bus on GPIO 47 (SDA) / GPIO 48
+ * (SCL), shared with the on-board BM8563 RTC and BMI270 IMU; the
+ * touch-controller I2C bus on GPIO 17 / 18 above is separate and is
+ * owned by the touchscreen component.
+ *
+ * Pin assignments and the TCA9554 latch bit match the Waveshare
+ * reference firmware (Examples/ESP-IDF/07_BATT_PWR_Test/components/
+ * user_app/user_app.cpp and i2c_bsp/i2c_bsp.c). */
+#define PWR_BUTTON_GPIO     16
+#define PWR_I2C_SDA_PIN     47
+#define PWR_I2C_SCL_PIN     48
+#define PWR_TCA9554_ADDR    0x20  /* A2=A1=A0=0 */
+#define PWR_TCA9554_LATCH_BIT 6
+
+/* Deep-sleep wakeup on BOOT (GPIO0, active-low strapping pin).
+ * Used only on USB power: on battery, the inactivity timer cuts the
+ * power latch (via the `power` component) instead of entering deep
+ * sleep, so the wake source is then the PWR button on GPIO 16
+ * (which re-applies VBAT and cold-boots the firmware). */
 #define WAKEUP_GPIO_NUM     0
 
 #elif defined(CONFIG_DRAFTLING_MODEL_JC3248W535)
