@@ -1810,25 +1810,35 @@ static void cancel_status_clear_and_restore(void)
     }
 }
 
-extern "C" void editor_ui_set_status(const char *msg)
+/* Internal: post a status message with a caller-chosen auto-clear
+ * timeout. editor_ui_set_status() is the public wrapper that picks
+ * the standard 3-second window. */
+static void set_status_with_timeout(const char *msg, uint32_t timeout_ms)
 {
     ESP_LOGI(TAG, "Status: %s", msg);
     if (s_lbl_status) lv_label_set_text(s_lbl_status, msg);
     if (s_lbl_br_status) lv_label_set_text(s_lbl_br_status, msg);
     update_status_visibility();
+    if (s_status_clear_timer) {
+        lv_timer_delete(s_status_clear_timer);
+        s_status_clear_timer = NULL;
+    }
+    if (timeout_ms > 0) {
+        s_status_clear_timer = lv_timer_create(status_clear_timer_cb, timeout_ms, NULL);
+        if (s_status_clear_timer) {
+            lv_timer_set_repeat_count(s_status_clear_timer, 1);
+        }
+    }
+}
+
+extern "C" void editor_ui_set_status(const char *msg)
+{
     /* Auto-clear the message after 3 seconds so transient errors
      * (e.g. "File too large") do not linger after the user has moved
      * on to a different file or screen. The timer is one-shot and is
      * recreated on every set_status call, so successive messages each
      * get their own 3-second window. */
-    if (s_status_clear_timer) {
-        lv_timer_delete(s_status_clear_timer);
-        s_status_clear_timer = NULL;
-    }
-    s_status_clear_timer = lv_timer_create(status_clear_timer_cb, 3000, NULL);
-    if (s_status_clear_timer) {
-        lv_timer_set_repeat_count(s_status_clear_timer, 1);
-    }
+    set_status_with_timeout(msg, 3000);
 }
 
 /* ---- Menu system ---- */
@@ -3713,7 +3723,6 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "sync complete");
-        editor_ui_set_status(buf);
         /* If a file is currently open in the editor, reload it from disk
          * so the user sees any changes that were pulled from the remote. */
         if (editor_get_mode() == EDITOR_MODE_EDITING && editor_get_file_path()) {
@@ -3734,6 +3743,11 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         if (lv_scr_act() == s_scr_browser) {
             refresh_file_list();
         }
+        /* Show the final summary for 10 s -- long enough for the user
+         * to read it without lingering forever. Set last so the reload
+         * path above (which may call editor_ui_set_status on error)
+         * does not race with the longer timeout. */
+        set_status_with_timeout(buf, 10000);
         break;
     }
     case GIT_SYNC_ERROR:
@@ -3741,7 +3755,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "error");
-        editor_ui_set_status(buf);
+        set_status_with_timeout(buf, 10000);
         break;
     }
     default:
