@@ -164,9 +164,18 @@ static void btn_poll_cb(void *arg)
  * working. */
 static void try_latch_init(void)
 {
-    /* I2C master bus on the dedicated TCA9554 pins. */
+    /* I2C master bus on the dedicated TCA9554 pins.
+     *
+     * Pin to I2C port 1 explicitly. The touchscreen component
+     * unconditionally requests port 0 (see main.cpp), and on the
+     * ESP32-S3 there are only two I2C controllers. If we leave this
+     * at -1 ("auto-pick a free port"), the driver picks port 0
+     * here (since power_init runs first) and the subsequent
+     * touchscreen_init() fails with "port already in use" -- the
+     * touch screen then silently stops working. Hard-coding port 1
+     * keeps both bring-ups happy. */
     i2c_master_bus_config_t bus_cfg = {};
-    bus_cfg.i2c_port          = -1;   /* auto-pick a free port */
+    bus_cfg.i2c_port          = 1;
     bus_cfg.sda_io_num        = (gpio_num_t)s_cfg.i2c_sda;
     bus_cfg.scl_io_num        = (gpio_num_t)s_cfg.i2c_scl;
     bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
