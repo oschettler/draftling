@@ -3706,7 +3706,14 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         char buf[80];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "syncing...");
-        editor_ui_set_status(buf);
+        /* No auto-clear timeout: per-file progress messages must stay
+         * visible until the next progress callback overwrites them or
+         * the sync finishes. Otherwise the 3 s timer would revert the
+         * status to the default hint mid-sync (e.g. between two slow
+         * uploads), which looks like the sync stopped. The terminal
+         * SUCCESS / ERROR branches install a 10 s timer so the final
+         * summary still auto-clears. */
+        set_status_with_timeout(buf, 0);
         break;
     }
     case GIT_SYNC_SUCCESS:
