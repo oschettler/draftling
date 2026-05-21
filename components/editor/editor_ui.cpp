@@ -147,10 +147,10 @@ static const lv_font_t *h3_font(void)
  *
  * On color LCDs (CONFIG_DRAFTLING_DISPLAY_COLOR) the user can pick
  * one of several preset themes from F1 -> Settings. The selection
- * is persisted in NVS. All themes use a black background; the three
- * foreground choices are dark green (default), amber/orange, and
- * white -- a familiar "monochrome terminal" palette appropriate for
- * a distraction-free Markdown editor.
+ * is persisted in NVS. All themes use a black background; the
+ * foreground choices are light green (default), dark green,
+ * amber/orange, and white -- a familiar "monochrome terminal"
+ * palette appropriate for a distraction-free Markdown editor.
  */
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
 
@@ -160,15 +160,19 @@ typedef struct {
     uint32_t    bg_rgb;
 } color_theme_t;
 
-#define COLOR_THEME_COUNT 3
+#define COLOR_THEME_COUNT 4
 static const color_theme_t COLOR_THEMES[COLOR_THEME_COUNT] = {
-    /* Foreground hexes match the eye-friendly palette used by the
-     * companion clackups/smart-keyboard project (theme_darkgreen_on_black
-     * and a slightly-darkened amber) so the two devices look
-     * consistent when used side by side. */
-    { "Dark green on black", 0x15631A, 0x000000 },
-    { "Orange on black",     0xCC6600, 0x000000 },
-    { "White on black",      0xFFFFFF, 0x000000 },
+    /* "Light green on black" is the default for color LCDs: pure
+     * 100 % green at 0x00FF00 evokes a classic CRT terminal and
+     * gives the highest legibility on small panels. The remaining
+     * foreground hexes match the eye-friendly palette used by the
+     * companion clackups/smart-keyboard project
+     * (theme_darkgreen_on_black and a slightly-darkened amber) so
+     * the two devices look consistent when used side by side. */
+    { "Light green on black", 0x00FF00, 0x000000 },
+    { "Dark green on black",  0x15631A, 0x000000 },
+    { "Orange on black",      0xCC6600, 0x000000 },
+    { "White on black",       0xFFFFFF, 0x000000 },
 };
 
 #define NVS_KEY_THEME "theme"

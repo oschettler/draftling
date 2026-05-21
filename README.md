@@ -71,9 +71,9 @@ therefore been removed from the codebase.
 
 On color LCD boards (Touch-LCD-3.49, JC3248W535, T-Display-S3) the
 editor offers a runtime-selectable color theme (F1 -> Settings ->
-Color theme): dark green on black (default), amber/orange on black,
-or white on black. You can also adjust the **Display rotation angle**
-in the same `idf.py menuconfig` menu.
+Color theme): light green on black (default), dark green on black,
+amber/orange on black, or white on black. You can also adjust the
+**Display rotation angle** in the same `idf.py menuconfig` menu.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on the
 SD card. The reflective LCD needs no backlight and works well in daylight.
