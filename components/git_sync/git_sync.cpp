@@ -1235,41 +1235,52 @@ done:
              *   "Sync complete (up to date)"
              *   "Sync complete (pushed 2)"
              *   "Sync complete (pushed 1, pulled 3)"
-             *   "Sync complete (pulled 2, deleted 1 local)" */
+             *   "Sync complete (pulled 2, deleted 1 local)"
+             *
+             * Helper macro: snprintf returns the desired length (which
+             * can exceed remaining capacity), so always advance `pos`
+             * by the actual bytes written -- clamping to the buffer
+             * size keeps `summary + pos` in-bounds even in the
+             * unlikely event of a pathologically large counter. */
             char summary[96];
-            int pos = snprintf(summary, sizeof(summary), "Sync complete");
+            size_t cap = sizeof(summary);
+            size_t pos = 0;
+            #define SUM_APPEND(...) do {                                   \
+                if (pos < cap) {                                            \
+                    int _n = snprintf(summary + pos, cap - pos, __VA_ARGS__);\
+                    if (_n < 0) break;                                      \
+                    pos += ((size_t)_n < cap - pos) ? (size_t)_n            \
+                                                    : (cap - pos - 1);     \
+                }                                                           \
+            } while (0)
+
+            SUM_APPEND("Sync complete");
             bool any = (s_pushed_count || s_pulled_count ||
                         s_remote_deleted || s_local_deleted);
             if (!any) {
-                snprintf(summary + pos, sizeof(summary) - pos,
-                         " (up to date)");
+                SUM_APPEND(" (up to date)");
             } else {
-                pos += snprintf(summary + pos, sizeof(summary) - pos, " (");
+                SUM_APPEND(" (");
                 const char *sep = "";
                 if (s_pushed_count) {
-                    pos += snprintf(summary + pos, sizeof(summary) - pos,
-                                    "%spushed %d", sep, s_pushed_count);
+                    SUM_APPEND("%spushed %d", sep, s_pushed_count);
                     sep = ", ";
                 }
                 if (s_pulled_count) {
-                    pos += snprintf(summary + pos, sizeof(summary) - pos,
-                                    "%spulled %d", sep, s_pulled_count);
+                    SUM_APPEND("%spulled %d", sep, s_pulled_count);
                     sep = ", ";
                 }
                 if (s_remote_deleted) {
-                    pos += snprintf(summary + pos, sizeof(summary) - pos,
-                                    "%sdeleted %d remote",
-                                    sep, s_remote_deleted);
+                    SUM_APPEND("%sdeleted %d remote", sep, s_remote_deleted);
                     sep = ", ";
                 }
                 if (s_local_deleted) {
-                    pos += snprintf(summary + pos, sizeof(summary) - pos,
-                                    "%sdeleted %d local",
-                                    sep, s_local_deleted);
+                    SUM_APPEND("%sdeleted %d local", sep, s_local_deleted);
                     sep = ", ";
                 }
-                snprintf(summary + pos, sizeof(summary) - pos, ")");
+                SUM_APPEND(")");
             }
+            #undef SUM_APPEND
             notify(GIT_SYNC_SUCCESS, summary);
         } else {
             /* set_error() was already called by the failing operation;
