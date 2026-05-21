@@ -128,9 +128,26 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
 config DRAFTLING_BACKLIGHT_MIN_PCT
     int
     depends on DRAFTLING_DISPLAY_HAS_BACKLIGHT
-    # Waveshare Touch-LCD-3.49: 10 % and 25 % are both too dark.
-    default 50 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 10
+
+# DRAFTLING_BL_DUTY_FLOOR_PCT shifts the bottom of the PWM duty
+# range so that the lowest UI brightness steps are still visible
+# on panels whose LED driver has a high "barely on" threshold.
+# The backend remaps the user-facing 1..100 % linearly into
+# [FLOOR..100] %% of full PWM duty: e.g. with FLOOR=40, user 10 %
+# maps to 46 % duty, 25 % -> 55 %, 50 % -> 70 %, 100 % -> 100 %.
+# A user setting of exactly 0 %% still produces duty 0 (fully off).
+# Default 0 = no remap (linear). Non-prompted; set per model.
+#
+# Waveshare Touch-LCD-3.49: the backlight LED driver is invisible
+# below ~45 % duty (10 % and 25 % look "completely dark"); a
+# floor of 40 lets all five UI steps stay above the visibility
+# threshold while still spanning a perceptible brightness range.
+config DRAFTLING_BL_DUTY_FLOOR_PCT
+    int
+    depends on DRAFTLING_DISPLAY_HAS_BACKLIGHT
+    default 40 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default 0
 
 # DRAFTLING_BL_GPIO_BINARY tells the display backend to drive the
 # backlight enable GPIO as a plain on/off digital output instead of

@@ -240,10 +240,11 @@ static inline lv_color_t theme_bg(void)
  * Settings list cycles through them, so finer granularity would be
  * tedious to dial in. */
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
-/* The cycle steps. Boards whose lowest steps are unusably dim raise
- * CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT in main/Kconfig.projbuild to
- * exclude them at compile time (e.g. Waveshare Touch-LCD-3.49 sets
- * 50 so the user cannot land on 10 % or 25 %). */
+/* The cycle steps. Boards whose lowest steps are unusably dim
+ * either (a) raise CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT to exclude
+ * them at compile time, or (b) set CONFIG_DRAFTLING_BL_DUTY_FLOOR_PCT
+ * so the display backend remaps low percents into a higher PWM
+ * duty range (preferred -- keeps the full UI range). */
 static const int BACKLIGHT_OPTIONS[] = {
 #if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 10
     10,

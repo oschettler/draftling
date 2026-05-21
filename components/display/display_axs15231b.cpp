@@ -229,7 +229,23 @@ extern "C" void display_set_backlight(int percent)
     int off_level = s_bl_active_low ? 1 : 0;
     gpio_set_level((gpio_num_t)s_bl_pin, percent > 0 ? on_level : off_level);
 #else
-    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+    uint32_t duty;
+    if (percent <= 0) {
+        duty = 0;
+    } else {
+#if defined(CONFIG_DRAFTLING_BL_DUTY_FLOOR_PCT) && CONFIG_DRAFTLING_BL_DUTY_FLOOR_PCT > 0
+        /* Remap user percent into [FLOOR..100] % of full PWM duty
+         * so the lowest UI steps stay above the panel's LED-driver
+         * visibility threshold. percent=0 still produces duty=0
+         * (handled above). See CONFIG_DRAFTLING_BL_DUTY_FLOOR_PCT
+         * in main/Kconfig.projbuild for the per-board floor. */
+        const int floor_pct = CONFIG_DRAFTLING_BL_DUTY_FLOOR_PCT;
+        int eff_pct = floor_pct + ((100 - floor_pct) * percent) / 100;
+        duty = (uint32_t)((BL_LEDC_DUTY_MAX * eff_pct) / 100);
+#else
+        duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+#endif
+    }
     if (s_bl_active_low) {
         /* Invert: percent 100 -> duty 0 (LOW = ON), percent 0 -> duty
          * MAX (HIGH = OFF). Matches Waveshare's lcd_bl_pwm_bsp.h
