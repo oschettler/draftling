@@ -180,36 +180,34 @@
 #define LCD_QSPI_D3_PIN     14
 #define LCD_RST_PIN         21
 #define LCD_TE_PIN          -1   /* TE not wired on this board */
-/* GPIO 8 drives the BL boost-converter enable. Counter-intuitively
- * (and contrary to Waveshare's own reference firmware, which drives
- * this pin via LEDC PWM), on the ESP32-S3-Touch-LCD-3.49 boards we
- * have on hand any active drive from the MCU -- LEDC PWM at any
- * duty including 100%, or a static digital HIGH -- breaks the BL
- * boost circuit: the panel stays black + backlight off for the
- * entire session and the picture only flashes bright for one
- * frame as the MCU is reset and the LEDC peripheral releases the
- * pin back to its external pull-up. The board has a strong
- * pull-up on GPIO 8 that holds the BL boost enabled all on its
- * own, so the only configuration that actually keeps the
- * backlight on is to leave the pin truly high-Z (do not gpio_config
- * it, do not route LEDC to it). Set LCD_BL_PIN = -1 to disable
- * any normal-operation drive in the AXS15231B backend. Hardware-
- * verified across three attempts: commit 0378f7e (static HIGH
- * drive -> dark), the LEDC PWM revision in this PR's earlier
- * commits 7657c4b + 17efa0e (LEDC -> dark, same symptom), and the
- * working high-Z + deep-sleep-only-cut configuration first landed
- * in b8e4a21. */
-#define LCD_BL_PIN          -1
-
-/* Deep-sleep BL cut still uses GPIO 8: the boost circuit tolerates
- * the pin being driven LOW (only an active HIGH from the MCU
- * breaks it), so display_deep_sleep_prepare() momentarily configures
- * the pin as an output, drives it LOW, and latches the level with
- * gpio_hold_en + gpio_deep_sleep_hold_en so the BL stays dark
- * through the sleep interval. On boot, display_axs15231b_init()
- * releases the hold and gpio_reset_pin's the line back to high-Z
- * so the external pull-up re-engages the boost circuit. */
-#define LCD_BL_DEEP_SLEEP_CUT_PIN   8
+/* GPIO 8 drives the BL boost-converter enable, and is wired
+ * **active LOW**: a logical LOW on the pin turns the backlight ON
+ * at full brightness, a logical HIGH turns it OFF. This is the
+ * polarity used by Waveshare's own reference firmware
+ * (Examples/ESP-IDF/10_LVGL_V9_Test/components/lcd_bl_pwm_bsp/
+ * lcd_bl_pwm_bsp.h), where `LCD_PWM_MODE_255` (the brightest level)
+ * is defined as `(0xff - 255) = 0` and `LCD_PWM_MODE_0` (off) is
+ * `(0xff - 0) = 255`.
+ *
+ * We mirror that reference exactly: an LEDC channel on GPIO 8
+ * driven at duty 0 keeps the boost circuit on at full brightness,
+ * and intermediate duties dim the panel proportionally. The pin is
+ * pre-configured as an output with the internal pull-up enabled
+ * before the LEDC channel is bound so the line never floats during
+ * the boot-to-LEDC handoff. `LCD_BL_ACTIVE_LOW = 1` tells the
+ * AXS15231B backend to invert the percent->duty mapping (and to
+ * drive the pin HIGH for deep-sleep BL cut).
+ *
+ * Earlier bring-up attempts on this board left the pin high-Z
+ * (LCD_BL_PIN = -1) because we had inverted the polarity and the
+ * "100 % brightness" duty was actually OFF, producing a "screen
+ * dark all session, flashes only at deep-sleep entry" symptom.
+ * Verified working against Waveshare's 10_LVGL_V9_Test example
+ * with `Backlight_Testing` enabled (the brightness loop cycles
+ * 255 -> 175 -> 125 -> 0 raw duties and the panel dims
+ * accordingly). */
+#define LCD_BL_PIN          8
+#define LCD_BL_ACTIVE_LOW   1
 
 /* On-board MicroSD card slot on a dedicated SPI bus. Pin assignments
  * match the official Waveshare ESP32-S3-Touch-LCD-3.49 pin map
@@ -407,8 +405,16 @@
  * be cut via the normal LCD_BL_PIN path (because the BL boost
  * circuit does not tolerate the ESP32 driving the BL enable pin
  * during normal operation) may override this to drive a separate
- * pin LOW only at deep-sleep entry. See the Waveshare ESP32-S3-
- * Touch-LCD-3.49 block above for the canonical example. */
+ * pin LOW only at deep-sleep entry. No current board uses this
+ * fallback; kept available for future boards that need it. */
 #ifndef LCD_BL_DEEP_SLEEP_CUT_PIN
 #define LCD_BL_DEEP_SLEEP_CUT_PIN   -1
+#endif
+
+/* Default: BL pin is active HIGH (LEDC duty MAX = full brightness,
+ * duty 0 = off). Boards whose BL boost circuit is active LOW
+ * (LEDC duty 0 = full brightness, duty MAX = off) override this
+ * to 1 -- see the Waveshare ESP32-S3-Touch-LCD-3.49 block above. */
+#ifndef LCD_BL_ACTIVE_LOW
+#define LCD_BL_ACTIVE_LOW   0
 #endif

@@ -214,9 +214,24 @@ typedef struct {
      * gpio_config call), so the external pull-up re-lights the BL
      * exactly as on a true cold boot.
      *
-     * Set to -1 (default) on boards that do not need this. Known
-     * usage: Waveshare ESP32-S3-Touch-LCD-3.49 (GPIO 8). */
+     * Set to -1 (default) on boards that do not need this. Kept
+     * available for future boards whose BL boost circuit cannot be
+     * driven at all during normal operation; no current board sets
+     * it (the Waveshare ESP32-S3-Touch-LCD-3.49 previously used
+     * this path but now drives its active-LOW BL on GPIO 8 with
+     * normal LEDC PWM, matching Waveshare's reference firmware). */
     int bl_deep_sleep_cut;
+    /* True when the BL pin (`bl`) is active LOW: a logical LOW level
+     * (LEDC duty 0) turns the backlight ON at full brightness, and a
+     * logical HIGH (LEDC duty == DUTY_MAX) turns it OFF. This matches
+     * the Waveshare ESP32-S3-Touch-LCD-3.49 boost circuit, whose
+     * reference firmware (Examples/ESP-IDF/10_LVGL_V9_Test/components/
+     * lcd_bl_pwm_bsp/lcd_bl_pwm_bsp.h) defines `LCD_PWM_MODE_255 =
+     * (0xff - 255) = 0` as the "fully bright" duty.
+     *
+     * When false (default), the BL pin is active HIGH: duty MAX = ON,
+     * duty 0 = OFF (Guition JC3248W535 convention). */
+    bool bl_active_low;
 } display_axs15231b_config_t;
 
 /*

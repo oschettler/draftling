@@ -67,21 +67,17 @@ static const char *TAG = "DisplayAXS";
 /* LEDC PWM configuration for the backlight.
  *
  * Settings mirror Waveshare's `lcd_bl_pwm_bsp.c` reference firmware
- * (LEDC_TIMER_3 / channel 1, 50 kHz, 8-bit, RC_FAST clock). Used by
- * boards whose BL pin is safe to drive (currently the Guition
- * JC3248W535). The earlier 5 kHz / 10-bit / AUTO_CLK combination
- * left the panel's backlight visibly dark during normal operation --
- * the GPIO would only flash bright as the MCU entered deep sleep and
- * the LEDC peripheral released the pin back to its external pull-up.
+ * for the ESP32-S3-Touch-LCD-3.49 (Examples/ESP-IDF/10_LVGL_V9_Test):
+ * LEDC_LOW_SPEED_MODE on TIMER_3 / CHANNEL_1, 50 kHz, 8-bit,
+ * RC_FAST clock. Used by every AXS15231B board with a software-
+ * controllable backlight (Guition JC3248W535 active-HIGH, Waveshare
+ * Touch-LCD-3.49 active-LOW -- the polarity is selected per-board
+ * via `display_axs15231b_config_t::bl_active_low`).
  *
- * NOTE: even this Waveshare-recommended LEDC configuration is NOT
- * safe to apply on the Waveshare ESP32-S3-Touch-LCD-3.49 -- on the
- * boards we have on hand any active drive of GPIO 8 (LEDC PWM or
- * static digital HIGH) breaks the BL boost circuit and reproduces
- * the same "panel dark, flashes only at reset" symptom. That board
- * therefore sets LCD_BL_PIN = -1 (the BL pin is left high-Z, with
- * the external pull-up driving the boost circuit) and uses the
- * separate `bl_deep_sleep_cut` path below for deep-sleep power. */
+ * RC_FAST (~17.5 MHz internal oscillator) is preferred over AUTO_CLK
+ * because it survives APB-clock changes when BLE / Wi-Fi enable
+ * dynamic frequency scaling; AUTO_CLK previously picked APB and
+ * produced an unreliable PWM that left the BL effectively dark. */
 #define BL_LEDC_TIMER       LEDC_TIMER_3
 #define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
 #define BL_LEDC_CHANNEL     LEDC_CHANNEL_1
@@ -102,6 +98,11 @@ static int s_bl_pin = -1;
  * gpio_hold_dis() on every boot to release the latch and return
  * the pin to high-Z (so an external pull-up re-lights the BL). */
 static int s_bl_deep_sleep_cut_pin = -1;
+
+/* True when the BL pin is active LOW (LEDC duty 0 = full brightness,
+ * duty MAX = off). See display_axs15231b_config_t::bl_active_low and
+ * the Waveshare ESP32-S3-Touch-LCD-3.49 block in main/app_config.h. */
+static bool s_bl_active_low = false;
 
 /* Last user-requested backlight percent, cached so display_sleep()
  * / display_wake() can restore the brightness after blanking the
@@ -136,11 +137,12 @@ static void backlight_pwm_init(int bl_pin)
 
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
     /* Binary BL mode: drive the BL enable as a plain digital output.
-     * Skip LEDC entirely. The pin starts HIGH (BL on); display_set_
-     * backlight(0) drives it LOW (off), any other percent drives it
-     * HIGH (on). Kept available for boards whose BL boost circuit
-     * does not tolerate LEDC PWM at any duty; no current board
-     * defaults DRAFTLING_BL_GPIO_BINARY to y. */
+     * Skip LEDC entirely. Active-HIGH boards: the pin starts HIGH
+     * (BL on); display_set_backlight(0) drives it LOW (off).
+     * Active-LOW boards: start LOW (BL on); display_set_backlight(0)
+     * drives it HIGH (off). Kept available for boards whose BL boost
+     * circuit does not tolerate LEDC PWM at any duty; no current
+     * board defaults DRAFTLING_BL_GPIO_BINARY to y. */
     gpio_config_t g = {};
     g.intr_type    = GPIO_INTR_DISABLE;
     g.mode         = GPIO_MODE_OUTPUT;
@@ -148,7 +150,7 @@ static void backlight_pwm_init(int bl_pin)
     g.pull_down_en = GPIO_PULLDOWN_DISABLE;
     g.pull_up_en   = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&g));
-    gpio_set_level((gpio_num_t)bl_pin, 1);
+    gpio_set_level((gpio_num_t)bl_pin, s_bl_active_low ? 0 : 1);
     return;
 #else
     /* Pre-configure the BL pin as a plain GPIO output with the
@@ -170,7 +172,9 @@ static void backlight_pwm_init(int bl_pin)
     g.pull_down_en = GPIO_PULLDOWN_DISABLE;
     g.pull_up_en   = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&g));
-    gpio_set_level((gpio_num_t)bl_pin, 1);
+    /* Drive the pin to its "BL on" level before LEDC takes over so
+     * the panel never sees a brief OFF pulse during the handoff. */
+    gpio_set_level((gpio_num_t)bl_pin, s_bl_active_low ? 0 : 1);
 
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_LEDC_MODE;
@@ -194,11 +198,16 @@ static void backlight_pwm_init(int bl_pin)
     /* Start at full brightness so the panel is lit the moment the
      * first frame reaches the framebuffer; the editor's
      * editor_ui_init() will lower the duty to the NVS-persisted
-     * value shortly after. Initialising to 0 (off) instead caused a
+     * value shortly after. Initialising to "off" instead caused a
      * black-screen window from boot until editor_ui_init() ran, and
      * if the LEDC clock source then failed to drive intermediate
-     * duties reliably the panel stayed dark for the whole session. */
-    c.duty       = BL_LEDC_DUTY_MAX;
+     * duties reliably the panel stayed dark for the whole session.
+     * On active-LOW BL boards (Waveshare Touch-LCD-3.49) "full
+     * brightness" is duty 0 (output LOW = BL ON); on active-HIGH
+     * boards it is duty MAX (output HIGH = BL ON). This matches
+     * Waveshare's reference firmware which initialises with
+     * LCD_PWM_MODE_255 = (0xff - 255) = 0. */
+    c.duty       = s_bl_active_low ? 0 : BL_LEDC_DUTY_MAX;
     c.hpoint     = 0;
     ESP_ERROR_CHECK(ledc_channel_config(&c));
 #endif
@@ -214,10 +223,19 @@ extern "C" void display_set_backlight(int percent)
     if (s_bl_pin < 0) return;
     s_bl_last_pct = percent;
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
-    /* Binary mode: any positive percent is "on", 0 is "off". */
-    gpio_set_level((gpio_num_t)s_bl_pin, percent > 0 ? 1 : 0);
+    /* Binary mode: any positive percent is "on", 0 is "off". On
+     * active-LOW boards the levels are inverted. */
+    int on_level  = s_bl_active_low ? 0 : 1;
+    int off_level = s_bl_active_low ? 1 : 0;
+    gpio_set_level((gpio_num_t)s_bl_pin, percent > 0 ? on_level : off_level);
 #else
     uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+    if (s_bl_active_low) {
+        /* Invert: percent 100 -> duty 0 (LOW = ON), percent 0 -> duty
+         * MAX (HIGH = OFF). Matches Waveshare's lcd_bl_pwm_bsp.h
+         * mapping: LCD_PWM_MODE_<bright> = (0xff - <bright>). */
+        duty = BL_LEDC_DUTY_MAX - duty;
+    }
     ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
     ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
 #endif
@@ -785,6 +803,7 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_bl_pin  = cfg->bl;
     s_cs_pin  = cfg->cs;
     s_bl_deep_sleep_cut_pin = cfg->bl_deep_sleep_cut;
+    s_bl_active_low = cfg->bl_active_low;
 
     /* If a deep-sleep-only BL cut pin is configured, release any
      * hold latched by a previous deep-sleep cycle and explicitly
@@ -1317,7 +1336,7 @@ extern "C" void display_deep_sleep_prepare(void)
         /* Path (2): configure the cut pin as a plain output. We
          * never touched it during normal operation, so it is in
          * whatever state the boot ROM left it in (typically
-         * input + high-Z, BL held HIGH by external pull-up). */
+         * input + high-Z). Drive LOW to cut the boost circuit. */
         gpio_config_t g = {};
         g.intr_type    = GPIO_INTR_DISABLE;
         g.mode         = GPIO_MODE_OUTPUT;
@@ -1327,14 +1346,17 @@ extern "C" void display_deep_sleep_prepare(void)
         ESP_ERROR_CHECK(gpio_config(&g));
         gpio_set_level((gpio_num_t)cut_pin, 0);
     } else {
-        /* Path (1): pin is already configured by backlight_pwm_init. */
+        /* Path (1): pin is already configured by backlight_pwm_init.
+         * Set the duty to whatever produces a LOGICAL OFF for this
+         * board's polarity:
+         *   - active HIGH BL: duty 0  (output LOW  = OFF)
+         *   - active LOW  BL: duty MAX (output HIGH = OFF)
+         * gpio_hold_en() below latches the resulting output level. */
 #if defined(CONFIG_DRAFTLING_BL_GPIO_BINARY)
-        gpio_set_level((gpio_num_t)cut_pin, 0);
+        gpio_set_level((gpio_num_t)cut_pin, s_bl_active_low ? 1 : 0);
 #else
-        /* For LEDC mode, duty 0 means the LEDC output is LOW; the
-         * pad itself is still driven by LEDC. We rely on
-         * gpio_hold_en() snapshotting the current output level. */
-        ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0));
+        uint32_t off_duty = s_bl_active_low ? BL_LEDC_DUTY_MAX : 0;
+        ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, off_duty));
         ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
 #endif
     }
@@ -1350,7 +1372,8 @@ extern "C" void display_deep_sleep_prepare(void)
                  cut_pin, esp_err_to_name(err));
     }
     gpio_deep_sleep_hold_en();
-    ESP_LOGI(TAG, "BL pin GPIO%d held LOW for deep sleep (panel left in display-on state)", cut_pin);
+    ESP_LOGI(TAG, "BL pin GPIO%d held %s for deep sleep (panel left in display-on state)",
+             cut_pin, (s_bl_pin >= 0 && s_bl_active_low) ? "HIGH" : "LOW");
 }
 
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

@@ -115,7 +115,6 @@ config DRAFTLING_DISPLAY_EPD
 # Settings menu (persisted in NVS) on these boards only.
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
-    default n if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
     default n
@@ -124,16 +123,10 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
 # backlight enable GPIO as a plain on/off digital output instead of
 # an LEDC PWM channel. Kept available for future boards whose BL
 # boost circuit does not tolerate LEDC PWM, but no current board
-# defaults it to y -- the Waveshare ESP32-S3-Touch-LCD-3.49 used to
-# do so, but driving GPIO 8 (even as a static digital output)
-# reproduced the same "black screen, picture only at reset" symptom
-# the LEDC PWM did, so that board now leaves the pin high-Z
-# (LCD_BL_PIN = -1) and relies on the external pull-up. Power
-# savings during deep sleep are handled separately by
-# LCD_BL_DEEP_SLEEP_CUT_PIN in main/app_config.h, which only drives
-# the pin at sleep entry (active-LOW is tolerated by the boost
-# circuit; only the active-HIGH drive during normal operation is
-# not).
+# defaults it to y. The polarity is taken from LCD_BL_ACTIVE_LOW in
+# app_config.h (default 0 = active HIGH, 1 = active LOW), so the
+# backend can drive the correct "on" / "off" level for either
+# convention.
 config DRAFTLING_BL_GPIO_BINARY
     bool
     default n

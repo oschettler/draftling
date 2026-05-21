@@ -140,6 +140,7 @@ extern "C" void app_main(void)
         cfg.skip_vendor_init = false;
 #endif
         cfg.bl_deep_sleep_cut = LCD_BL_DEEP_SLEEP_CUT_PIN;
+        cfg.bl_active_low     = (LCD_BL_ACTIVE_LOW != 0);
         display_axs15231b_init(&cfg);
     }
 #elif defined(CONFIG_DRAFTLING_DISPLAY_ST7789)
