@@ -3635,6 +3635,11 @@ static void wifi_connect_async(void)
     }
 }
 
+/* Set to true while a Git sync is running so that WiFi connection
+ * state changes do not overwrite the on-screen Git progress
+ * messages in the status bar. */
+static volatile bool s_git_sync_active = false;
+
 /* ---- WiFi state callback ----
  * Called from the WiFi manager (event handler context) when the
  * connection state changes.  Must take the LVGL lock before touching
@@ -3691,11 +3696,6 @@ static void wifi_state_cb(wifi_state_t state)
 /* ---- Git sync callback ----
  * Called from the git_sync task when the sync state changes.
  * Must take the LVGL lock before touching any UI objects. */
-/* Set to true while a Git sync is running so that WiFi connection
- * state changes do not overwrite the on-screen Git progress
- * messages in the status bar. */
-static volatile bool s_git_sync_active = false;
-
 static void git_sync_cb(git_sync_state_t state, const char *message)
 {
     if (!lvgl_port_lock(200)) return;
