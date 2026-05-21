@@ -40,6 +40,12 @@ static int s_pushed_count    = 0;  /* files uploaded to remote */
 static int s_pulled_count    = 0;  /* files downloaded from remote */
 static int s_remote_deleted  = 0;  /* files deleted on the remote */
 static int s_local_deleted   = 0;  /* files deleted locally by pull */
+static int s_failed_count    = 0;  /* individual file push/pull failures
+                                    * (e.g. one file timed out but the
+                                    * overall sync still made progress).
+                                    * Surfaced in the final status so the
+                                    * user can tell a partial sync from a
+                                    * clean one. */
 
 /* Task stack + TCB allocated from SPIRAM so that the sync task does not
  * compete for scarce internal DRAM with BLE and WiFi.
@@ -513,7 +519,11 @@ static esp_err_t do_pull(void)
         }
         s_resp_len = 0;
         ret = api_request(jurl->valuestring, HTTP_METHOD_GET, NULL, &status);
-        if (ret != ESP_OK) continue;
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to pull: %s", name);
+            s_failed_count++;
+            continue;
+        }
 
         /* Save locally */
         char local[512];
@@ -1171,6 +1181,7 @@ static esp_err_t do_push(void)
     }
     if (pushed < attempted) {
         ESP_LOGW(TAG, "%d file(s) failed to push", attempted - pushed);
+        s_failed_count += (attempted - pushed);
     }
     s_pushed_count   = pushed;
     s_remote_deleted = deleted;
@@ -1198,6 +1209,7 @@ static void sync_task(void *arg)
     s_pulled_count   = 0;
     s_remote_deleted = 0;
     s_local_deleted  = 0;
+    s_failed_count   = 0;
 
     esp_err_t pull_ret = ESP_OK;
     esp_err_t push_ret = ESP_OK;
@@ -1254,9 +1266,11 @@ done:
                 }                                                           \
             } while (0)
 
-            SUM_APPEND("Sync complete");
+            SUM_APPEND(s_failed_count ? "Sync finished with errors"
+                                      : "Sync complete");
             bool any = (s_pushed_count || s_pulled_count ||
-                        s_remote_deleted || s_local_deleted);
+                        s_remote_deleted || s_local_deleted ||
+                        s_failed_count);
             if (!any) {
                 SUM_APPEND(" (up to date)");
             } else {
@@ -1276,6 +1290,10 @@ done:
                 }
                 if (s_local_deleted) {
                     SUM_APPEND("%sdeleted %d local", sep, s_local_deleted);
+                    sep = ", ";
+                }
+                if (s_failed_count) {
+                    SUM_APPEND("%s%d failed", sep, s_failed_count);
                     sep = ", ";
                 }
                 SUM_APPEND(")");
