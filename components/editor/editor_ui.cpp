@@ -3643,38 +3643,45 @@ static void wifi_state_cb(wifi_state_t state)
 {
     if (!lvgl_port_lock(200)) return;
 
-    switch (state) {
-    case WIFI_STATE_CONNECTED:
-    {
-        char buf[80];
-        snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
-                 wifi_manager_get_ssid(), wifi_manager_get_ip());
-        editor_ui_set_status(buf);
-        break;
-    }
-    case WIFI_STATE_CONNECTING:
-    {
-        /* Mirror the underlying "WiFi: connecting to <SSID>" log
-         * message in the on-screen status bar so users see which
-         * SSID we are negotiating with. */
-        char buf[80];
-        const char *ssid = wifi_manager_get_ssid();
-        if (ssid && ssid[0]) {
-            snprintf(buf, sizeof(buf), "WiFi: connecting to %s", ssid);
-        } else {
-            snprintf(buf, sizeof(buf), "WiFi: connecting...");
+    /* While a Git sync is running, do not overwrite the on-screen
+     * progress messages with WiFi state notifications -- the user
+     * would otherwise see "WiFi: SSID (IP)" flicker in between
+     * "Git: Pulling i/N" messages. The WiFi icon is still
+     * refreshed below so the title bar stays accurate. */
+    if (!s_git_sync_active) {
+        switch (state) {
+        case WIFI_STATE_CONNECTED:
+        {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "WiFi: %s (%s)",
+                     wifi_manager_get_ssid(), wifi_manager_get_ip());
+            editor_ui_set_status(buf);
+            break;
         }
-        editor_ui_set_status(buf);
-        break;
-    }
-    case WIFI_STATE_ERROR:
-        editor_ui_set_status("WiFi: connection failed");
-        break;
-    case WIFI_STATE_DISCONNECTED:
-        editor_ui_set_status("WiFi: disconnected");
-        break;
-    default:
-        break;
+        case WIFI_STATE_CONNECTING:
+        {
+            /* Mirror the underlying "WiFi: connecting to <SSID>" log
+             * message in the on-screen status bar so users see which
+             * SSID we are negotiating with. */
+            char buf[80];
+            const char *ssid = wifi_manager_get_ssid();
+            if (ssid && ssid[0]) {
+                snprintf(buf, sizeof(buf), "WiFi: connecting to %s", ssid);
+            } else {
+                snprintf(buf, sizeof(buf), "WiFi: connecting...");
+            }
+            editor_ui_set_status(buf);
+            break;
+        }
+        case WIFI_STATE_ERROR:
+            editor_ui_set_status("WiFi: connection failed");
+            break;
+        case WIFI_STATE_DISCONNECTED:
+            editor_ui_set_status("WiFi: disconnected");
+            break;
+        default:
+            break;
+        }
     }
 
     update_wifi_icons();
@@ -3684,6 +3691,11 @@ static void wifi_state_cb(wifi_state_t state)
 /* ---- Git sync callback ----
  * Called from the git_sync task when the sync state changes.
  * Must take the LVGL lock before touching any UI objects. */
+/* Set to true while a Git sync is running so that WiFi connection
+ * state changes do not overwrite the on-screen Git progress
+ * messages in the status bar. */
+static volatile bool s_git_sync_active = false;
+
 static void git_sync_cb(git_sync_state_t state, const char *message)
 {
     if (!lvgl_port_lock(200)) return;
@@ -3691,6 +3703,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     switch (state) {
     case GIT_SYNC_IN_PROGRESS:
     {
+        s_git_sync_active = true;
         char buf[80];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "syncing...");
@@ -3699,6 +3712,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     }
     case GIT_SYNC_SUCCESS:
     {
+        s_git_sync_active = false;
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "sync complete");
@@ -3727,6 +3741,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
     }
     case GIT_SYNC_ERROR:
     {
+        s_git_sync_active = false;
         char buf[128];
         snprintf(buf, sizeof(buf), "Git: %s",
                  message ? message : "error");
