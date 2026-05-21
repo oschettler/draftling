@@ -349,7 +349,7 @@ ESP-IDF v5.x `i2c_master_*` API; we issue only two register writes
 (Output and Configuration) so this component does not pull in a
 heavy `esp_io_expander_tca9554` dependency.
 
-Public API: `power_init()`, `power_set_pre_off_cb()`, `power_off()`.
+Public API: `power_init()`, `power_set_long_press_cb()`, `power_off()`.
 
 ### components/wifi_manager/
 

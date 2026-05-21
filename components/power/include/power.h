@@ -38,10 +38,14 @@ extern "C" {
  * default). */
 #define POWER_LONG_PRESS_MS 1500
 
-/* Callback signature for the pre-power-off hook. Invoked once, on
- * the polling timer's task context, just before power_off() cuts
- * the latch. Use it to flush dirty editor state to disk. */
-typedef void (*power_pre_off_cb_t)(void);
+/* Callback signature for the PWR long-press handler. Invoked once
+ * from the polling timer when the user holds the PWR button for
+ * POWER_LONG_PRESS_MS or longer. Typically wired to
+ * standby_enter_sleep() so the editor runs its usual pre-sleep
+ * auto-save, cuts the backlight, cuts the power latch, and enters
+ * deep sleep -- the same shutdown sequence used on inactivity
+ * timeout. */
+typedef void (*power_long_press_cb_t)(void);
 
 /* Per-board power-latch configuration. Populate in main.cpp from
  * the matching app_config.h defines and pass to power_init(). */
@@ -69,24 +73,30 @@ typedef struct {
 int power_init(const power_config_t *cfg);
 
 /*
- * Register a callback invoked just before power_off() cuts the
- * latch. Pass NULL to clear. Only one callback is supported.
+ * Register a callback invoked from the PWR-button polling timer
+ * when the user holds the PWR button for at least
+ * POWER_LONG_PRESS_MS. Pass NULL to clear. Only one callback is
+ * supported. The callback is responsible for executing the full
+ * shutdown sequence (auto-save, display blank, latch cut, deep
+ * sleep) -- typically by calling standby_enter_sleep().
  *
  * No-op on boards without CONFIG_DRAFTLING_HAS_POWER_LATCH.
  */
-void power_set_pre_off_cb(power_pre_off_cb_t cb);
+void power_set_long_press_cb(power_long_press_cb_t cb);
 
 /*
  * Cut the power latch (drive latch_bit LOW). On battery this powers
  * the board down immediately and the function never returns. On USB
- * the latch has no effect on the rail; the function waits ~200 ms
- * and then returns so the caller can fall through to a regular
- * ESP32 deep-sleep cycle.
+ * the latch has no effect on the rail; the function returns so the
+ * caller can fall through to a regular ESP32 deep-sleep cycle.
  *
- * Invokes the pre-off callback (if any) before cutting the latch.
+ * Does NOT invoke any user callback -- call this directly from your
+ * shutdown sequence, after the pre-sleep auto-save and the
+ * backlight-cut have already run.
  *
  * No-op (returns immediately) on boards without
- * CONFIG_DRAFTLING_HAS_POWER_LATCH.
+ * CONFIG_DRAFTLING_HAS_POWER_LATCH or when the TCA9554 I2C init
+ * failed (the firmware logs a warning and runs without the latch).
  */
 void power_off(void);
 

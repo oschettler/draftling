@@ -244,14 +244,16 @@
 
 /* On-board battery monitor.
  *
- * The Touch-LCD-3.49 wires the LiPo cell through a 2:1 resistive
+ * The Touch-LCD-3.49 wires the LiPo cell through a ~3:1 resistive
  * divider into GPIO 4 (ADC1_CH3). Matches the Waveshare BAT_ADC pin
- * map in the official wiki and the `07_BATT_PWR_Test` reference
- * firmware. The cell voltage is recovered by multiplying the
- * measured pin voltage by BATT_DIVIDER (=2). */
+ * map in the official wiki and the `01_ADC_Test/adc_bsp.c` reference
+ * firmware, which recovers the cell voltage with
+ * `*value = 0.001 * vol * 3` -- i.e. BATT_DIVIDER = 3, not the 2
+ * we initially guessed (a 2 multiplier produced a ~18 % reading on
+ * a fully charged cell, since the table maps ~2.8 V to ~0 %). */
 #define BATT_ADC_PIN        4
 #define BATT_EN_PIN         -1
-#define BATT_DIVIDER        2
+#define BATT_DIVIDER        3
 
 /* Power management.
  *

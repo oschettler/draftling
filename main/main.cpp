@@ -325,10 +325,13 @@ extern "C" void app_main(void)
     standby_set_pre_sleep_cb(pre_sleep_autosave);
 
 #if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
-    /* Same auto-save hook fires when the user long-presses PWR. The
-     * editor is fully up by now, so it is safe to flush dirty state
-     * from the power-button polling timer context. */
-    power_set_pre_off_cb(pre_sleep_autosave);
+    /* On PWR long-press, run the full shutdown sequence via the
+     * standby manager: auto-save (pre_sleep_cb above), backlight
+     * cut, power-latch cut (battery: rail drops here; USB: no-op),
+     * then esp_deep_sleep_start. This is the same sequence used on
+     * inactivity timeout, so the behaviour is identical regardless
+     * of which path triggers the shutdown. */
+    power_set_long_press_cb(standby_enter_sleep);
 #endif
 
     ESP_LOGI(TAG, "Draftling ready. Waiting for Bluetooth keyboard...");
