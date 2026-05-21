@@ -330,3 +330,45 @@ powered through deep sleep), in exchange for a wake path that
 is byte-for-byte identical to a cold boot on an already-running
 panel. The backlight cut still dominates the standby power saving.
 
+## Resolution -- third follow-up fix
+
+Field testing showed that even with the second follow-up fix in
+place, the panel still came up black after deep-sleep wake, and
+pressing the EN/RESET button did not recover it -- only a full
+USB unplug recovered the display. The controller was therefore
+ending up in a stuck state that survives both an MCU reset and
+the existing 250 ms RST pin pulse.
+
+The user requested that the display be initialised independently
+of any previous controller state. Two changes in
+`components/display/display_axs15231b.cpp` implement that:
+
+1. **Add SWRESET (DCS 0x01) at the very start of
+   `axs15231b_init_sequence()`**. SWRESET is a controller-level
+   reset that returns the AXS15231B's internal state machine and
+   DCS registers to their POR defaults. This is independent of the
+   hardware RST pin and complements it: even if the prior session's
+   register configuration is what is keeping the panel stuck, the
+   SWRESET clears it. Followed by the MIPI-DCS-mandated 120 ms
+   recovery delay before the immediately-following SLPOUT.
+
+2. **Double the hardware RST pulse in `hw_reset()`**. Some
+   AXS15231B-based panels need a second LOW pulse (with a brief
+   HIGH gap in between, so the controller exits its first-pulse
+   reset latch before being re-asserted) to fully recover from a
+   warm-RST corner case. The total reset window goes from
+   ~310 ms (30+250+30) to ~590 ms (30+250+30+250+30), still well
+   under the LVGL splash window.
+
+The combination is intentionally redundant: SWRESET handles
+register-level corruption that survives the pin pulse, and the
+double pin pulse handles state-machine corruption that SWRESET
+cannot reach (e.g. if the controller is somehow refusing to
+process incoming commands). Together they make the init sequence
+robust against any prior controller state short of an analog
+power loss, which is the only thing a USB unplug actually changes.
+
+The cold-boot path is unchanged in behaviour; the extra ~280 ms
+of boot latency from the second RST pulse is invisible behind the
+LVGL splash screen.
+

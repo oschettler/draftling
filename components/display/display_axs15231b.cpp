@@ -481,14 +481,30 @@ static void hw_reset(void)
      * the subsequent vendor-register writes did not latch and the
      * display stayed black until the user pressed RESET. The
      * datasheet only requires ~10 us LOW, but real panels need the
-     * long pulse to recover from cold-VCC corners. */
+     * long pulse to recover from cold-VCC corners.
+     *
+     * We issue two LOW pulses with a HIGH gap in between. A single
+     * 250 ms warm-RST pulse was observed to leave the AXS15231B in a
+     * stuck state on the Waveshare Touch-LCD-3.49 after deep-sleep
+     * wake -- the symptom was that even pressing the EN/RESET button
+     * afterwards did not recover the panel; only a full USB power
+     * cycle did. A second pulse with a 30 ms HIGH gap (which lets
+     * the controller exit its first-pulse reset latch before being
+     * re-asserted) makes the wake/reset path independent of whatever
+     * state the previous session left the controller in. The cost
+     * is ~280 ms of extra boot latency, which is below the LVGL
+     * splash window. */
+    gpio_set_level((gpio_num_t)s_rst_pin, 0);
+    vTaskDelay(pdMS_TO_TICKS(250));
+    gpio_set_level((gpio_num_t)s_rst_pin, 1);
+    vTaskDelay(pdMS_TO_TICKS(30));
     gpio_set_level((gpio_num_t)s_rst_pin, 0);
     vTaskDelay(pdMS_TO_TICKS(250));
     gpio_set_level((gpio_num_t)s_rst_pin, 1);
     /* Post-reset settle. The Waveshare reference uses only 30 ms here
      * because esp_lcd_panel_init() then sends SLPOUT with its own
      * 100 ms wait. Our axs15231b_init_sequence() also starts with
-     * SLPOUT + 120 ms, so 30 ms of settle is sufficient. */
+     * SWRESET + 120 ms, so 30 ms of settle is sufficient. */
     vTaskDelay(pdMS_TO_TICKS(30));
 }
 
@@ -512,6 +528,30 @@ static void axs15231b_init_sequence(void)
      * garbage on display-on, then nothing. The all-zero `0xBB`
      * issued near the end of this block re-locks the registers
      * once the panel is configured. */
+
+    /* Software reset (SWRESET, 0x01) FIRST, before anything else.
+     * This is a controller-level reset that brings the AXS15231B's
+     * internal state machine and DCS registers back to their POR
+     * defaults, regardless of whatever state the previous session
+     * left the controller in. It complements the hardware RST pin
+     * pulse from hw_reset(): the pin pulse alone has been observed
+     * on the Waveshare Touch-LCD-3.49 to leave the controller in a
+     * stuck state after a deep-sleep wake -- to the point where even
+     * pressing the EN/RESET button did not recover the panel; only a
+     * full USB power cycle did. Issuing SWRESET on top of the pin
+     * pulse makes the init sequence truly independent of the prior
+     * panel state.
+     *
+     * Per MIPI DCS, SWRESET requires a 5 ms minimum recovery before
+     * the next command and 120 ms before SLPOUT can be sent. We use
+     * 120 ms unconditionally so the immediately-following SLPOUT
+     * latches reliably. SWRESET is documented as a no-op while the
+     * panel is in SLPIN, but our display_deep_sleep_prepare() leaves
+     * the panel in display-on mode so this is the expected case.
+     *
+     * See docs/deep-sleep-black-screen-investigation.md. */
+    spi_send_cmd(0x01, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(120));
 
     /* Sleep Out FIRST, before any vendor-register writes. On cold
      * power-up the AXS15231B boots into sleep mode with its analog
