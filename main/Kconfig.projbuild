@@ -119,6 +119,19 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     default y if DRAFTLING_DISPLAY_ST7789
     default n
 
+# Minimum backlight percentage offered by the Settings menu. The
+# editor cycles through the steps {10, 25, 50, 75, 100} %, but on
+# some panels the lowest steps are too dark to be usable. Bumping
+# this value drops the dim steps from the cycle so the user cannot
+# accidentally land on an unreadable brightness. Non-prompted; set
+# per model below.
+config DRAFTLING_BACKLIGHT_MIN_PCT
+    int
+    depends on DRAFTLING_DISPLAY_HAS_BACKLIGHT
+    # Waveshare Touch-LCD-3.49: 10 % and 25 % are both too dark.
+    default 50 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default 10
+
 # DRAFTLING_BL_GPIO_BINARY tells the display backend to drive the
 # backlight enable GPIO as a plain on/off digital output instead of
 # an LEDC PWM channel. Kept available for future boards whose BL

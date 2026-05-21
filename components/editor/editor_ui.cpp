@@ -240,13 +240,36 @@ static inline lv_color_t theme_bg(void)
  * Settings list cycles through them, so finer granularity would be
  * tedious to dial in. */
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
-#define BACKLIGHT_OPTION_COUNT 5
-static const int BACKLIGHT_OPTIONS[BACKLIGHT_OPTION_COUNT] = {
-    10, 25, 50, 75, 100
+/* The cycle steps. Boards whose lowest steps are unusably dim raise
+ * CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT in main/Kconfig.projbuild to
+ * exclude them at compile time (e.g. Waveshare Touch-LCD-3.49 sets
+ * 50 so the user cannot land on 10 % or 25 %). */
+static const int BACKLIGHT_OPTIONS[] = {
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 10
+    10,
+#endif
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 25
+    25,
+#endif
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 50
+    50,
+#endif
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 75
+    75,
+#endif
+    100
 };
+#define BACKLIGHT_OPTION_COUNT \
+    ((int)(sizeof(BACKLIGHT_OPTIONS) / sizeof(BACKLIGHT_OPTIONS[0])))
 
 #define NVS_KEY_BACKLIGHT "backlight"
-static int s_backlight_pct = 50;  /* default: 50 % */
+/* Default to 50 % when available, else the lowest still-allowed
+ * step (set per board via CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT). */
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 50
+static int s_backlight_pct = 50;
+#else
+static int s_backlight_pct = CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT;
+#endif
 
 static void load_backlight_from_nvs(void)
 {
@@ -257,6 +280,11 @@ static void load_backlight_from_nvs(void)
             s_backlight_pct = v;
         }
         nvs_close(h);
+    }
+    /* Clamp a stale NVS value (e.g. one persisted before the min was
+     * raised) to the lowest still-allowed option. */
+    if (s_backlight_pct < CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT) {
+        s_backlight_pct = CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT;
     }
 }
 
@@ -275,7 +303,12 @@ static int find_backlight_option(int pct)
     for (int i = 0; i < BACKLIGHT_OPTION_COUNT; i++) {
         if (BACKLIGHT_OPTIONS[i] == pct) return i;
     }
-    return 2;  /* default to 50 % */
+    /* Unknown value: prefer 50 % if it is still in the cycle,
+     * otherwise the first option. */
+    for (int i = 0; i < BACKLIGHT_OPTION_COUNT; i++) {
+        if (BACKLIGHT_OPTIONS[i] == 50) return i;
+    }
+    return 0;
 }
 #endif  /* CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT */
 

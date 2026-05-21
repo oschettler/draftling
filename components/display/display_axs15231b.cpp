@@ -1280,26 +1280,20 @@ extern "C" int display_get_buffer_size(void)
 
 extern "C" void display_deep_sleep_prepare(void)
 {
-    /* Deliberately do NOT call display_sleep() here.
+    /* Per user request: turn the panel off (DISPOFF + SLPIN) in
+     * addition to cutting the backlight, so the deep-sleep
+     * transition is fully blanked rather than just dim.
      *
-     * display_sleep() sends DISPOFF (0x28) + SLPIN (0x10) to the
-     * AXS15231B. On wake-from-deep-sleep that turns out to be a
-     * trap: deep-sleep wake on the ESP32-S3 is a chip reset, so
-     * hw_reset() pulses LCD_RST LOW for 250 ms while the controller
-     * is already sitting in SLPIN with the analog rails still up.
-     * Some AXS15231B revisions do not fully re-init their internal
-     * state machine from that "warm RST while in SLPIN" corner
-     * case: the controller comes out of the pulse still believing
-     * it is asleep, swallows the subsequent SLPOUT / DISPON, and
-     * the panel stays black for the rest of the session (the
-     * black-screen-on-wake symptom on the Waveshare Touch-LCD-3.49,
-     * see docs/deep-sleep-black-screen-investigation.md).
-     *
-     * Leaving the controller in its normal display-on state across
-     * deep sleep avoids that corner case entirely. The panel
-     * content is irrelevant during sleep because we cut the
-     * backlight below; cutting the BL gives a cleaner visual
-     * transition than DISPOFF anyway. */
+     * Earlier revisions of this function deliberately skipped
+     * display_sleep() to sidestep the "warm RST while in SLPIN"
+     * black-screen-on-wake corner case documented in
+     * docs/deep-sleep-black-screen-investigation.md. We now rely on
+     * the unconditional hw_reset (250 ms LOW) + full
+     * axs15231b_init_sequence (SLPOUT + vendor regs + DISPON) that
+     * run on every boot (including post-deep-sleep wake) to bring
+     * the controller back from that state. See the "Resolution"
+     * section of that doc for the full reasoning. */
+    display_sleep();
 
     /* Pick the BL pin to drive LOW. Two paths:
      *

@@ -193,41 +193,44 @@ User feedback confirmed that the backlight stays lit during the
 the BL really is on) and that the BL is also lit through deep sleep
 (wasting battery). The fix therefore addresses both:
 
-1. **Before deep sleep, do NOT blank the panel.** Removed the
-   `display_sleep()` call (DISPOFF + SLPIN) from
-   `display_deep_sleep_prepare()` in
-   `components/display/display_axs15231b.cpp`. The controller is
-   left in its normal display-on state for the whole sleep
-   interval, eliminating the "warm RST while in SLPIN" corner case
-   that was the most likely root cause per section "Most likely
-   root cause" above.
+1. **Before deep sleep, do NOT blank the panel.** Initially we
+   removed the `display_sleep()` call (DISPOFF + SLPIN) from
+   `display_deep_sleep_prepare()` to sidestep the "warm RST while
+   in SLPIN" corner case described under "Most likely root cause"
+   above.
+
+   **Update:** once the active-LOW LEDC backlight path was working
+   reliably on the Touch-LCD-3.49 (LCD_BL_PIN=8, LCD_BL_ACTIVE_LOW=1
+   driven by the standard 50 kHz RC_FAST LEDC config) the user
+   asked that the panel itself also be turned off at sleep entry,
+   not just the BL. `display_deep_sleep_prepare()` therefore now
+   calls `display_sleep()` (DISPOFF + SLPIN) before cutting the BL
+   again. The previously-feared corner case is mitigated by the
+   standard cold-boot `hw_reset()` (250 ms LOW) + full
+   `axs15231b_init_sequence()` that run on every boot, including
+   post-deep-sleep wake -- if the controller comes out of the warm
+   RST still believing it is asleep, the unconditional SLPOUT +
+   vendor-reg replay in the init sequence brings it back.
 
 2. **Before deep sleep, turn the backlight OFF.** First attempt
    re-enabled `LCD_BL_PIN = 8` on the Touch-LCD-3.49 in binary
    on/off mode (`DRAFTLING_BL_GPIO_BINARY=y`) and drove the pin
    HIGH during normal operation. This regressed: even an active
    digital HIGH on GPIO 8 breaks the BL boost circuit on this
-   board (panel stays dark until the user presses RESET) -- a
-   symptom previously documented in the stored memory "Waveshare
-   Touch-LCD-3.49: do NOT drive BL GPIO 8".
+   board (panel stays dark until the user presses RESET).
 
-   The corrected fix uses a separate concept: a "deep-sleep-only
-   BL cut pin" carried on `display_axs15231b_config_t::
-   bl_deep_sleep_cut` and surfaced in `main/app_config.h` as
-   `LCD_BL_DEEP_SLEEP_CUT_PIN` (defaulting to -1, set to 8 on the
-   Touch-LCD-3.49 only). The pin is left completely high-Z during
-   normal operation so the external pull-up holds the BL HIGH
-   exactly as before; `LCD_BL_PIN` stays at -1 and the LEDC
-   path / binary on-off path are not used. At deep-sleep entry,
-   `display_deep_sleep_prepare()` configures the cut pin as a
-   plain digital output, drives it LOW (active-LOW is tolerated
-   by the boost circuit; only active-HIGH breaks it), and latches
-   the level with `gpio_hold_en()` + `gpio_deep_sleep_hold_en()`.
-   On the next boot, `display_axs15231b_init()` calls
-   `gpio_hold_dis()` and `gpio_reset_pin()` on the cut pin so it
-   returns to high-Z and the external pull-up re-lights the BL.
+   The corrected approach uses the standard LEDC PWM path with
+   `LCD_BL_ACTIVE_LOW=1`: the duty/level inversion in
+   `backlight_pwm_init()` / `display_set_backlight()` /
+   `display_deep_sleep_prepare()` produces "duty 0 = full
+   brightness, duty MAX = off", matching the Waveshare 10_LVGL_V9
+   reference. At deep-sleep entry the duty is forced to MAX (pin
+   HIGH = OFF) and latched with `gpio_hold_en()` +
+   `gpio_deep_sleep_hold_en()`. On the next boot,
+   `backlight_pwm_init()` releases the hold so the LEDC peripheral
+   regains control.
 
-The visual transition on entering sleep is now "BL drops, panel
-content does not change". The visual transition on wake is "panel
-content already valid (or driven by the freshly-init'd backend),
-then BL comes back HIGH". The cold-boot path is unchanged.
+The visual transition on entering sleep is now "panel goes to
+DISPOFF, BL drops". The visual transition on wake is "panel
+re-inits from scratch and BL ramps back up under LEDC control".
+The cold-boot path is unchanged.
