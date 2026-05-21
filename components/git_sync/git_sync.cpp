@@ -507,7 +507,7 @@ static esp_err_t do_pull(void)
         /* Download file */
         {
             char pmsg[96];
-            snprintf(pmsg, sizeof(pmsg), "Pulling %d/%d: %s",
+            snprintf(pmsg, sizeof(pmsg), "Pulling %d/%d: %.70s",
                      seen_md, total_md, name);
             notify(GIT_SYNC_IN_PROGRESS, pmsg);
         }
@@ -572,7 +572,7 @@ static esp_err_t do_pull(void)
             /* Local matches last sync -- safe to delete locally. */
             {
                 char pmsg[96];
-                snprintf(pmsg, sizeof(pmsg), "Deleting local: %s", name);
+                snprintf(pmsg, sizeof(pmsg), "Deleting local: %.70s", name);
                 notify(GIT_SYNC_IN_PROGRESS, pmsg);
             }
             if (sd_card_delete_file(local_path) == ESP_OK) {
@@ -1116,7 +1116,7 @@ static esp_err_t do_push(void)
         attempted++;
         {
             char pmsg[96];
-            snprintf(pmsg, sizeof(pmsg), "Pushing %d/%d: %s",
+            snprintf(pmsg, sizeof(pmsg), "Pushing %d/%d: %.70s",
                      attempted, total_md, name);
             notify(GIT_SYNC_IN_PROGRESS, pmsg);
         }
@@ -1144,7 +1144,7 @@ static esp_err_t do_push(void)
 
         {
             char pmsg[96];
-            snprintf(pmsg, sizeof(pmsg), "Deleting remote: %s", name);
+            snprintf(pmsg, sizeof(pmsg), "Deleting remote: %.70s", name);
             notify(GIT_SYNC_IN_PROGRESS, pmsg);
         }
         if (delete_remote_file(name, saved_sha) == ESP_OK) {
