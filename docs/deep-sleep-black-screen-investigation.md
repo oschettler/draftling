@@ -272,3 +272,61 @@ address this:
 `esp_sleep_get_wakeup_cause()` so post-wake symptoms are trivial
 to confirm from the serial monitor.
 
+## Resolution -- second follow-up fix
+
+The follow-up fix above did **not** work. User report from field
+testing: "After deep sleep, the display also doesn't work if I
+press the reset button. It only works if I disconnect the device
+from power and then connect again."
+
+That symptom is the smoking gun. An EN/RESET press is a full MCU
+reset (`ESP_RST_EXT`), so the "force vendor-init replay" branch
+above does not fire on that second boot -- yet the panel is still
+black. The only way to recover is to cycle LCD VCI by unplugging
+USB. This means:
+
+- The previous deep-sleep wake's `axs15231b_init_sequence()` (now
+  with `skip_vendor_init` forced to false) left the AXS15231B
+  registers in a **broken state that survives an MCU reset**
+  because the LCD analog rails stay powered.
+- The JC3248W535 vendor-register block is **panel-specific** to
+  that board's 320x480 panel. Pushing it into the Touch-LCD-3.49's
+  172x640 panel does not "recover" it -- it actively corrupts the
+  factory-tuned register values for this panel, in a way the
+  panel's controller cannot un-do without a true POR of its VCI.
+
+In other words the previous fix was based on the wrong premise.
+There is no "more aggressive software re-init" we can run on wake
+that will recover this panel from warm-RST-while-in-SLPIN. The
+right strategy is to **never enter that state in the first place**:
+
+1. **Stop calling `display_sleep()` from
+   `display_deep_sleep_prepare()`.** Leave the AXS15231B in its
+   normal display-on state through deep sleep. With the BL pin
+   driven OFF by the existing hold-pin mechanism (and gated by
+   `gpio_hold_en` + `gpio_deep_sleep_hold_en`), the panel is
+   invisible to the user just the same, but on wake we never have
+   to recover from a SLPIN+warm-RST corner case -- `hw_reset()`
+   followed by the bare-bones SLPOUT / MADCTL / TE / NORON /
+   DISPON sequence is effectively a no-op on an already-running
+   panel, which is exactly the case we want.
+
+2. **Revert the `skip_vendor_init` override in
+   `display_axs15231b_init`.** `skip_vendor_init` is now once again
+   honoured unconditionally so the Touch-LCD-3.49's factory
+   defaults are never overwritten. The reset-cause log line is
+   kept because it costs nothing and is genuinely useful when
+   debugging future wake-time symptoms.
+
+3. **Keep the LCD_RST `gpio_hold_en` during deep sleep.** This was
+   the other half of the previous "follow-up" patch and it remains
+   correct: it removes the high-Z float window on RST during the
+   sleep interval, so the only RST edge the controller sees is
+   the deliberate 250 ms LOW pulse from `hw_reset()` on wake.
+
+The trade-off versus the very first "Resolution" is identical:
+slightly higher standby current (the panel controller stays
+powered through deep sleep), in exchange for a wake path that
+is byte-for-byte identical to a cold boot on an already-running
+panel. The backlight cut still dominates the standby power saving.
+

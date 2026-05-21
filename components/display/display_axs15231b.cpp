@@ -823,28 +823,24 @@ extern "C" void display_axs15231b_init(const display_axs15231b_config_t *cfg)
     s_bl_deep_sleep_cut_pin = cfg->bl_deep_sleep_cut;
     s_bl_active_low = cfg->bl_active_low;
 
-    /* Detect deep-sleep wake. On a true cold boot the AXS15231B
-     * powers up at silicon defaults; on deep-sleep wake the panel's
-     * analog rails stayed up the whole time and the controller is
-     * sitting in DISPOFF + SLPIN with all of our previous-session
-     * register writes still in place (see
-     * docs/deep-sleep-black-screen-investigation.md). This boolean
-     * is used below to (a) release any RST-pin deep-sleep hold and
-     * (b) force a full vendor-init replay on boards that normally
-     * skip it (Touch-LCD-3.49) -- the bare-bones SLPOUT/MADCTL/
-     * TE/NORON/DISPON sequence cannot recover a controller stuck
-     * in warm-RST-while-in-SLPIN, but re-running the 0xBB unlock +
-     * full vendor-reg block does. */
-    const esp_reset_reason_t reset_reason = esp_reset_reason();
-    const bool waking_from_deep_sleep = (reset_reason == ESP_RST_DEEPSLEEP);
+    /* Log the reset/wake cause so post-wake symptoms are easy to
+     * confirm from the serial monitor. We deliberately do NOT
+     * override s_skip_vendor_init based on the reset reason: an
+     * earlier attempt to force the JC3248W535-style vendor-register
+     * replay on deep-sleep wake (commit c54ae34) was based on the
+     * false hope that "any AXS15231B vendor recipe" could recover
+     * the Touch-LCD-3.49 from a warm-RST/SLPIN stuck state. In
+     * practice the JC3248W535 recipe is panel-specific and clobbers
+     * the Touch-LCD-3.49's correct factory defaults -- to the point
+     * where even pressing the EN/RESET button does not recover the
+     * panel (only a full USB unplug/replug does, because LCD VCI
+     * stays powered across the MCU reset). The actual fix is in
+     * display_deep_sleep_prepare(), which now leaves the panel in
+     * the display-on state through deep sleep so we never enter
+     * that stuck state in the first place. See
+     * docs/deep-sleep-black-screen-investigation.md. */
     ESP_LOGI(TAG, "init: reset_reason=%d wake_cause=%d",
-             (int)reset_reason, (int)esp_sleep_get_wakeup_cause());
-
-    if (waking_from_deep_sleep && s_skip_vendor_init) {
-        ESP_LOGI(TAG, "deep-sleep wake: overriding skip_vendor_init "
-                      "to force panel re-init out of warm-RST/SLPIN");
-        s_skip_vendor_init = false;
-    }
+             (int)esp_reset_reason(), (int)esp_sleep_get_wakeup_cause());
 
     /* If a deep-sleep-only BL cut pin is configured, release any
      * hold latched by a previous deep-sleep cycle and explicitly
@@ -1330,20 +1326,32 @@ extern "C" int display_get_buffer_size(void)
 
 extern "C" void display_deep_sleep_prepare(void)
 {
-    /* Per user request: turn the panel off (DISPOFF + SLPIN) in
-     * addition to cutting the backlight, so the deep-sleep
-     * transition is fully blanked rather than just dim.
+    /* Leave the panel in its current display-on state through deep
+     * sleep. We deliberately do NOT call display_sleep() (DISPOFF +
+     * SLPIN) here: on this controller a hardware reset while the
+     * panel is in SLPIN puts the AXS15231B into a stuck state that
+     * the bare-bones wake-time init (SLPOUT / MADCTL / TE / NORON /
+     * DISPON) cannot recover. Worse, the stuck state survives an
+     * MCU reset -- the user reported that even pressing the EN/RESET
+     * button does not bring the display back; only a full USB
+     * unplug/replug does (because LCD VCI stays powered across the
+     * MCU reset, so the panel registers are never POR'd).
      *
-     * Earlier revisions of this function deliberately skipped
-     * display_sleep() to sidestep the "warm RST while in SLPIN"
-     * black-screen-on-wake corner case documented in
-     * docs/deep-sleep-black-screen-investigation.md. We now rely on
-     * the unconditional hw_reset (250 ms LOW) + full
-     * axs15231b_init_sequence (SLPOUT + vendor regs + DISPON) that
-     * run on every boot (including post-deep-sleep wake) to bring
-     * the controller back from that state. See the "Resolution"
-     * section of that doc for the full reasoning. */
-    display_sleep();
+     * Earlier revisions tried two opposite fixes:
+     *   - Skip display_sleep() here (worked).
+     *   - Call display_sleep() here and rely on an unconditional
+     *     vendor-init replay on wake to recover (does not work on
+     *     Touch-LCD-3.49 because its vendor-reg block is panel-
+     *     specific and the JC3248W535 recipe clobbers it).
+     *
+     * Going back to the first approach. The user-visible cost is
+     * that the controller is still running through deep sleep,
+     * which adds a small amount of standby current. Cutting the
+     * backlight below dominates the power saving anyway, and on
+     * wake the bare-bones init sequence becomes an effective no-op
+     * on the already-running panel, eliminating the warm-RST
+     * recovery problem entirely. See
+     * docs/deep-sleep-black-screen-investigation.md. */
 
     /* Pick the BL pin to drive LOW. Two paths:
      *
