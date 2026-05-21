@@ -32,6 +32,15 @@ static git_sync_callback_t s_callback = NULL;
 static char s_last_error[128] = "";
 static char s_last_sync[32]   = "";
 
+/* Per-operation counters, updated from do_pull() / do_push() and read
+ * by sync_task() to compose a human-readable summary in the final
+ * GIT_SYNC_SUCCESS status-bar message. Reset at the start of each
+ * sync_task() run. */
+static int s_pushed_count    = 0;  /* files uploaded to remote */
+static int s_pulled_count    = 0;  /* files downloaded from remote */
+static int s_remote_deleted  = 0;  /* files deleted on the remote */
+static int s_local_deleted   = 0;  /* files deleted locally by pull */
+
 /* Task stack + TCB allocated from SPIRAM so that the sync task does not
  * compete for scarce internal DRAM with BLE and WiFi.
  *
@@ -377,7 +386,7 @@ static void remove_saved_sha(const char *name)
 
 static esp_err_t do_pull(void)
 {
-    notify(GIT_SYNC_IN_PROGRESS, "Pulling remote files...");
+    notify(GIT_SYNC_IN_PROGRESS, "Listing remote files...");
 
     /* List remote files.  When remote_path is empty the files live at the
      * repository root, so the URL must be ".../contents?ref=..." (no
@@ -417,8 +426,25 @@ static esp_err_t do_pull(void)
      * entry that remains unseen at the end was deleted on the remote. */
     reset_seen_flags();
 
+    /* Count remote .md files so the per-file progress notifications
+     * can show "i/N" rather than just a running counter. */
+    int total_md = 0;
+    {
+        cJSON *it;
+        cJSON_ArrayForEach(it, root) {
+            cJSON *jn = cJSON_GetObjectItem(it, "name");
+            cJSON *jt = cJSON_GetObjectItem(it, "type");
+            if (!jn || !jt) continue;
+            if (strcmp(jt->valuestring, "file") != 0) continue;
+            const char *nm = jn->valuestring;
+            size_t l = strlen(nm);
+            if (l >= 4 && strcmp(nm + l - 3, ".md") == 0) total_md++;
+        }
+    }
+
     int pulled = 0;
     int skipped = 0;
+    int seen_md = 0;
     cJSON *item;
     cJSON_ArrayForEach(item, root) {
         cJSON *jname = cJSON_GetObjectItem(item, "name");
@@ -432,6 +458,8 @@ static esp_err_t do_pull(void)
         const char *name = jname->valuestring;
         size_t nlen = strlen(name);
         if (nlen < 4 || strcmp(name + nlen - 3, ".md") != 0) continue;
+
+        seen_md++;
 
         /* Record that this saved entry (if any) was seen on the remote. */
         mark_seen(name);
@@ -477,6 +505,12 @@ static esp_err_t do_pull(void)
         }
 
         /* Download file */
+        {
+            char pmsg[96];
+            snprintf(pmsg, sizeof(pmsg), "Pulling %d/%d: %s",
+                     seen_md, total_md, name);
+            notify(GIT_SYNC_IN_PROGRESS, pmsg);
+        }
         s_resp_len = 0;
         ret = api_request(jurl->valuestring, HTTP_METHOD_GET, NULL, &status);
         if (ret != ESP_OK) continue;
@@ -536,6 +570,11 @@ static esp_err_t do_pull(void)
 
         if (strcmp(local_sha, saved_sha) == 0) {
             /* Local matches last sync -- safe to delete locally. */
+            {
+                char pmsg[96];
+                snprintf(pmsg, sizeof(pmsg), "Deleting local: %s", name);
+                notify(GIT_SYNC_IN_PROGRESS, pmsg);
+            }
             if (sd_card_delete_file(local_path) == ESP_OK) {
                 ESP_LOGI(TAG, "Pull: deleted locally (gone on remote): %s",
                          name);
@@ -559,6 +598,8 @@ static esp_err_t do_pull(void)
 
     ESP_LOGI(TAG, "Pulled %d file(s), skipped %d, deleted %d, conflicts %d",
              pulled, skipped, removed, conflicts);
+    s_pulled_count  = pulled;
+    s_local_deleted = removed;
     return ESP_OK;
 }
 
@@ -1051,6 +1092,16 @@ static esp_err_t do_push(void)
      * needs to be propagated to the remote. */
     reset_seen_flags();
 
+    /* First pass: count .md files so the per-file progress message can
+     * show "i/N" rather than just a running counter. */
+    int total_md = 0;
+    for (int i = 0; i < count; i++) {
+        if (entries[i].is_dir) continue;
+        const char *n = entries[i].name;
+        size_t l = strlen(n);
+        if (l >= 4 && strcmp(n + l - 3, ".md") == 0) total_md++;
+    }
+
     int pushed = 0;
     int attempted = 0;
     for (int i = 0; i < count; i++) {
@@ -1063,6 +1114,12 @@ static esp_err_t do_push(void)
         mark_seen(name);
 
         attempted++;
+        {
+            char pmsg[96];
+            snprintf(pmsg, sizeof(pmsg), "Pushing %d/%d: %s",
+                     attempted, total_md, name);
+            notify(GIT_SYNC_IN_PROGRESS, pmsg);
+        }
         if (push_file(name) == ESP_OK) pushed++;
     }
 
@@ -1085,6 +1142,11 @@ static esp_err_t do_push(void)
         strncpy(saved_sha, s_sync_state[i].sha, sizeof(saved_sha));
         saved_sha[sizeof(saved_sha) - 1] = '\0';
 
+        {
+            char pmsg[96];
+            snprintf(pmsg, sizeof(pmsg), "Deleting remote: %s", name);
+            notify(GIT_SYNC_IN_PROGRESS, pmsg);
+        }
         if (delete_remote_file(name, saved_sha) == ESP_OK) {
             deleted++;
         } else {
@@ -1110,6 +1172,8 @@ static esp_err_t do_push(void)
     if (pushed < attempted) {
         ESP_LOGW(TAG, "%d file(s) failed to push", attempted - pushed);
     }
+    s_pushed_count   = pushed;
+    s_remote_deleted = deleted;
     return ESP_OK;
 }
 
@@ -1127,6 +1191,13 @@ static void sync_task(void *arg)
 
     /* Load last-synced per-file SHAs for 3-way comparison. */
     load_sync_state();
+
+    /* Reset per-operation counters so the final summary reflects only
+     * this run. */
+    s_pushed_count   = 0;
+    s_pulled_count   = 0;
+    s_remote_deleted = 0;
+    s_local_deleted  = 0;
 
     esp_err_t pull_ret = ESP_OK;
     esp_err_t push_ret = ESP_OK;
@@ -1157,7 +1228,49 @@ done:
 
         if (ok) {
             snprintf(s_last_sync, sizeof(s_last_sync), "OK");
-            notify(GIT_SYNC_SUCCESS, "Sync complete");
+
+            /* Compose a summary that reflects what actually happened so
+             * the user can tell at a glance whether any files moved.
+             * Examples:
+             *   "Sync complete (up to date)"
+             *   "Sync complete (pushed 2)"
+             *   "Sync complete (pushed 1, pulled 3)"
+             *   "Sync complete (pulled 2, deleted 1 local)" */
+            char summary[96];
+            int pos = snprintf(summary, sizeof(summary), "Sync complete");
+            bool any = (s_pushed_count || s_pulled_count ||
+                        s_remote_deleted || s_local_deleted);
+            if (!any) {
+                snprintf(summary + pos, sizeof(summary) - pos,
+                         " (up to date)");
+            } else {
+                pos += snprintf(summary + pos, sizeof(summary) - pos, " (");
+                const char *sep = "";
+                if (s_pushed_count) {
+                    pos += snprintf(summary + pos, sizeof(summary) - pos,
+                                    "%spushed %d", sep, s_pushed_count);
+                    sep = ", ";
+                }
+                if (s_pulled_count) {
+                    pos += snprintf(summary + pos, sizeof(summary) - pos,
+                                    "%spulled %d", sep, s_pulled_count);
+                    sep = ", ";
+                }
+                if (s_remote_deleted) {
+                    pos += snprintf(summary + pos, sizeof(summary) - pos,
+                                    "%sdeleted %d remote",
+                                    sep, s_remote_deleted);
+                    sep = ", ";
+                }
+                if (s_local_deleted) {
+                    pos += snprintf(summary + pos, sizeof(summary) - pos,
+                                    "%sdeleted %d local",
+                                    sep, s_local_deleted);
+                    sep = ", ";
+                }
+                snprintf(summary + pos, sizeof(summary) - pos, ")");
+            }
+            notify(GIT_SYNC_SUCCESS, summary);
         } else {
             /* set_error() was already called by the failing operation;
              * just make sure the state is ERROR so a new sync can be

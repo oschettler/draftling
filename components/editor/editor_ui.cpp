@@ -3698,7 +3698,11 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         break;
     }
     case GIT_SYNC_SUCCESS:
-        editor_ui_set_status("Git: sync complete");
+    {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "Git: %s",
+                 message ? message : "sync complete");
+        editor_ui_set_status(buf);
         /* If a file is currently open in the editor, reload it from disk
          * so the user sees any changes that were pulled from the remote. */
         if (editor_get_mode() == EDITOR_MODE_EDITING && editor_get_file_path()) {
@@ -3720,6 +3724,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
             refresh_file_list();
         }
         break;
+    }
     case GIT_SYNC_ERROR:
     {
         char buf[128];
