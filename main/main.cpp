@@ -304,6 +304,7 @@ extern "C" void app_main(void)
         tcfg.swap_xy  = TOUCH_SWAP_XY  ? true : false;
         tcfg.mirror_x = TOUCH_MIRROR_X ? true : false;
         tcfg.mirror_y = TOUCH_MIRROR_Y ? true : false;
+        tcfg.user_rotate_deg = DISPLAY_ROTATE;
         touchscreen_init(&tcfg);
     }
 #endif

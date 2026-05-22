@@ -91,8 +91,32 @@ static void native_to_logical(int nx, int ny, int *ox, int *oy)
     int lx = (int)((int64_t)rx * s_cfg.logical_width  / sx_native);
     int ly = (int)((int64_t)ry * s_cfg.logical_height / sy_native);
 
-    *ox = clamp(lx, 0, s_cfg.logical_width  - 1);
-    *oy = clamp(ly, 0, s_cfg.logical_height - 1);
+    lx = clamp(lx, 0, s_cfg.logical_width  - 1);
+    ly = clamp(ly, 0, s_cfg.logical_height - 1);
+
+    /* Apply the user-requested display rotation so the reported
+     * coordinates match the rotated UI seen on screen. */
+    int rot = s_cfg.user_rotate_deg;
+    if (rot < 0) rot = ((rot % 360) + 360) % 360;
+    else        rot = rot % 360;
+    switch (rot) {
+    case 90:
+        *ox = ly;
+        *oy = (s_cfg.logical_width  - 1) - lx;
+        break;
+    case 180:
+        *ox = (s_cfg.logical_width  - 1) - lx;
+        *oy = (s_cfg.logical_height - 1) - ly;
+        break;
+    case 270:
+        *ox = (s_cfg.logical_height - 1) - ly;
+        *oy = lx;
+        break;
+    default:
+        *ox = lx;
+        *oy = ly;
+        break;
+    }
 }
 
 /* ---- AXS5106L (magic-packet) driver ---- */

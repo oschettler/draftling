@@ -73,6 +73,14 @@ typedef struct {
     bool mirror_x;
     bool mirror_y;
     bool swap_xy;
+
+    /* User-requested display rotation (DRAFTLING_DISPLAY_ROTATE_ANGLE,
+     * one of 0 / 90 / 180 / 270). Applied AFTER the
+     * native -> logical transform above so the touch coordinates
+     * returned to LVGL match the rotated UI seen by the user. With
+     * 90 or 270 the output x/y ranges are the swapped
+     * (logical_height, logical_width). */
+    int user_rotate_deg;
 } touchscreen_config_t;
 
 /* Initialize the touchscreen and register an LVGL pointer indev.

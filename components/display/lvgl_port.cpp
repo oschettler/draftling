@@ -21,17 +21,140 @@ static const char *TAG = "LvglPort";
 
 static SemaphoreHandle_t s_lvgl_mux = NULL;
 
+/* User-requested display rotation (DRAFTLING_DISPLAY_ROTATE_ANGLE).
+ * LVGL v9.2's lv_display_set_rotation only swaps the reported
+ * horizontal / vertical resolution -- it does NOT rotate the
+ * rendered buffer before handing it to the flush callback. We
+ * therefore software-rotate each partial tile here, in flush_cb,
+ * before pushing it to the display backend.
+ *
+ * s_phys_w / s_phys_h are the panel dimensions in the
+ * pre-user-rotation (backend-native) orientation; flush_cb maps
+ * the LVGL-coordinate tile back into this space. */
+static int       s_rotate_deg = 0;
+static int       s_phys_w     = 0;
+static int       s_phys_h     = 0;
+static uint16_t *s_rot_buf    = NULL;
+static size_t    s_rot_buf_px = 0;
+
+/* Rotate an RGB565 tile (w x h) in src by 90 / 180 / 270 degrees CW
+ * into dst. Caller guarantees dst has enough room for w*h pixels. */
+static void rotate_tile_rgb565(const uint16_t *src, uint16_t *dst,
+                               int w, int h, int rotate_deg)
+{
+    switch (rotate_deg) {
+    case 90: {
+        /* (i, j) -> (h - 1 - j, i); dest is h wide, w tall */
+        int dst_w = h;
+        for (int j = 0; j < h; j++) {
+            int di = h - 1 - j;
+            const uint16_t *srow = src + (size_t)j * w;
+            for (int i = 0; i < w; i++) {
+                dst[(size_t)i * dst_w + di] = srow[i];
+            }
+        }
+        break;
+    }
+    case 180: {
+        /* (i, j) -> (w - 1 - i, h - 1 - j) */
+        for (int j = 0; j < h; j++) {
+            const uint16_t *srow = src + (size_t)j * w;
+            uint16_t *drow = dst + (size_t)(h - 1 - j) * w;
+            for (int i = 0; i < w; i++) {
+                drow[w - 1 - i] = srow[i];
+            }
+        }
+        break;
+    }
+    case 270: {
+        /* (i, j) -> (j, w - 1 - i); dest is h wide, w tall */
+        int dst_w = h;
+        for (int j = 0; j < h; j++) {
+            const uint16_t *srow = src + (size_t)j * w;
+            for (int i = 0; i < w; i++) {
+                dst[(size_t)(w - 1 - i) * dst_w + j] = srow[i];
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+/* Map the LVGL (logical, post-rotation) tile area to physical panel
+ * coordinates and dimensions. */
+static void map_area_to_physical(const lv_area_t *area, int rotate_deg,
+                                 int phys_w, int phys_h,
+                                 int *px, int *py, int *pw, int *ph)
+{
+    int x1 = area->x1, y1 = area->y1, x2 = area->x2, y2 = area->y2;
+    int w  = x2 - x1 + 1;
+    int h  = y2 - y1 + 1;
+
+    switch (rotate_deg) {
+    case 90:
+        *px = phys_w - 1 - y2;
+        *py = x1;
+        *pw = h;
+        *ph = w;
+        break;
+    case 180:
+        *px = phys_w - 1 - x2;
+        *py = phys_h - 1 - y2;
+        *pw = w;
+        *ph = h;
+        break;
+    case 270:
+        *px = y1;
+        *py = phys_h - 1 - x2;
+        *pw = h;
+        *ph = w;
+        break;
+    default:
+        *px = x1;
+        *py = y1;
+        *pw = w;
+        *ph = h;
+        break;
+    }
+}
+
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_map)
 {
     int w = area->x2 - area->x1 + 1;
     int h = area->y2 - area->y1 + 1;
+
+    /* Software-rotate the tile into the backend-native panel
+     * orientation, then translate the area to physical coords. The
+     * RLCD per-pixel fallback further down also needs rotated
+     * coordinates, so we always do the mapping when a user rotation
+     * is configured. */
+    int phys_x = area->x1, phys_y = area->y1, phys_w = w, phys_h = h;
+    uint8_t *push_buf = color_map;
+
+    if (s_rotate_deg == 90 || s_rotate_deg == 180 || s_rotate_deg == 270) {
+        size_t px_count = (size_t)w * (size_t)h;
+        if (px_count > s_rot_buf_px) {
+            if (s_rot_buf) heap_caps_free(s_rot_buf);
+            s_rot_buf = (uint16_t *)heap_caps_malloc(px_count * sizeof(uint16_t),
+                                                    MALLOC_CAP_SPIRAM);
+            assert(s_rot_buf);
+            s_rot_buf_px = px_count;
+        }
+        rotate_tile_rgb565((const uint16_t *)color_map, s_rot_buf,
+                           w, h, s_rotate_deg);
+        push_buf = (uint8_t *)s_rot_buf;
+        map_area_to_physical(area, s_rotate_deg, s_phys_w, s_phys_h,
+                             &phys_x, &phys_y, &phys_w, &phys_h);
+    }
 
     /* Fast path: if the backend supports it, push the LVGL RGB565
      * framebuffer directly to the panel without going through our
      * per-pixel 1-bpp conversion. The PaperS3 (M5GFX) backend uses
      * this; the RLCD backend returns false and we fall back to the
      * legacy per-pixel path below. */
-    if (display_push_rgb565(area->x1, area->y1, w, h, color_map)) {
+    if (display_push_rgb565(phys_x, phys_y, phys_w, phys_h, push_buf)) {
         /* LVGL may slice a single dirty region into multiple
          * draw-buffer-sized chunks (in PARTIAL render mode) or invalidate
          * several disjoint regions in one cycle. Only trigger the panel
@@ -60,7 +183,14 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
             (void)x; (void)y; (void)buf;
 #else
             uint8_t color = (*buf < 0x7FFF) ? 0x00 : 0xFF;
-            display_set_pixel(x, y, color);
+            int px = x, py = y;
+            switch (s_rotate_deg) {
+            case 90:  px = s_phys_w - 1 - y; py = x; break;
+            case 180: px = s_phys_w - 1 - x; py = s_phys_h - 1 - y; break;
+            case 270: px = y; py = s_phys_h - 1 - x; break;
+            default:  break;
+            }
+            display_set_pixel(px, py, color);
 #endif
             buf++;
         }
@@ -92,6 +222,19 @@ static void lvgl_task(void *arg)
 
 extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
 {
+    /* Stash the user-requested rotation and the backend-native panel
+     * dimensions so flush_cb can software-rotate each LVGL tile back
+     * into physical panel coordinates (LVGL v9.2 swaps the reported
+     * horizontal/vertical resolution after lv_display_set_rotation
+     * but does not rotate the rendered buffer for us). */
+    s_rotate_deg = (rotate_deg % 360 + 360) % 360;
+    if (s_rotate_deg != 0 && s_rotate_deg != 90 &&
+        s_rotate_deg != 180 && s_rotate_deg != 270) {
+        s_rotate_deg = 0;
+    }
+    s_phys_w = width;
+    s_phys_h = height;
+
     /* Recursive mutex so a task that already holds it can call
      * lvgl_port_lock() again without deadlocking. The "Sleep now"
      * menu path is the motivating case: it runs inside the LVGL
