@@ -65,10 +65,75 @@
 #include "epdiy.h"
 #include "epd_init_config.h"
 #include <driver/i2c_master.h>
+#include <driver/ledc.h>
 
 #include "display.h"
 
 static const char *TAG = "DisplayEPDIY";
+
+/* ---- Front-light (white edge-lit LED) PWM ----
+ *
+ * The LilyGO T5 E-Paper S3 Pro / Pro Lite carry a controllable
+ * white front-light driven from GPIO 11 (BOARD_BL_EN in the
+ * LilyGO factory firmware -- see Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO
+ * docs/pin_define.md and examples/factory/main/ui_port.cpp, which
+ * pulses the pin with `analogWrite(BOARD_BL_EN, {0,50,100,230})`
+ * for its four brightness levels). We drive it with the same LEDC
+ * PWM topology the colour-LCD backends use (5 kHz / 10-bit,
+ * timer/channel 0), so the editor's display_set_backlight(percent)
+ * plumbing works unchanged. The pin is active HIGH (duty 0 = off,
+ * duty MAX = full brightness); 0 % is a legitimate value -- e-paper
+ * is reflective and stays readable without any front-light, so the
+ * editor Settings cycle includes a 0 % step.
+ *
+ * Other epdiy board variants (none today) that lack a controllable
+ * front-light leave EPDIY_BL_PIN unset and the whole LEDC block
+ * compiles out; display_set_backlight() becomes a no-op. */
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#define EPDIY_BL_PIN        11
+#endif
+
+#if defined(EPDIY_BL_PIN)
+#define EPDIY_HAS_BACKLIGHT 1
+#define BL_LEDC_TIMER       LEDC_TIMER_0
+#define BL_LEDC_MODE        LEDC_LOW_SPEED_MODE
+#define BL_LEDC_CHANNEL     LEDC_CHANNEL_0
+#define BL_LEDC_DUTY_RES    LEDC_TIMER_10_BIT
+#define BL_LEDC_DUTY_MAX    ((1 << 10) - 1)
+#define BL_LEDC_FREQ_HZ     5000
+
+static bool s_bl_inited    = false;
+
+static void backlight_pwm_init(int bl_pin)
+{
+    if (bl_pin < 0 || s_bl_inited) return;
+
+    ledc_timer_config_t t = {};
+    t.speed_mode      = BL_LEDC_MODE;
+    t.duty_resolution = BL_LEDC_DUTY_RES;
+    t.timer_num       = BL_LEDC_TIMER;
+    t.freq_hz         = BL_LEDC_FREQ_HZ;
+    t.clk_cfg         = LEDC_AUTO_CLK;
+    ESP_ERROR_CHECK(ledc_timer_config(&t));
+
+    ledc_channel_config_t c = {};
+    c.gpio_num   = bl_pin;
+    c.speed_mode = BL_LEDC_MODE;
+    c.channel    = BL_LEDC_CHANNEL;
+    c.timer_sel  = BL_LEDC_TIMER;
+    c.intr_type  = LEDC_INTR_DISABLE;
+    /* Start in the OFF state (matches the LilyGO factory firmware
+     * which pulls BOARD_BL_EN low at boot). The editor restores
+     * the persisted brightness from NVS via display_set_backlight()
+     * once it has loaded the user setting. */
+    c.duty       = 0;
+    c.hpoint     = 0;
+    ESP_ERROR_CHECK(ledc_channel_config(&c));
+
+    s_bl_inited = true;
+}
+#endif  /* EPDIY_BL_PIN */
 
 /* Caller-supplied I2C master bus handle (created in main.cpp before
  * display_init), so epdiy and the GT911 touch driver can share the
@@ -290,6 +355,13 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     s_partial_count  = 0;
     s_initialized    = true;
 
+#if defined(EPDIY_HAS_BACKLIGHT)
+    /* Bring up the front-light PWM. We do this after epdiy has
+     * claimed its own pins so an accidental GPIO conflict shows up
+     * here (LEDC owns the pin once ledc_channel_config returns). */
+    backlight_pwm_init(EPDIY_BL_PIN);
+#endif
+
     ESP_LOGI(TAG, "T5 E-Paper S3 Pro display initialized via epdiy "
                   "(%dx%d panel, scale=%d -> %dx%d logical), full refresh "
                   "every %d partials",
@@ -435,9 +507,19 @@ extern "C" int display_get_buffer_size(void)
     return 0;
 }
 
-extern "C" void display_set_backlight(int /*percent*/)
+extern "C" void display_set_backlight(int percent)
 {
-    /* E-paper has no controllable backlight. */
+#if defined(EPDIY_HAS_BACKLIGHT)
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    if (!s_bl_inited) return;
+    uint32_t duty = (uint32_t)((BL_LEDC_DUTY_MAX * percent) / 100);
+    ESP_ERROR_CHECK(ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL));
+#else
+    (void)percent;
+    /* This epdiy board variant has no controllable front-light. */
+#endif
 }
 
 extern "C" void display_sleep(void)
@@ -453,6 +535,17 @@ extern "C" void display_wake(void)
 
 extern "C" void display_deep_sleep_prepare(void)
 {
+#if defined(EPDIY_HAS_BACKLIGHT)
+    /* Cut the front-light so it does not burn battery while the
+     * MCU is asleep. We drive the pin directly via the LEDC duty
+     * register (faster than tearing the timer down) and leave it
+     * up to the post-wake display_init() to re-initialize the
+     * channel from scratch. */
+    if (s_bl_inited) {
+        ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0);
+        ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+    }
+#endif
     if (!s_initialized) return;
     /* epdiy README + issue #14: epd_poweroff() alone leaks battery
      * after deep sleep -- the I2C bus and LCD-peripheral ISR must

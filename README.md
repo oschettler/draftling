@@ -151,6 +151,7 @@ Git repository via the GitHub REST API.
 | Ctrl+C / Ctrl+X / Ctrl+V | Copy / Cut / Paste the current selection |
 | Ctrl+A | Select all |
 | Ctrl+R | Force full e-paper refresh (clears ghosting; e-paper boards only) |
+| Ctrl+B | Cycle backlight / front-light brightness (boards with a controllable backlight) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
 | Escape | Switch to file browser |
@@ -270,9 +271,16 @@ Found at the top-level **DRAFTLING Configuration** menu.
 | **Standby: wake from deep sleep on touchscreen tap** | bool | y on JC3248W535, n otherwise | Arm EXT0 on the touch INT line so any tap wakes the device. |
 
 > Backlight brightness on color-LCD boards is not a menuconfig option:
-> it is set at runtime from F1 -> Settings -> Backlight and persisted
-> in NVS (default 50%). The backend drives the BL GPIO with an LEDC
-> PWM signal (~5 kHz, 10-bit). 0% = off, 100% = full brightness.
+> it is set at runtime from F1 -> Settings -> Backlight (or the
+> Ctrl+B shortcut) and persisted in NVS (default 50%). The backend
+> drives the BL GPIO with an LEDC PWM signal (~5 kHz, 10-bit). 0% =
+> off, 100% = full brightness.
+>
+> The LilyGO T5 E-Paper S3 Pro / Pro Lite carry a controllable white
+> front-light (GPIO 11) which uses the same Settings entry / Ctrl+B
+> shortcut. Because the e-paper panel is reflective and remains
+> readable without any illumination, the cycle on these boards also
+> includes a 0 % step that fully turns the front-light off.
 
 > **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the
 > single-pulse `epd_fast` waveform for partial refreshes (one visible

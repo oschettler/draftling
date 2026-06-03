@@ -492,7 +492,7 @@ in C / C++ code:
 | DRAFTLING_DISPLAY_AXS15231B       | Selects `display_axs15231b.cpp`   | Touch-LCD-3.49, JC3248W535 |
 | DRAFTLING_DISPLAY_ST7789          | Selects `display_st7789.cpp`      | T-Display-S3 |
 | DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B + ST7789 boards |
-| DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings; calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards |
+| DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings, enables the Ctrl+B cycle shortcut, and calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards, LilyGO T5 E-Paper S3 Pro / Pro Lite |
 | DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T-Display-S3 |
 | DRAFTLING_HAS_POWER_LATCH         | Enables the `power` component: TCA9554-latched battery rail + PWR-button long-press = power off; standby cuts the latch before falling back to deep sleep | Touch-LCD-3.49 |
 | DRAFTLING_SD_SDMMC                | Routes SD init through the on-chip SDMMC peripheral (1-bit) instead of generic SPI | RLCD-4.2 |

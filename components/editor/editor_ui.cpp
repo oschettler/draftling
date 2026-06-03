@@ -250,6 +250,13 @@ static inline lv_color_t theme_bg(void)
  * so the display backend remaps low percents into a higher PWM
  * duty range (preferred -- keeps the full UI range). */
 static const int BACKLIGHT_OPTIONS[] = {
+#if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 0
+    /* Only meaningful on reflective / e-paper panels that stay
+     * readable without any back/front-light; transmissive LCDs
+     * raise CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT above 0 to drop
+     * this step. */
+    0,
+#endif
 #if CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 10
     10,
 #endif
@@ -3081,6 +3088,23 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+        case 'b': {
+            /* Ctrl+B: cycle to the next backlight / front-light
+             * brightness step (same cycle as F1 -> Settings ->
+             * Backlight). Applied immediately and persisted in NVS
+             * so the value survives reboot / deep sleep. */
+            int bi = find_backlight_option(s_backlight_pct);
+            bi = (bi + 1) % BACKLIGHT_OPTION_COUNT;
+            s_backlight_pct = BACKLIGHT_OPTIONS[bi];
+            save_backlight_to_nvs();
+            display_set_backlight(s_backlight_pct);
+            char sbuf[32];
+            snprintf(sbuf, sizeof(sbuf), "Backlight: %d%%", s_backlight_pct);
+            editor_ui_set_status(sbuf);
+            return;
+        }
+#endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         case 'r':
             /* Ctrl+R: force a full e-paper refresh to clear ghosting

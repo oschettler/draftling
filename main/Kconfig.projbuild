@@ -170,17 +170,31 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
     default y if DRAFTLING_DISPLAY_AXS15231B
     default y if DRAFTLING_DISPLAY_ST7789
+    # LilyGO T5 E-Paper S3 Pro / Pro Lite carry a controllable white
+    # front-light edge-lit LED on GPIO 11 (BOARD_BL_EN in the LilyGO
+    # factory firmware). The EPDIY display backend drives it with
+    # the standard LEDC PWM block, so the editor Settings menu and
+    # Ctrl+B shortcut work on these boards too.
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
 # Minimum backlight percentage offered by the Settings menu. The
-# editor cycles through the steps {10, 25, 50, 75, 100} %, but on
+# editor cycles through the steps {0, 10, 25, 50, 75, 100} %, but on
 # some panels the lowest steps are too dark to be usable. Bumping
 # this value drops the dim steps from the cycle so the user cannot
-# accidentally land on an unreadable brightness. Non-prompted; set
+# accidentally land on an unreadable brightness. The 0 % step is
+# only included when this value is 0 (it makes sense for reflective
+# / e-paper panels that stay readable without any back/front-light;
+# transmissive LCDs would just go fully dark). Non-prompted; set
 # per model below.
 config DRAFTLING_BACKLIGHT_MIN_PCT
     int
     depends on DRAFTLING_DISPLAY_HAS_BACKLIGHT
+    # E-paper boards remain readable without the front-light, so let
+    # the user dial brightness all the way down to 0 %.
+    default 0 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default 0 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 10
 
 # DRAFTLING_BL_DUTY_FLOOR_PCT shifts the bottom of the PWM duty

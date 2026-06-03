@@ -167,6 +167,20 @@
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
 
+/* Front-light (white edge-lit LED panel illumination).
+ *
+ * The T5 E-Paper S3 Pro / Pro Lite carry a controllable white front-
+ * light on GPIO 11 (BOARD_BL_EN in the LilyGO factory firmware --
+ * Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO docs/pin_define.md and
+ * examples/factory/main/ui_port.cpp). Pin is active HIGH and the
+ * actual LEDC PWM init lives inside the EPDIY display backend
+ * (components/display/display_epdiy.cpp, gated on
+ * CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE]), so no pin
+ * macro needs to be exported here. Unlike the colour-LCD boards,
+ * the e-paper panel itself is readable without any front-light, so
+ * the editor Settings cycle includes a 0 % step (see
+ * DRAFTLING_BACKLIGHT_MIN_PCT in main/Kconfig.projbuild). */
+
 /* Deep-sleep wakeup on the BOOT button (GPIO 0, active-low strapping
  * pin with a board-level pull-up; RTC-capable so EXT0 wake works).
  * Matches BOARD_BOOT_BTN in examples/factory/main/utilities.h. */
