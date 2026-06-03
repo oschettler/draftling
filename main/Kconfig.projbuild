@@ -68,18 +68,6 @@ config DRAFTLING_MODEL_JC3248W535
         user buttons besides the power switch; deep sleep is woken
         by the touchscreen.
 
-config DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
-    bool "LilyGO T-Display-S3 (ST7789, 1.9\" color LCD, 320x170)"
-    depends on IDF_TARGET_ESP32S3
-    help
-        LilyGO T-Display-S3 development board: 1.9" IPS color LCD,
-        320x170, ST7789V controller over an 8-bit parallel (i80) bus
-        driven by the ESP32-S3 LCD_CAM peripheral. Has an on-board
-        battery monitor (GPIO4, 1:2 divider) and a BOOT button on
-        GPIO0 used as the deep-sleep wake source. There is no
-        on-board MicroSD slot; documents must be stored on an
-        external SD wired to a free SPI bus.
-
 endchoice
 
 # ---- Derived: display category (driven by hardware-model choice) ----
@@ -92,7 +80,6 @@ config DRAFTLING_DISPLAY_COLOR
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_MODEL_JC3248W535
-    default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     default n
 
 # DRAFTLING_DISPLAY_AXS15231B is set automatically when the selected
@@ -103,15 +90,6 @@ config DRAFTLING_DISPLAY_AXS15231B
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_MODEL_JC3248W535
-    default n
-
-# DRAFTLING_DISPLAY_ST7789 is set automatically when the selected
-# board uses an ST7789 controller over an 8-bit parallel (i80) bus.
-# The display backend (components/display/display_st7789.cpp) is
-# compiled in only for these boards.
-config DRAFTLING_DISPLAY_ST7789
-    bool
-    default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     default n
 
 # DRAFTLING_DISPLAY_RLCD is set automatically when the selected
@@ -169,7 +147,6 @@ config DRAFTLING_DISPLAY_EPDIY
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
     default y if DRAFTLING_DISPLAY_AXS15231B
-    default y if DRAFTLING_DISPLAY_ST7789
     # LilyGO T5 E-Paper S3 Pro / Pro Lite carry a controllable white
     # front-light edge-lit LED on GPIO 11 (BOARD_BL_EN in the LilyGO
     # factory firmware). The EPDIY display backend drives it with
@@ -238,7 +215,6 @@ config DRAFTLING_HAS_BATTERY
     default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
-    default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     # LilyGO T5 E-Paper S3 Pro / Pro Lite: battery is monitored via a
     # BQ27220 fuel gauge on I2C (driver in components/battery,
     # gated on DRAFTLING_BATTERY_BQ27220 below). The shared I2C
@@ -296,7 +272,6 @@ config DRAFTLING_WAKEUP_GPIO
     default 0  if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 0  if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 0  if DRAFTLING_MODEL_JC3248W535
-    default 0  if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 0
@@ -464,7 +439,6 @@ config DRAFTLING_DISPLAY_WIDTH
     default 960 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 640 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 480 if DRAFTLING_MODEL_JC3248W535
-    default 320 if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     help
         Display width in pixels (derived). Driven by the hardware-model
         choice. Must be a multiple of 8 for e-paper backends.
@@ -478,7 +452,6 @@ config DRAFTLING_DISPLAY_HEIGHT
     default 540 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 172 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 320 if DRAFTLING_MODEL_JC3248W535
-    default 170 if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     help
         Display height in pixels (derived). Driven by the hardware-model
         choice.
@@ -526,7 +499,7 @@ config DRAFTLING_DISPLAY_ROTATE_ANGLE
 # Defaults: 2 for the M5Stack PaperS3 (whose 540x960 panel is
 # dense enough that 1:1 Greybeard text is uncomfortably small),
 # 1 everywhere else (one LVGL pixel == one panel pixel).
-# Currently only the M5Stack PaperS3, JC3248W535 and T-Display-S3
+# Currently only the M5Stack PaperS3 and JC3248W535
 # backends implement the up-scaling; on the RLCD backend SCALE > 1
 # has no visible effect.
 config DRAFTLING_DISPLAY_SCALE
@@ -567,45 +540,6 @@ config DRAFTLING_EPD_BLACK_BACKGROUND
         Available only on e-paper boards. The screen is still wiped to
         white before deep sleep regardless of this setting, so the
         panel is left in a clean state while the MCU is asleep.
-
-menu "LilyGO T-Display-S3 external SD card"
-    depends on DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
-
-comment "There is no on-board MicroSD slot on the T-Display-S3."
-comment "Wire an external SD module to a free SPI bus and set its pins below."
-comment "Set MOSI / MISO / SCK / CS to -1 to disable SD card support."
-
-config DRAFTLING_LILYGO_SD_MOSI_PIN
-    int "SD card MOSI / DI GPIO"
-    range -1 48
-    default 11
-    help
-        GPIO connected to the external SD card module's MOSI (DI) pin.
-        Set to -1 to disable SD support entirely.
-
-config DRAFTLING_LILYGO_SD_MISO_PIN
-    int "SD card MISO / DO GPIO"
-    range -1 48
-    default 13
-    help
-        GPIO connected to the external SD card module's MISO (DO) pin.
-
-config DRAFTLING_LILYGO_SD_SCK_PIN
-    int "SD card SCK / CLK GPIO"
-    range -1 48
-    default 12
-    help
-        GPIO connected to the external SD card module's SCK (CLK) pin.
-
-config DRAFTLING_LILYGO_SD_CS_PIN
-    int "SD card CS / SS GPIO"
-    range -1 48
-    default 10
-    help
-        GPIO connected to the external SD card module's CS (chip select)
-        pin.
-
-endmenu
 
 config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
     int "Deep-sleep timeout when no keyboard connects (s)"

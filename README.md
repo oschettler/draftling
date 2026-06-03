@@ -6,22 +6,39 @@ boards with reflective LCD, e-paper or small color LCD displays.
 
 ## Supported hardware
 
-Draftling currently runs on seven ESP32-S3 development boards. All of
+Draftling currently runs on six ESP32-S3 development boards. All of
 them share the same firmware image; the target board is picked at
 build time with `idf.py menuconfig` -> **DRAFTLING Configuration >
 Hardware Model**. Display resolution, driver, pin map, touch
 controller and the deep-sleep wake source are derived automatically
 from that choice.
 
-| Board | Display | Touch | Battery | Wake source | Storage |
-|-------|---------|-------|---------|-------------|---------|
-| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300, SPI | -- | GPIO4 ADC (3:1) | GPIO18 button | On-board MicroSD (SDMMC 1-bit) |
-| [LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (0x55) | BOOT (GPIO0) | On-board MicroSD (SPI3, shared with SX1262 LoRa CS) |
-| [LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (0x55) | BOOT (GPIO0) | On-board MicroSD (SPI3) |
-| [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper ED047TC1, 540x960, parallel I80 (via `m5stack/M5GFX`) | GT911 (I2C) | GPIO3 ADC (1:2) | BOOT (GPIO0); optionally touch (`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`) | On-board MicroSD (SPI3) |
-| [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | AXS5106-family (I2C addr 0x3B) | -- | BOOT (GPIO0) | External SD on SPI |
-| Guition JC3248W535 | 3.5" IPS color, 480x320, AXS15231B QSPI | AXS5106L (I2C) | -- | Touch INT (no user buttons) | External SD on SPI |
-| [LilyGO T-Display-S3](https://github.com/Xinyuan-LilyGO/T-Display-S3) | 1.9" IPS color, 320x170, ST7789 8-bit i80 | -- | GPIO4 ADC (1:2) | BOOT (GPIO0) | External SD on SPI (no on-board slot) |
+- **[Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2)** --
+  4.2" reflective LCD (400x300, SPI). No touch. Battery monitored on
+  GPIO4 (3:1 divider). GPIO18 button wakes from deep sleep. On-board
+  MicroSD on the SDMMC 1-bit peripheral.
+- **[LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
+  4.7" e-paper ED047TC1 (960x540) driven over a parallel bus by
+  `vroland/epdiy` (`epd_board_v7`). GT911 capacitive touch on I2C.
+  BQ27220 fuel gauge on I2C (0x55). BOOT (GPIO0) wakes from deep
+  sleep. On-board MicroSD on SPI3 (shared with the SX1262 LoRa CS).
+- **[LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
+  Same as the Pro variant minus the SX1262 LoRa radio and MIA-M10Q
+  GPS; on-board MicroSD lives alone on SPI3.
+- **[M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3)** --
+  4.7" e-paper ED047TC1 (540x960) driven over a parallel I80 bus by
+  `m5stack/M5GFX`. GT911 touch on I2C. Battery on GPIO3 ADC (1:2).
+  BOOT (GPIO0) wakes from deep sleep (optionally any touch with
+  `CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`). On-board MicroSD on
+  SPI3. **This board is officially discontinued by M5Stack.**
+- **[Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49)** --
+  3.49" IPS color LCD (640x172, AXS15231B over QSPI). AXS5106-family
+  capacitive touch on I2C (0x3B). BOOT (GPIO0) wakes from deep
+  sleep. External SD on a separate SPI bus.
+- **Guition JC3248W535** --
+  3.5" IPS color LCD (480x320, AXS15231B over QSPI). AXS5106L
+  capacitive touch on I2C. No user buttons -- the touch INT line is
+  the deep-sleep wake source. External SD on a separate SPI bus.
 
 All boards use an ESP32-S3 with at least 8 MB of PSRAM and 16 MB of
 flash, BLE for the HID keyboard and 802.11 b/g/n WiFi for Git sync.
@@ -36,47 +53,49 @@ device needs a proper enclosure, preferably with a protective glass.
 The contrast is very low, so it needs good lighting for comfortable
 work. (The screen broke during my tests.)
 
-The **LilyGO T5 E-Paper S3 Pro** and **Pro Lite** are both built
-around the same ED047TC1 4.7" e-paper panel as the M5Stack PaperS3,
-but driven through the open-source [`vroland/epdiy`](https://github.com/vroland/epdiy)
-library (`epd_board_v7` configuration with a TPS65185 PMIC). The Pro
+The **LilyGO T5 E-Paper S3 Pro** and **Pro Lite** are so far the
+most usable option: they pair the same high-contrast 4.7" ED047TC1
+e-paper panel as the M5Stack PaperS3 with a robust, in-production
+board that also carries a controllable white front-light, an
+on-board BQ27220 fuel gauge, GT911 capacitive touch and a MicroSD
+slot. They are driven through the open-source
+[`vroland/epdiy`](https://github.com/vroland/epdiy) library
+(`epd_board_v7` configuration with a TPS65185 PMIC). The Pro
 variant adds a SX1262 LoRa radio, an L76K GPS, an IR LED, a
 vibration motor and an external 18650 holder; from Draftling's
 perspective the Lite is functionally a Pro with those modules
-depopulated. Both carry the same GT911 capacitive touch panel and
-touch is enabled by default on both SKUs (the on-board I2C bus is
-shared between epdiy and the touchscreen component via the pinned
-post-2.0.0 epdiy commit's `epd_init_with_config()` entry point).
-Battery state of charge
-comes from the on-board BQ27220 fuel gauge over I2C (the
-`components/battery/` `battery_init_bq27220()` backend, gated on
-`CONFIG_DRAFTLING_BATTERY_BQ27220`); the editor status bar shows the
-percentage. The on-board MicroSD slot shares
-its SPI bus with the LoRa radio on the Pro; Draftling drives the LoRa
-chip-select HIGH at boot so it does not interfere with SD traffic.
+depopulated. Touch is enabled by default on both SKUs (the on-board
+I2C bus is shared between epdiy and the touchscreen component via
+the pinned post-2.0.0 epdiy commit's `epd_init_with_config()` entry
+point). Battery state of charge comes from the on-board BQ27220
+fuel gauge over I2C (the `components/battery/`
+`battery_init_bq27220()` backend, gated on
+`CONFIG_DRAFTLING_BATTERY_BQ27220`); the editor status bar shows
+the percentage. The on-board MicroSD slot shares its SPI bus with
+the LoRa radio on the Pro; Draftling drives the LoRa chip-select
+HIGH at boot so it does not interfere with SD traffic.
 
-The **M5Stack PaperS3** is so far the most usable option: it is
-compact, packed in a good enclosure with magnets on the back, and the
-contrast is much higher than that of the RLCD display. The reaction is
-significantly slower than with RLCD, but still acceptable. The M5GFX
-driver uses the single-pulse `epd_fast` waveform for partial refreshes
-(one visible flash, ~80-150 ms per update); a full refresh (3-5 s) is
-performed every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
-(default 30) to clear residual ghosting. Draftling feeds the panel
-1-bpp black-and-white content, but M5GFX keeps a 4-bpp grayscale
-framebuffer internally and dithers automatically, so future grayscale
-rendering is a software-only change.
+The **M5Stack PaperS3** is compact, packed in a good enclosure with
+magnets on the back, and offers the same high-contrast 4.7" e-paper
+panel as the LilyGO T5 boards. Reaction is significantly slower than
+with RLCD, but still acceptable. The M5GFX driver uses the
+single-pulse `epd_fast` waveform for partial refreshes (one visible
+flash, ~80-150 ms per update); a full refresh (3-5 s) is performed
+every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (default 30)
+to clear residual ghosting. Draftling feeds the panel 1-bpp
+black-and-white content, but M5GFX keeps a 4-bpp grayscale
+framebuffer internally and dithers automatically, so future
+grayscale rendering is a software-only change. **Note:** the PaperS3
+has been officially discontinued by M5Stack, so it is no longer
+recommended for new builds -- prefer one of the LilyGO T5 E-Paper
+S3 Pro variants for a similar e-paper experience on a board that
+is still in production.
 
 The **Guition JC3248W535** is a color-LCD board with no user buttons,
 so touch is the only local input besides the BLE keyboard: deep-sleep
 wake is armed on the touch INT line and any tap wakes the device.
 Touch also drives the editor and the menu lists; see
 [Touch Operations](#touch-operations) below.
-
-The **LilyGO T-Display-S3** has a small 1.9" panel; it works as a
-secondary / pocket device. It has no on-board MicroSD slot, so an
-external SD card must be wired to a free SPI bus (default pins
-documented in `main/app_config.h`).
 
 The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
 AXS15231B color LCD (natively 172x640 portrait, software-rotated to
@@ -93,7 +112,7 @@ with fast partial updates, the panel cannot keep up with typing and
 quickly accumulates ghosting artefacts. Support for UC8179 has
 therefore been removed from the codebase.
 
-On color LCD boards (Touch-LCD-3.49, JC3248W535, T-Display-S3) the
+On color LCD boards (Touch-LCD-3.49, JC3248W535) the
 editor offers a runtime-selectable color theme (F1 -> Settings ->
 Color theme): light green on black (default), dark green on black,
 amber/orange on black, or white on black. You can also adjust the
@@ -268,7 +287,7 @@ Found at the top-level **DRAFTLING Configuration** menu.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| **Hardware Model** | choice | M5Stack PaperS3 | Select the target board. Display resolution, driver, pin map, touch controller and the deep-sleep wake source are derived automatically. See the [Supported hardware](#supported-hardware) table for all seven options. |
+| **Hardware Model** | choice | M5Stack PaperS3 | Select the target board. Display resolution, driver, pin map, touch controller and the deep-sleep wake source are derived automatically. See the [Supported hardware](#supported-hardware) section for all six options. |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
 | **E-paper full-refresh interval** | int | 30 | E-paper boards only: number of partial refreshes between full refreshes. |
 | **Enable touchscreen input** | bool | y on PaperS3 and JC3248W535, n otherwise | Enable the I2C touch driver and LVGL pointer input device. |
@@ -338,7 +357,7 @@ components/
                      fuel gauge over I2C (T5 E-Paper S3 Pro / Lite)
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
   display/           Display backends (RLCD SPI, EDS3 e-paper via
-                     M5GFX, AXS15231B QSPI, ST7789 8-bit i80) and
+                     M5GFX, AXS15231B QSPI) and
                      LVGL v9 port
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   fonts/             Custom LVGL fonts (Latin, Latin-1 Supplement, Cyrillic)

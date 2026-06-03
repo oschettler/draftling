@@ -502,10 +502,9 @@ in C / C++ code:
 | DRAFTLING_DISPLAY_RLCD            | Selects `display_rlcd.cpp`        | RLCD-4.2 |
 | DRAFTLING_DISPLAY_EPD             | Selects `display_eds3.cpp`; gates EPD-only options (BLACK_BACKGROUND, full-refresh interval) and the editor's no-blink cursor / 120 ms flush debounce | PaperS3 |
 | DRAFTLING_DISPLAY_AXS15231B       | Selects `display_axs15231b.cpp`   | Touch-LCD-3.49, JC3248W535 |
-| DRAFTLING_DISPLAY_ST7789          | Selects `display_st7789.cpp`      | T-Display-S3 |
-| DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B + ST7789 boards |
-| DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings, enables the Ctrl+B cycle shortcut, and calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards, LilyGO T5 E-Paper S3 Pro / Pro Lite |
-| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T-Display-S3, T5 E-Paper S3 Pro / Pro Lite |
+| DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B boards |
+| DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings, enables the Ctrl+B cycle shortcut, and calls `display_set_backlight()` at boot from NVS | AXS15231B boards, LilyGO T5 E-Paper S3 Pro / Pro Lite |
+| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T5 E-Paper S3 Pro / Pro Lite |
 | DRAFTLING_BATTERY_BQ27220         | Selects the BQ27220 fuel-gauge backend (`battery_init_bq27220(shared_i2c_bus)`) instead of the GPIO ADC backend | T5 E-Paper S3 Pro / Pro Lite |
 | DRAFTLING_HAS_POWER_LATCH         | Enables the `power` component: TCA9554-latched battery rail + PWR-button long-press = power off; standby cuts the latch before falling back to deep sleep | Touch-LCD-3.49 |
 | DRAFTLING_SD_SDMMC                | Routes SD init through the on-chip SDMMC peripheral (1-bit) instead of generic SPI | RLCD-4.2 |
@@ -539,9 +538,9 @@ default re-applies automatically whenever `DRAFTLING_HARDWARE_MODEL`
 changes -- no need to delete `sdkconfig`. To override, set the value
 in `sdkconfig.defaults`.
 
-Currently the `display_eds3` (PaperS3 e-paper), `display_axs15231b`
-(Touch-LCD-3.49 / JC3248W535) and `display_st7789` (T-Display-S3)
-backends implement the up-scaling; on the RLCD backend a value > 1
+Currently the `display_eds3` (PaperS3 e-paper) and `display_axs15231b`
+(Touch-LCD-3.49 / JC3248W535) backends implement the up-scaling;
+on the RLCD backend a value > 1
 has no visible effect because the LVGL framebuffer already matches
 the panel size.
 

@@ -12,7 +12,7 @@ extern "C" {
  *   - ADC + resistive divider (battery_init): used on boards that
  *     wire the LiPo cell through a divider into an ESP32-S3 ADC1 pin
  *     (Waveshare ESP32-S3-RLCD-4.2, M5Stack PaperS3,
- *     Waveshare Touch-LCD-3.49, LilyGO T-Display-S3). Voltage maps
+ *     Waveshare Touch-LCD-3.49). Voltage maps
  *     to percentage via a fixed 5-step LiPo discharge table:
  *       >= 4.10 V -> 100 %  (full)
  *       >= 3.95 V ->  75 %

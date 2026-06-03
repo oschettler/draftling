@@ -89,7 +89,7 @@ void display_set_partial_clip(int x, int y, int w, int h);
 /*
  * Put the display panel into low-power sleep mode.
  *
- * On color-LCD backends (AXS15231B, ST7789) this turns the backlight
+ * On color-LCD backends (AXS15231B) this turns the backlight
  * off and sends DISPOFF + SLPIN so the controller drops to its
  * sleep current. On e-paper / reflective-LCD / RLCD backends where
  * the panel retains its image without power the call is a no-op.
@@ -239,8 +239,8 @@ typedef struct {
  *
  * percent is clamped to [0, 100]. 0 = backlight off, 100 = full
  * brightness. The exact PWM frequency / resolution is backend-
- * specific (LEDC PWM at ~5 kHz on the AXS15231B and ST7789
- * backends).
+ * specific (LEDC PWM at ~5 kHz on the AXS15231B
+ * backend).
  *
  * No-op on backends that have no controllable backlight
  * (reflective LCD, e-paper). Boards whose displays expose a
@@ -274,50 +274,11 @@ void display_axs15231b_init(const display_axs15231b_config_t *cfg);
  * back to `i2c_master_bus_handle_t` internally. The bus is created
  * and owned by the caller; the display backend never destroys it.
  *
- * No-op on backends that do not use I2C (RLCD, EDS3, ST7789) or
+ * No-op on backends that do not use I2C (RLCD, EDS3) or
  * whose I2C does not need to be shared with another component
  * (AXS15231B's optional touch sits on a separate bus today).
  */
 void display_set_shared_i2c_bus(void *bus_handle);
-
-/*
- * ST7789 i80 (8-bit parallel) color-LCD driver init.
- *
- * Used by boards with CONFIG_DRAFTLING_DISPLAY_ST7789 (LilyGO
- * T-Display-S3). The driver needs 14 GPIOs (8 data + WR + DC + CS
- * + RST + (optional) BL + (optional) TE) which do not fit in
- * display_init()'s 6 pin slots, so it has its own struct-based
- * init. Call this *instead of* display_init() on ST7789 boards.
- *
- * The caller is responsible for driving any external power-enable
- * GPIO (e.g. LCD_PWR_EN_PIN on the T-Display-S3) high *before*
- * calling this function.
- *
- * After this returns, display_clear / display_set_pixel /
- * display_push_rgb565 / display_flush behave like on any other
- * backend.
- */
-typedef struct {
-    int data[8];      /* D0..D7 */
-    int wr;           /* PCLK / write strobe */
-    int dc;           /* data/command select */
-    int cs;
-    int rst;
-    int bl;           /* backlight enable, -1 if always-on / external.
-                       * When >= 0 the backend drives this GPIO with
-                       * LEDC PWM whose duty is set via
-                       * display_set_backlight(). */
-    int width;        /* logical (after rotation) panel width */
-    int height;       /* logical (after rotation) panel height */
-    int x_gap;        /* column offset on the controller (35 for T-Display-S3 in landscape) */
-    int y_gap;        /* row offset on the controller */
-    bool swap_xy;     /* true to swap rows/columns (landscape) */
-    bool mirror_x;
-    bool mirror_y;
-    bool invert_color;/* ST7789 panels typically need INVON */
-} display_st7789_config_t;
-
-void display_st7789_init(const display_st7789_config_t *cfg);
 
 #ifdef __cplusplus
 }
