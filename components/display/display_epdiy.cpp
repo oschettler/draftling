@@ -205,7 +205,19 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * factory firmware Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO
      * examples/factory/main/main.cpp `#define DEMO_BOARD epd_board_v7`).
      */
-    epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_64K);
+    /* LUT size: on ESP32-S3 epdiy uses RENDER_METHOD_LCD with the
+     * optimized PIE vector lookup, which only ever touches the first
+     * 1 KB of the conversion LUT (epdiy logs "only 1k of 65536 LUT
+     * in use!" with EPD_LUT_64K). The 64K LUT is allocated from
+     * MALLOC_CAP_INTERNAL and permanently reserves 64 KB of internal
+     * DRAM (src/render.c init_lut_table), which on this board is
+     * scarce -- once Bluedroid, LVGL, and the epdiy framebuffers are
+     * up, the remaining internal heap falls below the threshold
+     * esp_wifi_init() needs for its DMA-only static RX buffers and
+     * WiFi connect fails with ESP_ERR_NO_MEM ("Expected to init 4
+     * rx buffer, actual is 0"). EPD_LUT_1K matches what the S3
+     * vector path actually uses and frees the other 63 KB for WiFi. */
+    epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_1K);
 
     /* Per-panel VCOM calibration would ideally come from NVS. 1600
      * mV is the epdiy default and the value baked into
