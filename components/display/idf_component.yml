@@ -21,8 +21,26 @@ dependencies:
     rules:
       - if: "idf_version >=5.3.0"
     require: public
+  ## Pinned to a post-2.0.0 git commit (no tagged release yet) that
+  ## carries vroland/epdiy PR #475 ("Migrate epdiy board I2C init to
+  ## the new ESP-IDF driver"). That PR migrates epdiy's on-board I2C
+  ## bus from the legacy `driver/i2c.h` to driver-NG
+  ## (`driver/i2c_master.h`) AND adds a new `epd_init_with_config()`
+  ## entry point that accepts a caller-supplied
+  ## `i2c_master_bus_handle_t` via `EpdInitConfig.i2c.bus_handle`.
+  ## Both pieces are required to share the LilyGO T5 E-Paper S3 Pro
+  ## (and Pro Lite) on-board I2C bus between epdiy (PCA9535 + TPS65185)
+  ## and the GT911 capacitive touch controller managed by the
+  ## Draftling touchscreen component (also driver-NG). With epdiy
+  ## 2.0.0 the two driver generations collided on I2C port 0 and
+  ## ESP-IDF aborted at boot ("CONFLICT! driver_ng is not allowed
+  ## to be used with this old driver"), so touch had to be disabled
+  ## on both T5 SKUs. Drop the pin and switch back to a version
+  ## range once a 2.0.1 / 2.1 tag including PR #475 lands on
+  ## the Espressif Component Registry.
   vroland/epdiy:
-    version: ">=2.0.0"
+    git: "https://github.com/vroland/epdiy.git"
+    version: "a3426c0ec38f98282cf3ec33761e556f083b0f7c"
     rules:
       - if: "idf_version >=5.3.0"
     require: public

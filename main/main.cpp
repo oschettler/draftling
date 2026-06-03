@@ -5,6 +5,9 @@
 #include <nvs_flash.h>
 #include <driver/spi_common.h>
 #include <driver/gpio.h>
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+#include <driver/i2c_master.h>
+#endif
 #include "sdkconfig.h"
 
 #include "app_config.h"
@@ -101,6 +104,44 @@ extern "C" void app_main(void)
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* The LilyGO T5 E-Paper S3 Pro / Pro Lite shares its on-board
+     * I2C bus between epdiy (TPS65185 EPD power IC + PCA9535 IO
+     * expander) and the GT911 capacitive touch controller. Both
+     * components use driver-NG (driver/i2c_master.h), and ESP-IDF
+     * only allows one i2c_new_master_bus() per port. We therefore
+     * create the bus here, ahead of any consumer, and hand the
+     * handle to both: display_set_shared_i2c_bus() before
+     * display_init() (epdiy routes through epd_init_with_config()
+     * + EpdInitConfig.i2c.bus_handle), and touchscreen_config_t.
+     * i2c_bus before touchscreen_init() further below. This is the
+     * resolution for the legacy/driver-NG conflict that previously
+     * forced touch off on these boards; see components/display/
+     * idf_component.yml for why epdiy is pinned to a git commit. */
+    i2c_master_bus_handle_t shared_i2c_bus = NULL;
+    {
+        i2c_master_bus_config_t bus_cfg = {};
+        bus_cfg.i2c_port          = 0;
+        bus_cfg.sda_io_num        = (gpio_num_t)I2C_SDA_PIN;
+        bus_cfg.scl_io_num        = (gpio_num_t)I2C_SCL_PIN;
+        bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
+        bus_cfg.glitch_ignore_cnt = 7;
+        bus_cfg.flags.enable_internal_pullup = true;
+        esp_err_t bus_err = i2c_new_master_bus(&bus_cfg, &shared_i2c_bus);
+        if (bus_err != ESP_OK) {
+            ESP_LOGE(TAG, "Shared I2C bus init failed: %s -- "
+                          "falling back to per-component buses (touch "
+                          "will be disabled to avoid conflict)",
+                     esp_err_to_name(bus_err));
+            shared_i2c_bus = NULL;
+        } else {
+            ESP_LOGI(TAG, "Shared I2C bus created (port 0, SDA=%d SCL=%d)",
+                     I2C_SDA_PIN, I2C_SCL_PIN);
+        }
+    }
+    display_set_shared_i2c_bus(shared_i2c_bus);
+#endif
+
 #if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, -1,
@@ -303,7 +344,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
 
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN) && !defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
     /* Initialize the touchscreen and register the LVGL pointer
      * indev. Must run after the display (LVGL needs the default
      * display) and before standby_init (standby queries the touch
@@ -314,7 +355,15 @@ extern "C" void app_main(void)
      * TOUCH_SWAP_XY / TOUCH_MIRROR_X / TOUCH_MIRROR_Y), so this
      * code stays board-agnostic. logical_width / logical_height
      * are the DISPLAY_SCALE-aware logical pixel counts that LVGL
-     * itself uses. */
+     * itself uses.
+     *
+     * On the LilyGO T5 E-Paper S3 Pro / Pro Lite the GT911 sits on
+     * the same physical I2C bus as epdiy's PCA9535 + TPS65185, and
+     * ESP-IDF allows only one driver-NG i2c_new_master_bus() per
+     * port. We therefore reuse the `shared_i2c_bus` handle created
+     * above and hand it to the touchscreen component via
+     * tcfg.i2c_bus; on every other board tcfg.i2c_bus stays NULL
+     * and the component creates its own bus from sda/scl as before. */
     ESP_LOGI(TAG, "Initializing touchscreen...");
     {
         touchscreen_config_t tcfg = {};
@@ -333,22 +382,11 @@ extern "C" void app_main(void)
         tcfg.mirror_x = TOUCH_MIRROR_X ? true : false;
         tcfg.mirror_y = TOUCH_MIRROR_Y ? true : false;
         tcfg.user_rotate_deg = DISPLAY_ROTATE;
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+        tcfg.i2c_bus = (void *)shared_i2c_bus;
+#endif
         touchscreen_init(&tcfg);
     }
-#elif defined(CONFIG_DRAFTLING_TOUCHSCREEN) && defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
-    /* Touch is force-skipped on epdiy boards (LilyGO T5 E-Paper S3
-     * Pro / Pro Lite). epdiy 2.0.0 installs the LEGACY driver/i2c.h
-     * on I2C port 0 for its TPS65185 + PCA9535; our touchscreen
-     * component would install the new driver/i2c_master.h on the
-     * same port and IDF aborts with "CONFLICT! driver_ng is not
-     * allowed to be used with this old driver". The Kconfig default
-     * for both T5 variants is `n` for this reason; this branch only
-     * exists to keep stale sdkconfig files with TOUCHSCREEN=y from
-     * crashing the device. Remove this guard once epdiy upstream's
-     * driver-NG migration ships in a tagged release we can pin. */
-    ESP_LOGW(TAG, "Touchscreen disabled: epdiy holds I2C port 0 with the "
-                  "legacy driver, incompatible with driver-NG touch on "
-                  "this board.");
 #endif
 
     /* WiFi is lazy-initialized on first wifi_manager_connect() call.

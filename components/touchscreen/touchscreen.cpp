@@ -53,6 +53,11 @@ static const char *TAG = "Touch";
 static bool s_initialized = false;
 static touchscreen_config_t s_cfg;
 static i2c_master_bus_handle_t s_bus = NULL;
+/* True if we created s_bus ourselves and must free it on (future)
+ * deinit. False when the bus was supplied by the caller (shared
+ * with another driver-NG consumer such as epdiy on the LilyGO T5
+ * E-Paper S3 Pro). Mirrors epdiy's own `owns_bus` flag. */
+static bool s_owns_bus = false;
 static i2c_master_dev_handle_t s_dev = NULL;
 static SemaphoreHandle_t s_mux = NULL;
 static lv_indev_t *s_indev = NULL;
@@ -354,19 +359,32 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         gpio_config(&g);
     }
 
-    /* I2C master bus + device handle (ESP-IDF v5.x i2c_master API). */
-    i2c_master_bus_config_t bus_cfg = {};
-    bus_cfg.i2c_port          = s_cfg.i2c_port;
-    bus_cfg.sda_io_num        = (gpio_num_t)s_cfg.sda;
-    bus_cfg.scl_io_num        = (gpio_num_t)s_cfg.scl;
-    bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
-    bus_cfg.flags.enable_internal_pullup = true;
+    /* I2C master bus + device handle (ESP-IDF v5.x i2c_master API).
+     *
+     * If the caller passed an existing driver-NG bus handle via
+     * s_cfg.i2c_bus we adopt it instead of creating our own. This
+     * is the only way to coexist with another driver-NG consumer
+     * on the same physical I2C port (currently used by the LilyGO
+     * T5 E-Paper S3 Pro / Pro Lite, where vroland/epdiy owns the
+     * on-board I2C bus shared with the GT911). */
+    if (s_cfg.i2c_bus) {
+        s_bus      = (i2c_master_bus_handle_t)s_cfg.i2c_bus;
+        s_owns_bus = false;
+    } else {
+        i2c_master_bus_config_t bus_cfg = {};
+        bus_cfg.i2c_port          = s_cfg.i2c_port;
+        bus_cfg.sda_io_num        = (gpio_num_t)s_cfg.sda;
+        bus_cfg.scl_io_num        = (gpio_num_t)s_cfg.scl;
+        bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
+        bus_cfg.glitch_ignore_cnt = 7;
+        bus_cfg.flags.enable_internal_pullup = true;
 
-    esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_bus);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(err));
-        return;
+        esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_bus);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "i2c_new_master_bus failed: %s", esp_err_to_name(err));
+            return;
+        }
+        s_owns_bus = true;
     }
 
 #if defined(CONFIG_DRAFTLING_TOUCH_GT911)
@@ -396,11 +414,17 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
     dev_cfg.device_address  = s_cfg.i2c_addr;
     dev_cfg.scl_speed_hz    = s_cfg.i2c_hz ? s_cfg.i2c_hz : 400000;
 
-    err = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
+    esp_err_t err = i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2c_master_bus_add_device failed: %s", esp_err_to_name(err));
-        i2c_del_master_bus(s_bus);
-        s_bus = NULL;
+        /* Only tear down the bus if we created it ourselves --
+         * a caller-supplied shared bus is still owned (and used)
+         * by the other consumer. */
+        if (s_owns_bus) {
+            i2c_del_master_bus(s_bus);
+        }
+        s_bus      = NULL;
+        s_owns_bus = false;
         return;
     }
 

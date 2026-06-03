@@ -129,15 +129,20 @@
  * M5Stack PaperS3 GT911 block above).
  *
  * NOTE: the GT911 lives on the same I2C bus as epdiy's PCA9535 +
- * TPS65185. epdiy 2.0.0 (the published managed component) installs
- * the LEGACY driver/i2c.h on port 0; our touchscreen component uses
- * driver/i2c_master.h (driver-NG) on the same port. ESP-IDF refuses
- * to mix the two drivers and aborts at boot. The Kconfig default
- * for DRAFTLING_TOUCHSCREEN is therefore `n` on both Pro and Lite,
- * and main.cpp additionally hard-skips touchscreen_init when
- * DISPLAY_EPDIY is selected. Touch on these boards will require
- * either an epdiy upstream release with the driver-NG migration or
- * shared-bus support in the touchscreen component. */
+ * TPS65185. Both consumers use ESP-IDF driver-NG
+ * (driver/i2c_master.h); ESP-IDF allows only one
+ * i2c_new_master_bus() per port. main.cpp creates the bus once,
+ * publishes it to the display backend via
+ * display_set_shared_i2c_bus() ahead of display_init() (epdiy
+ * routes through epd_init_with_config() with
+ * EpdInitConfig.i2c.bus_handle), and passes the same handle to
+ * the touchscreen component via touchscreen_config_t.i2c_bus. This
+ * requires the epdiy commit pinned in
+ * components/display/idf_component.yml (the published 2.0.0
+ * managed component still uses the legacy driver/i2c.h and would
+ * abort with a CONFLICT message). With the shared-bus path in
+ * place, DRAFTLING_TOUCHSCREEN defaults to `y` on both Pro and
+ * Lite. */
 #define TOUCH_I2C_ADDR  0x5D
 #define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO

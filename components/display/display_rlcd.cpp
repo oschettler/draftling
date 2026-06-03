@@ -243,4 +243,10 @@ extern "C" void display_deep_sleep_prepare(void)
      * drops in deep sleep. No-op. */
 }
 
+extern "C" void display_set_shared_i2c_bus(void * /*bus_handle*/)
+{
+    /* RLCD does not use I2C. No-op (declared in display.h for the
+     * shared-bus path used by the EPDIY backend). */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_RLCD */

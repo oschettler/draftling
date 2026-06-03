@@ -81,6 +81,24 @@ typedef struct {
      * 90 or 270 the output x/y ranges are the swapped
      * (logical_height, logical_width). */
     int user_rotate_deg;
+    /* Optional caller-supplied driver-NG I2C master bus handle. When
+     * non-NULL, touchscreen_init() skips i2c_new_master_bus() and
+     * adds its device to this existing bus instead. Used on boards
+     * where another driver-NG consumer (currently vroland/epdiy on
+     * the LilyGO T5 E-Paper S3 Pro / Pro Lite) already owns the
+     * physical I2C port carrying the touch controller -- ESP-IDF
+     * only allows one i2c_new_master_bus() per port. The handle
+     * type is `void *` so this header does not need to drag in
+     * `driver/i2c_master.h`; the implementation casts back to
+     * `i2c_master_bus_handle_t`.
+     *
+     * When NULL (default) the touchscreen component creates its own
+     * bus from sda/scl/i2c_port/i2c_hz, matching the pre-shared-bus
+     * behaviour on every other board. The bus is destroyed in
+     * future deinit only when the touchscreen component created it
+     * itself; an externally supplied handle is left intact for the
+     * other consumer to clean up. */
+    void *i2c_bus;
 } touchscreen_config_t;
 
 /* Initialize the touchscreen and register an LVGL pointer indev.

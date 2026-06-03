@@ -541,4 +541,10 @@ extern "C" void display_deep_sleep_prepare(void)
      * "off" state on e-paper. No-op. */
 }
 
+extern "C" void display_set_shared_i2c_bus(void * /*bus_handle*/)
+{
+    /* PaperS3 (M5GFX) does not expose an I2C bus to share with
+     * the touchscreen; the GT911 has its own bus. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_EDS3 */

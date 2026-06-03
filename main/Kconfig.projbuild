@@ -291,20 +291,21 @@ config DRAFTLING_TOUCHSCREEN
     default y if DRAFTLING_MODEL_JC3248W535
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
-    # LilyGO T5 E-Paper S3 Pro / Pro Lite: the GT911 capacitive touch
-    # controller sits on the same I2C bus (port 0) as epdiy's PCA9535
-    # I/O expander + TPS65185 power-management IC. epdiy 2.0.0 (the
-    # published managed component) drives that bus with the LEGACY
-    # `driver/i2c.h` API, while our touchscreen component uses the new
-    # `driver/i2c_master.h` (driver-NG). ESP-IDF refuses to share an
-    # I2C port between the two drivers ("CONFLICT! driver_ng is not
-    # allowed to be used with this old driver") and the failing call
-    # aborts the firmware at boot. Until epdiy upstream migrates to
-    # driver-NG (already done on main, not yet released) or our touch
-    # driver grows shared-bus support, default touch OFF on both T5
-    # variants. main.cpp additionally hard-skips touchscreen_init when
-    # DRAFTLING_DISPLAY_EPDIY is selected so a stale sdkconfig with
-    # TOUCHSCREEN=y does not bring the conflict back.
+    # LilyGO T5 E-Paper S3 Pro / Pro Lite carry a GT911 capacitive
+    # touch controller on the same on-board I2C bus as epdiy's
+    # PCA9535 I/O expander + TPS65185 power-management IC. epdiy is
+    # pinned (see components/display/idf_component.yml) to a post-
+    # 2.0.0 commit that migrates its on-board I2C to driver-NG and
+    # accepts a caller-supplied i2c_master_bus_handle_t via
+    # epd_init_with_config(). main.cpp creates the bus once, hands
+    # it to the display backend (display_set_shared_i2c_bus) and
+    # to the touchscreen component (touchscreen_config_t.i2c_bus),
+    # so the two driver-NG consumers coexist on a single I2C port.
+    # Both Pro and Pro Lite physically populate the GT911 (see the
+    # H752-01 schematic and the per-board comment in app_config.h),
+    # so default touch on for both SKUs.
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
     help
         Enable I2C touch-controller support and an LVGL pointer

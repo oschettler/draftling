@@ -63,10 +63,19 @@
 #include <esp_timer.h>
 
 #include "epdiy.h"
+#include "epd_init_config.h"
+#include <driver/i2c_master.h>
 
 #include "display.h"
 
 static const char *TAG = "DisplayEPDIY";
+
+/* Caller-supplied I2C master bus handle (created in main.cpp before
+ * display_init), so epdiy and the GT911 touch driver can share the
+ * single on-board I2C port. NULL means "let epdiy create its own
+ * bus internally" -- matches epdiy's default behaviour and the
+ * pre-shared-bus code path. */
+static i2c_master_bus_handle_t s_shared_i2c_bus = NULL;
 
 /* High-level state object owned by epdiy (front+back 4-bpp
  * framebuffers, allocated by epd_hl_init). */
@@ -193,6 +202,14 @@ static inline uint8_t rgb565_to_gray4(uint16_t v)
 
 /* ---- public API ---- */
 
+extern "C" void display_set_shared_i2c_bus(void *bus_handle)
+{
+    /* Called by main.cpp before display_init() on epdiy boards. We
+     * stash the handle; display_init() reads it and routes epdiy
+     * through epd_init_with_config(). Idempotent and NULL-safe. */
+    s_shared_i2c_bus = (i2c_master_bus_handle_t)bus_handle;
+}
+
 extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
                              int /*pin_d*/, int /*pin_e*/, int /*pin_f*/,
                              int width, int height)
@@ -217,7 +234,24 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * WiFi connect fails with ESP_ERR_NO_MEM ("Expected to init 4
      * rx buffer, actual is 0"). EPD_LUT_1K matches what the S3
      * vector path actually uses and frees the other 63 KB for WiFi. */
-    epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_1K);
+
+    /* If main.cpp created the shared I2C bus for us, hand it to
+     * epdiy via the post-PR-#475 entry point so epdiy adds its
+     * TPS65185 / PCA9535 devices to that bus instead of creating
+     * its own. Without this the touchscreen component (which also
+     * uses driver-NG) cannot coexist on the same physical bus.
+     * `epd_init_with_config` supersedes `epd_init` and is called
+     * INSTEAD of it; we only reach this branch when a shared bus
+     * was published before display_init(). */
+    if (s_shared_i2c_bus) {
+        EpdI2cConfig  i2c_cfg = {};
+        i2c_cfg.bus_handle    = s_shared_i2c_bus;
+        EpdInitConfig cfg     = {};
+        cfg.i2c               = &i2c_cfg;
+        epd_init_with_config(&epd_board_v7, &ED047TC1, EPD_LUT_1K, &cfg);
+    } else {
+        epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_1K);
+    }
 
     /* Per-panel VCOM calibration would ideally come from NVS. 1600
      * mV is the epdiy default and the value baked into

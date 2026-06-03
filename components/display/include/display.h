@@ -253,6 +253,34 @@ void display_set_backlight(int percent);
 void display_axs15231b_init(const display_axs15231b_config_t *cfg);
 
 /*
+ * Hand a caller-created (driver-NG) I2C master bus handle to the
+ * display backend. Must be called *before* display_init() to take
+ * effect.
+ *
+ * On the EPDIY backend (LilyGO T5 E-Paper S3 Pro / Pro Lite), the
+ * on-board I2C bus is physically shared with the GT911 touch
+ * controller. The shared-bus path lets `main.cpp` create the
+ * `i2c_master_bus_handle_t` once and pass it to both epdiy (via
+ * `epd_init_with_config()` -> `EpdInitConfig.i2c.bus_handle`) and
+ * the touchscreen component (via `touchscreen_config_t.i2c_bus`),
+ * which is the only way ESP-IDF allows two driver-NG consumers to
+ * coexist on the same I2C port. When this function is not called
+ * (or `bus_handle` is NULL) the EPDIY backend creates its own bus
+ * internally, matching epdiy's default behaviour.
+ *
+ * The parameter is `void *` rather than `i2c_master_bus_handle_t`
+ * to keep `display.h` free of an ESP-IDF driver include in callers
+ * that do not need the shared-bus path; the EPDIY backend casts
+ * back to `i2c_master_bus_handle_t` internally. The bus is created
+ * and owned by the caller; the display backend never destroys it.
+ *
+ * No-op on backends that do not use I2C (RLCD, EDS3, ST7789) or
+ * whose I2C does not need to be shared with another component
+ * (AXS15231B's optional touch sits on a separate bus today).
+ */
+void display_set_shared_i2c_bus(void *bus_handle);
+
+/*
  * ST7789 i80 (8-bit parallel) color-LCD driver init.
  *
  * Used by boards with CONFIG_DRAFTLING_DISPLAY_ST7789 (LilyGO

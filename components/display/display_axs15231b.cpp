@@ -1493,4 +1493,11 @@ extern "C" void display_deep_sleep_prepare(void)
     }
 }
 
+extern "C" void display_set_shared_i2c_bus(void * /*bus_handle*/)
+{
+    /* AXS15231B QSPI color LCD does not use I2C for the panel; the
+     * companion touch controller on these boards sits on its own
+     * bus, so there is nothing to share here. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_AXS15231B */

@@ -575,4 +575,9 @@ extern "C" void display_deep_sleep_prepare(void)
     display_sleep();
 }
 
+extern "C" void display_set_shared_i2c_bus(void * /*bus_handle*/)
+{
+    /* ST7789 i80 parallel LCD does not use I2C. No-op. */
+}
+
 #endif /* CONFIG_DRAFTLING_DISPLAY_ST7789 */
