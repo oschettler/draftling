@@ -240,10 +240,22 @@ config DRAFTLING_HAS_BATTERY
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_MODEL_LILYGO_TDISPLAY_S3
     # LilyGO T5 E-Paper S3 Pro / Pro Lite: battery is monitored via a
-    # BQ27220 fuel gauge on I2C, not a GPIO ADC divider, so the
-    # ADC-only battery component does not apply. Leave the symbol
-    # unset (= y for n) until a fuel-gauge-aware battery backend is
-    # added; the UI then hides the battery indicator on these boards.
+    # BQ27220 fuel gauge on I2C (driver in components/battery,
+    # gated on DRAFTLING_BATTERY_BQ27220 below). The shared I2C
+    # bus owned by main.cpp is passed to battery_init_bq27220().
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    default n
+
+# Selects the BQ27220 fuel-gauge backend in components/battery/
+# instead of the GPIO ADC backend. main.cpp calls
+# battery_init_bq27220(shared_i2c_bus) when this symbol is set, and
+# the BQ27220 device is added to the shared I2C bus that already
+# carries epdiy's TPS65185 / PCA9535 and the GT911 touch controller.
+config DRAFTLING_BATTERY_BQ27220
+    bool
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
 # DRAFTLING_HAS_POWER_LATCH is set automatically on boards that wire

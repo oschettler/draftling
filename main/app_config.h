@@ -157,12 +157,12 @@
  * The T5 E-Paper S3 Pro routes the LiPo cell through a BQ25896
  * charger + BQ27220YZFR fuel gauge, both on the shared I2C bus
  * (BQ27220 at 0x55, BQ25896 at 0x6B). There is NO dedicated GPIO
- * ADC pin for the cell voltage. The ADC-only battery component
- * (components/battery/battery.cpp) therefore cannot read the
- * battery on this board; we set BATT_ADC_PIN=-1 (battery_init
- * becomes a no-op) and DRAFTLING_HAS_BATTERY is left unset so the
- * editor UI hides its battery indicator. A future fuel-gauge-aware
- * battery backend would replace this stub. */
+ * ADC pin for the cell voltage, so the ADC-based battery_init()
+ * stays a no-op (BATT_ADC_PIN=-1); main.cpp instead calls
+ * battery_init_bq27220(shared_i2c_bus) when
+ * CONFIG_DRAFTLING_BATTERY_BQ27220 is set (defaulted y for these
+ * models). The editor UI shows the StateOfCharge percentage in
+ * the status bar via DRAFTLING_HAS_BATTERY. */
 #define BATT_ADC_PIN    -1
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1

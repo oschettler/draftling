@@ -281,7 +281,20 @@ extern "C" void app_main(void)
      * status bar can show the battery level immediately. battery_init
      * is a no-op when BATT_ADC_PIN is < 0 (HAT case). */
     ESP_LOGI(TAG, "Initializing battery monitor...");
+#if defined(CONFIG_DRAFTLING_BATTERY_BQ27220)
+    /* LilyGO T5 E-Paper S3 Pro / Pro Lite: BQ27220YZFR fuel gauge
+     * lives on the same I2C bus we already created above for epdiy
+     * + GT911. The ADC backend has no pin (BATT_ADC_PIN == -1) on
+     * these boards; battery_init() would early-return, so we drive
+     * the BQ27220 backend directly. */
+    if (battery_init_bq27220(shared_i2c_bus) != 0) {
+        ESP_LOGW(TAG, "BQ27220 fuel gauge init failed; "
+                      "falling back to ADC backend");
+        battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
+    }
+#else
     battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
+#endif
 
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");

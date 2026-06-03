@@ -16,8 +16,8 @@ from that choice.
 | Board | Display | Touch | Battery | Wake source | Storage |
 |-------|---------|-------|---------|-------------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300, SPI | -- | GPIO4 ADC (3:1) | GPIO18 button | On-board MicroSD (SDMMC 1-bit) |
-| [LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (driver TODO) | BOOT (GPIO0) | On-board MicroSD (SPI3, shared with SX1262 LoRa CS) |
-| [LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (driver TODO) | BOOT (GPIO0) | On-board MicroSD (SPI3) |
+| [LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (0x55) | BOOT (GPIO0) | On-board MicroSD (SPI3, shared with SX1262 LoRa CS) |
+| [LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (0x55) | BOOT (GPIO0) | On-board MicroSD (SPI3) |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper ED047TC1, 540x960, parallel I80 (via `m5stack/M5GFX`) | GT911 (I2C) | GPIO3 ADC (1:2) | BOOT (GPIO0); optionally touch (`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`) | On-board MicroSD (SPI3) |
 | [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | AXS5106-family (I2C addr 0x3B) | -- | BOOT (GPIO0) | External SD on SPI |
 | Guition JC3248W535 | 3.5" IPS color, 480x320, AXS15231B QSPI | AXS5106L (I2C) | -- | Touch INT (no user buttons) | External SD on SPI |
@@ -48,9 +48,10 @@ touch is enabled by default on both SKUs (the on-board I2C bus is
 shared between epdiy and the touchscreen component via the pinned
 post-2.0.0 epdiy commit's `epd_init_with_config()` entry point).
 Battery state of charge
-comes from an on-board BQ27220 fuel gauge over I2C; a driver for it
-is not implemented yet, so `DRAFTLING_HAS_BATTERY` defaults `n` and
-the battery indicator stays hidden. The on-board MicroSD slot shares
+comes from the on-board BQ27220 fuel gauge over I2C (the
+`components/battery/` `battery_init_bq27220()` backend, gated on
+`CONFIG_DRAFTLING_BATTERY_BQ27220`); the editor status bar shows the
+percentage. The on-board MicroSD slot shares
 its SPI bus with the LoRa radio on the Pro; Draftling drives the LoRa
 chip-select HIGH at boot so it does not interfere with SD traffic.
 
@@ -330,7 +331,8 @@ The `token` is a GitHub Personal Access Token with `repo` scope.
 ```
 main/               Application entry point, pin definitions, Kconfig
 components/
-  battery/           Battery voltage monitor (ADC + smoothing)
+  battery/           Battery monitor: ADC + smoothing, or BQ27220
+                     fuel gauge over I2C (T5 E-Paper S3 Pro / Lite)
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
   display/           Display backends (RLCD SPI, EDS3 e-paper via
                      M5GFX, AXS15231B QSPI, ST7789 8-bit i80) and

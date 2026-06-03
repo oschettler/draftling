@@ -5,20 +5,28 @@ extern "C" {
 #endif
 
 /*
- * Battery voltage monitor for the Waveshare ESP32-S3-RLCD-4.2.
+ * Battery monitor.
  *
- * The board has a 3:1 resistive voltage divider (200 K / 100 K) on GPIO4
- * (ADC1 channel 3) that scales the LiPo cell voltage into the ADC range.
+ * Two backends are exposed:
  *
- * Voltage-to-percentage mapping (from community measurements):
- *   >= 4.10 V  ->  100 %   (full)
- *   >= 3.95 V  ->   75 %
- *   >= 3.80 V  ->   50 %
- *   >= 3.60 V  ->   25 %
- *   <  3.60 V  ->    0 %   (empty)
+ *   - ADC + resistive divider (battery_init): used on boards that
+ *     wire the LiPo cell through a divider into an ESP32-S3 ADC1 pin
+ *     (Waveshare ESP32-S3-RLCD-4.2, M5Stack PaperS3,
+ *     Waveshare Touch-LCD-3.49, LilyGO T-Display-S3). Voltage maps
+ *     to percentage via a fixed 5-step LiPo discharge table:
+ *       >= 4.10 V -> 100 %  (full)
+ *       >= 3.95 V ->  75 %
+ *       >= 3.80 V ->  50 %
+ *       >= 3.60 V ->  25 %
+ *       <  3.60 V ->   0 %  (empty)
+ *     Readings are smoothed with an exponential moving average over
+ *     8 samples to reduce ADC noise.
  *
- * Readings are smoothed with an exponential moving average over 8 samples
- * to reduce ADC noise.
+ *   - TI BQ27220 fuel gauge over I2C (battery_init_bq27220): used on
+ *     boards that route the cell through a dedicated coulomb counter
+ *     (LilyGO T5 E-Paper S3 Pro / Pro Lite). The percentage comes
+ *     straight from the gauge's StateOfCharge register and does not
+ *     need software smoothing or a voltage-to-percent table.
  */
 
 /*
@@ -36,6 +44,27 @@ extern "C" {
  * Returns 0 on success, non-zero on failure.
  */
 int battery_init(int gpio_num, int enable_gpio, int divider);
+
+/*
+ * Initialize a BQ27220 fuel-gauge backend on an existing I2C master
+ * bus (driver/i2c_master.h). The bus must already have been created
+ * by the caller and remains owned by the caller (the battery
+ * component only attaches a device handle).
+ *
+ *   i2c_master_bus -- opaque pointer to an i2c_master_bus_handle_t
+ *                     (declared as void * here so the public header
+ *                     does not need to pull in driver/i2c_master.h).
+ *
+ * Returns 0 on success, non-zero on failure. After a successful call,
+ * `battery_read_mv()` reports the cell voltage in millivolts and
+ * `battery_read_percent()` reports the StateOfCharge register
+ * (0x2C) directly.
+ *
+ * Used on boards that route the LiPo cell through a TI BQ27220
+ * coulomb counter on I2C (addr 0x55) instead of a GPIO ADC divider,
+ * such as the LilyGO T5 E-Paper S3 Pro / Pro Lite.
+ */
+int battery_init_bq27220(void *i2c_master_bus);
 
 /*
  * Read the current battery voltage in millivolts.

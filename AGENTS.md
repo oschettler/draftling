@@ -91,17 +91,29 @@ id.
 
 ### components/battery/
 
-Reads battery voltage through a resistive divider on a configurable
-ADC pin using the ESP32 ADC. Applies exponential moving average
-smoothing over 8 samples. Maps voltage to a percentage: >=4.10V is
-100%, >=3.95V is 75%, >=3.80V is 50%, >=3.60V is 25%, below 3.60V
-is 0%. The M5Stack PaperS3 reads its cell through ADC1 on GPIO3 with
-a 1:2 divider, matching the M5Unified Power_Class configuration for
-that board. When `BATT_ADC_PIN < 0`, `battery_init()` is a no-op and
-`battery_read_percent()` returns -1; the editor UI hides the battery
-icon in that case.
+Two backends:
 
-Public API: `battery_init()`, `battery_read_mv()`, `battery_read_percent()`.
+* **ADC + resistive divider** (`battery_init(gpio, en, divider)`):
+  reads the cell voltage through a configurable ADC pin and applies
+  exponential moving average smoothing over 8 samples. Voltage maps
+  to percentage as >=4.10 V = 100 %, >=3.95 V = 75 %, >=3.80 V = 50 %,
+  >=3.60 V = 25 %, below 3.60 V = 0 %. The M5Stack PaperS3 reads its
+  cell through ADC1 on GPIO3 with a 1:2 divider, matching the
+  M5Unified Power_Class configuration for that board. When
+  `BATT_ADC_PIN < 0`, `battery_init()` is a no-op.
+* **TI BQ27220 fuel gauge** over I2C (`battery_init_bq27220(bus)`):
+  used on the LilyGO T5 E-Paper S3 Pro / Pro Lite, where the cell is
+  routed through a BQ25896 charger + BQ27220YZFR coulomb counter at
+  0x55 on the I2C bus shared with epdiy (TPS65185 / PCA9535) and
+  GT911. main.cpp creates the bus and passes its handle in. Voltage
+  comes from the Voltage register (0x08, mV), and percentage comes
+  straight from StateOfCharge (0x2C, 0-100 %).
+
+When no backend has been initialized, `battery_read_percent()`
+returns -1 and the editor UI hides the battery indicator.
+
+Public API: `battery_init()`, `battery_init_bq27220()`,
+`battery_read_mv()`, `battery_read_percent()`.
 
 ### components/ble_keyboard/
 
@@ -493,7 +505,8 @@ in C / C++ code:
 | DRAFTLING_DISPLAY_ST7789          | Selects `display_st7789.cpp`      | T-Display-S3 |
 | DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B + ST7789 boards |
 | DRAFTLING_DISPLAY_HAS_BACKLIGHT   | Adds the "Backlight: NN%" entry to F1 -> Settings, enables the Ctrl+B cycle shortcut, and calls `display_set_backlight()` at boot from NVS | AXS15231B + ST7789 boards, LilyGO T5 E-Paper S3 Pro / Pro Lite |
-| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T-Display-S3 |
+| DRAFTLING_HAS_BATTERY             | Creates the battery-percentage status-bar label and its poll timer | RLCD-4.2, PaperS3, Touch-LCD-3.49, T-Display-S3, T5 E-Paper S3 Pro / Pro Lite |
+| DRAFTLING_BATTERY_BQ27220         | Selects the BQ27220 fuel-gauge backend (`battery_init_bq27220(shared_i2c_bus)`) instead of the GPIO ADC backend | T5 E-Paper S3 Pro / Pro Lite |
 | DRAFTLING_HAS_POWER_LATCH         | Enables the `power` component: TCA9554-latched battery rail + PWR-button long-press = power off; standby cuts the latch before falling back to deep sleep | Touch-LCD-3.49 |
 | DRAFTLING_SD_SDMMC                | Routes SD init through the on-chip SDMMC peripheral (1-bit) instead of generic SPI | RLCD-4.2 |
 | DRAFTLING_WAKEUP_GPIO             | RTC-capable EXT0 wake-up GPIO; consumed by `components/standby/standby.cpp` | per-model defaults |
