@@ -145,7 +145,18 @@ extern "C" esp_err_t wifi_manager_init(void)
         xSemaphoreGive(init_mutex);
         return err;
     }
-    esp_netif_create_default_wifi_sta();
+    /* esp_netif_create_default_wifi_sta() asserts (not returns an
+     * error) if the "WIFI_STA_DEF" netif already exists. That can
+     * happen if a previous init attempt got past this point and then
+     * failed later (esp_wifi_init NO_MEM on heap-tight boards is the
+     * realistic case): the netif persists but s_initialized stays
+     * false, so the next call into wifi_manager_init aborts the
+     * firmware. Reuse the existing handle when present. */
+    if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == NULL) {
+        esp_netif_create_default_wifi_sta();
+    } else {
+        ESP_LOGW(TAG, "WIFI_STA_DEF netif already exists, reusing");
+    }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     /* Permanent budget guard: WiFi static buffers come from internal
