@@ -82,6 +82,9 @@ The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
 AXS15231B color LCD (natively 172x640 portrait, software-rotated to
 landscape) and an AXS5106-family capacitive touch controller at I2C
 address 0x3B. The BOOT button on GPIO0 is the deep-sleep wake source.
+The on-board PWR / home button on GPIO16 is reserved for the power
+latch (short press to power on, long press to power off via the
+TCA9554 IO6 latch) and is not used to wake the MCU from deep sleep.
 
 UC8179-based e-paper displays (such as those used by the Seeed Studio
 reTerminal E1001 and the Waveshare E-Paper Driver HAT) were previously
