@@ -1,5 +1,5 @@
 #include "sdkconfig.h"
-#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+#if defined(CONFIG_DRAFTLING_DISPLAY_EDS3)
 
 /*
  * M5Stack PaperS3 e-paper display driver (thin shim over M5GFX).
@@ -541,4 +541,4 @@ extern "C" void display_deep_sleep_prepare(void)
      * "off" state on e-paper. No-op. */
 }
 
-#endif /* CONFIG_DRAFTLING_DISPLAY_EPD */
+#endif /* CONFIG_DRAFTLING_DISPLAY_EDS3 */

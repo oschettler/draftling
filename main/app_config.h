@@ -76,8 +76,10 @@
  */
 #if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 #define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro"
-#else
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
 #define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro Lite"
+#else
+#error "Unhandled LilyGO T5 model variant in BOARD_NAME selection"
 #endif
 
 /* On-board MicroSD card on a dedicated SPI bus.
