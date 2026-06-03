@@ -107,17 +107,19 @@ extern "C" void app_main(void)
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
     /* The LilyGO T5 E-Paper S3 Pro / Pro Lite shares its on-board
      * I2C bus between epdiy (TPS65185 EPD power IC + PCA9535 IO
-     * expander) and the GT911 capacitive touch controller. Both
-     * components use driver-NG (driver/i2c_master.h), and ESP-IDF
-     * only allows one i2c_new_master_bus() per port. We therefore
-     * create the bus here, ahead of any consumer, and hand the
-     * handle to both: display_set_shared_i2c_bus() before
-     * display_init() (epdiy routes through epd_init_with_config()
-     * + EpdInitConfig.i2c.bus_handle), and touchscreen_config_t.
-     * i2c_bus before touchscreen_init() further below. This is the
-     * resolution for the legacy/driver-NG conflict that previously
-     * forced touch off on these boards; see components/display/
-     * idf_component.yml for why epdiy is pinned to a git commit. */
+     * expander), the GT911 capacitive touch controller and the
+     * BQ27220 battery fuel gauge (battery_init_bq27220 further
+     * below). All consumers use driver-NG (driver/i2c_master.h), and
+     * ESP-IDF only allows one i2c_new_master_bus() per port. We
+     * therefore create the bus here, ahead of any consumer, and hand
+     * the handle to each: display_set_shared_i2c_bus() before
+     * display_init() (epdiy routes through epd_init_with_config() +
+     * EpdInitConfig.i2c.bus_handle), battery_init_bq27220() right
+     * after, and touchscreen_config_t.i2c_bus before
+     * touchscreen_init() further below. This is the resolution for
+     * the legacy/driver-NG conflict that previously forced touch off
+     * on these boards; see components/display/idf_component.yml for
+     * why epdiy is pinned to a git commit. */
     i2c_master_bus_handle_t shared_i2c_bus = NULL;
     {
         i2c_master_bus_config_t bus_cfg = {};
