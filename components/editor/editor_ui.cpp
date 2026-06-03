@@ -2177,6 +2177,17 @@ static void settings_activate_item(int idx)
         save_font_size_to_nvs();
         init_styles();
         refresh_settings_items();
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+        /* The new font changes widget geometry; on e-paper any
+         * pixels left from the previous layout that the new layout
+         * does not cover would otherwise stay on screen as garbage
+         * until the next full refresh. Wipe the framebuffer and
+         * invalidate the active screen so LVGL repaints everything;
+         * display_clear() also flags the next flush as a full
+         * refresh, clearing any accumulated ghosting. */
+        display_clear(0xFF);
+        lv_obj_invalidate(lv_scr_act());
+#endif
     } else if (idx == SETTINGS_IDX_MAXFILE) {
         /* Read-only display of the dynamically-sized editor buffer.
          * Enter is a no-op; the value is fixed at editor_init() time. */
@@ -3291,6 +3302,15 @@ static void browser_activate_item(int row)
         editor_ui_set_status("Open failed");
         return;
     }
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+    /* Wipe the framebuffer before drawing the freshly-opened file
+     * so no pixels from the file browser (or any previously open
+     * document) survive in regions the new content does not cover.
+     * display_clear() also flags the next flush as a full refresh,
+     * clearing any accumulated e-paper ghosting. Done after the
+     * open succeeds so a failed open leaves the browser intact. */
+    display_clear(0xFF);
+#endif
     /* editor_open_file restores the cursor / scroll line from the
      * metadata sidecar; make sure the cursor is on screen before
      * the first refresh in case the saved scroll line is out of date. */
