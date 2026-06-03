@@ -6,7 +6,7 @@ boards with reflective LCD, e-paper or small color LCD displays.
 
 ## Supported hardware
 
-Draftling currently runs on five ESP32-S3 development boards. All of
+Draftling currently runs on seven ESP32-S3 development boards. All of
 them share the same firmware image; the target board is picked at
 build time with `idf.py menuconfig` -> **DRAFTLING Configuration >
 Hardware Model**. Display resolution, driver, pin map, touch
@@ -16,6 +16,8 @@ from that choice.
 | Board | Display | Touch | Battery | Wake source | Storage |
 |-------|---------|-------|---------|-------------|---------|
 | [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2) | 4.2" reflective LCD, 400x300, SPI | -- | GPIO4 ADC (3:1) | GPIO18 button | On-board MicroSD (SDMMC 1-bit) |
+| [LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | GT911 (I2C) | BQ27220 fuel gauge on I2C (driver TODO) | BOOT (GPIO0) | On-board MicroSD (SPI3, shared with SX1262 LoRa CS) |
+| [LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO) | 4.7" e-paper ED047TC1, 960x540, parallel (via `vroland/epdiy` `epd_board_v7`) | -- (GT911 present but off by default) | BQ27220 fuel gauge on I2C (driver TODO) | BOOT (GPIO0) | On-board MicroSD (SPI3) |
 | [M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3) | 4.7" e-paper ED047TC1, 540x960, parallel I80 (via `m5stack/M5GFX`) | GT911 (I2C) | GPIO3 ADC (1:2) | BOOT (GPIO0); optionally touch (`CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`) | On-board MicroSD (SPI3) |
 | [Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49) | 3.49" IPS color, 640x172, AXS15231B QSPI | AXS5106-family (I2C addr 0x3B) | -- | BOOT (GPIO0) | External SD on SPI |
 | Guition JC3248W535 | 3.5" IPS color, 480x320, AXS15231B QSPI | AXS5106L (I2C) | -- | Touch INT (no user buttons) | External SD on SPI |
@@ -33,6 +35,22 @@ responsive user interaction. But the screen is very fragile, and the
 device needs a proper enclosure, preferably with a protective glass.
 The contrast is very low, so it needs good lighting for comfortable
 work. (The screen broke during my tests.)
+
+The **LilyGO T5 E-Paper S3 Pro** and **Pro Lite** are both built
+around the same ED047TC1 4.7" e-paper panel as the M5Stack PaperS3,
+but driven through the open-source [`vroland/epdiy`](https://github.com/vroland/epdiy)
+library (`epd_board_v7` configuration with a TPS65185 PMIC). The Pro
+variant adds a SX1262 LoRa radio, an L76K GPS, an IR LED, a
+vibration motor and an external 18650 holder; from Draftling's
+perspective the Lite is functionally a Pro with those modules
+depopulated. Both carry the same GT911 capacitive touch panel; on the
+Pro Lite touch is wired but disabled by default in Kconfig (set
+`DRAFTLING_TOUCHSCREEN=y` to turn it on). Battery state of charge
+comes from an on-board BQ27220 fuel gauge over I2C; a driver for it
+is not implemented yet, so `DRAFTLING_HAS_BATTERY` defaults `n` and
+the battery indicator stays hidden. The on-board MicroSD slot shares
+its SPI bus with the LoRa radio on the Pro; Draftling drives the LoRa
+chip-select HIGH at boot so it does not interfere with SD traffic.
 
 The **M5Stack PaperS3** is so far the most usable option: it is
 compact, packed in a good enclosure with magnets on the back, and the
@@ -138,8 +156,9 @@ Git repository via the GitHub REST API.
 ## Touch Operations
 
 On boards with a touchscreen (currently the Guition JC3248W535 with
-its on-board AXS5106L controller, and the M5Stack PaperS3 with its
-on-board GT911 controller), touch input works alongside the Bluetooth
+its on-board AXS5106L controller, the M5Stack PaperS3 with its
+on-board GT911 controller, and the LilyGO T5 E-Paper S3 Pro -- also
+GT911), touch input works alongside the Bluetooth
 keyboard -- you can use either, or both. All gestures are summarized
 below.
 
@@ -242,7 +261,7 @@ Found at the top-level **DRAFTLING Configuration** menu.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| **Hardware Model** | choice | M5Stack PaperS3 | Select the target board. Display resolution, driver, pin map, touch controller and the deep-sleep wake source are derived automatically. See the [Supported hardware](#supported-hardware) table for all five options. |
+| **Hardware Model** | choice | M5Stack PaperS3 | Select the target board. Display resolution, driver, pin map, touch controller and the deep-sleep wake source are derived automatically. See the [Supported hardware](#supported-hardware) table for all seven options. |
 | **Display rotation angle** | choice | 0 degrees | Rotate the display by 0, 90, 180, or 270 degrees. |
 | **E-paper full-refresh interval** | int | 30 | E-paper boards only: number of partial refreshes between full refreshes. |
 | **Enable touchscreen input** | bool | y on PaperS3 and JC3248W535, n otherwise | Enable the I2C touch driver and LVGL pointer input device. |

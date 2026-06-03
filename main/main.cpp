@@ -105,11 +105,18 @@ extern "C" void app_main(void)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, -1,
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+#elif defined(CONFIG_DRAFTLING_DISPLAY_EDS3)
     /* The PaperS3 driver is a thin shim over M5GFX which configures
      * all panel GPIOs internally based on the M5PaperS3 board id. We
      * still call display_init for API parity; pin parameters are
      * ignored by the M5GFX backend. */
+    display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* The LilyGO T5 E-Paper S3 Pro / Pro Lite display backend is a
+     * thin shim over vroland/epdiy which owns all panel GPIOs via
+     * its `epd_board_v7` configuration (8-bit parallel data bus on
+     * direct GPIOs plus TPS65185 power management via a PCA9535 IO
+     * expander on I2C). Pin parameters are ignored. */
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_AXS15231B)
     /* AXS15231B QSPI color LCD. Needs 9 GPIOs (CS/SCK/D0..D3/RST/TE/BL),
@@ -251,11 +258,32 @@ extern "C" void app_main(void)
      * down. */
     sd_ret = sd_card_init(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_MOUNT_POINT);
 #else
+#if defined(BOARD_LORA_CS_PIN) && (BOARD_LORA_CS_PIN >= 0)
+    /* LilyGO T5 E-Paper S3 Pro: the on-board MicroSD slot shares its
+     * SPI bus with the SX1262 LoRa radio. If the LoRa CS line is
+     * left floating, SD init can fail intermittently because the
+     * LoRa chip latches onto SPI traffic intended for the SD card
+     * (LilyGO T5S3-4.7-e-paper-PRO issue #3). Drive LoRa CS HIGH
+     * here -- on the Pro Lite variant the LoRa silicon is
+     * depopulated, so this is just a harmless drive on an
+     * unconnected output. */
+    {
+        gpio_config_t lora_cs = {};
+        lora_cs.intr_type    = GPIO_INTR_DISABLE;
+        lora_cs.mode         = GPIO_MODE_OUTPUT;
+        lora_cs.pin_bit_mask = (1ULL << BOARD_LORA_CS_PIN);
+        gpio_config(&lora_cs);
+        gpio_set_level((gpio_num_t)BOARD_LORA_CS_PIN, 1);
+    }
+#endif
     /* Every other supported board carries the SD card on a generic
      * SPI bus separate from the display:
      *   - PaperS3:                on-board MicroSD on SPI3
      *   - AXS15231B color LCDs:   SPI3 (display owns SPI2 QSPI)
      *   - LilyGO T-Display-S3:    user-wired external SD on SPI3
+     *   - LilyGO T5 E-Paper S3 Pro: on-board MicroSD on SPI3 (shared
+     *     with the SX1262 LoRa radio CS; we drive LoRa CS HIGH above
+     *     so the radio does not snoop the SD traffic).
      * sd_card_init_spi() returns gracefully if no card is present
      * (e.g. T-Display-S3 with no module wired). */
     sd_ret = sd_card_init_spi(SPI3_HOST,

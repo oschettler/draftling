@@ -48,6 +48,120 @@
 /* Deep-sleep wakeup on GPIO18 (EXT0, active-low) */
 #define WAKEUP_GPIO_NUM 18
 
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+      defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+/* ----- LilyGO T5 E-Paper S3 Pro / Pro Lite -----
+ *
+ * 4.7" ED047TC1 e-paper panel, 960 x 540 landscape, driven by the
+ * vroland/epdiy library's `epd_board_v7` configuration: 8-bit
+ * parallel data bus + control lines on direct ESP32-S3 GPIOs, plus
+ * a TPS65185 high-voltage power-management IC commanded over I2C via
+ * a PCA9535PW I/O expander (I2C addr 0x20). All EPD pin assignments
+ * are encapsulated inside epdiy's `epd_board_v7.c` so they are NOT
+ * redefined here -- Draftling only needs to know about the
+ * peripherals it touches itself (SD card, I2C touch, BOOT button).
+ *
+ * The "Pro" and "Pro Lite" SKUs share the same H752-01 schematic.
+ * The only difference is that the Lite variant depopulates the
+ * SX1262 LoRa radio (CS = GPIO 46) and the MIA-M10Q GPS receiver;
+ * neither is used by Draftling, so the pin map below is identical
+ * between the two variants.
+ *
+ * References:
+ *   https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO
+ *     docs/pin_define.md, docs/pinmap.md, examples/factory/main/utilities.h
+ *   https://github.com/vroland/epdiy
+ *     src/board/epd_board_v7.c, README.md "LilyGo Boards" table
+ *     (LilyGo T5 S3 E-Paper Pro -> ED047TC1 -> epd_board_v7).
+ */
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
+#define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro"
+#else
+#define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro Lite"
+#endif
+
+/* On-board MicroSD card on a dedicated SPI bus.
+ *
+ * Pin assignments per the LilyGO reference:
+ *   examples/factory/main/utilities.h
+ *     #define BOARD_SD_MOSI 13
+ *     #define BOARD_SD_MISO 21
+ *     #define BOARD_SD_SCK  14
+ *     #define BOARD_SD_CS   12
+ *
+ * The SPI bus (GPIO 13/21/14) is *shared* with the SX1262 LoRa
+ * radio (CS = GPIO 46) on the Pro variant. The Lite variant does
+ * not have LoRa installed, so the bus is SD-only there. To keep
+ * the same code path on both SKUs and avoid the well-known
+ * "intermittent SD init failure with LoRa CS floating" problem
+ * (LilyGO T5S3-4.7-e-paper-PRO issue #3), main.cpp drives LoRa CS
+ * HIGH before sd_card_init_spi() runs. On the Lite the GPIO is
+ * just an unconnected output which is harmless. */
+#define SD_SPI_MOSI_PIN 13
+#define SD_SPI_MISO_PIN 21
+#define SD_SPI_SCK_PIN  14
+#define SD_SPI_CS_PIN   12
+#define SD_EN_PIN       -1
+
+/* SPI CS of the SX1262 LoRa radio (Pro variant). main.cpp drives
+ * this HIGH before SD init to prevent the LoRa chip from
+ * intercepting SPI traffic intended for the SD slot. Harmless on
+ * the Lite variant where the LoRa silicon is depopulated. */
+#define BOARD_LORA_CS_PIN 46
+
+/* I2C bus carrying the GT911 capacitive touch controller, the
+ * PCF8563TS RTC, the BQ27220 fuel gauge, the BQ25896 charger, the
+ * PCA9535 I/O expander (also used by epdiy for EPD power-rail
+ * control) and the TPS65185 EPD power IC. */
+#define I2C_SDA_PIN     39
+#define I2C_SCL_PIN     40
+
+/* GT911 capacitive touch controller (present on both Pro and Lite
+ * per the LilyGO docs/pin_define.md hardware section, even though
+ * Draftling defaults to TOUCHSCREEN=y only on the Pro SKU).
+ *
+ * Native panel coordinate range as reported by the GT911 is
+ * 540 wide x 960 tall (portrait); the display backend presents the
+ * panel as 960x540 landscape via epd_set_rotation(EPD_ROT_LANDSCAPE),
+ * so the touch driver swaps XY to match (same convention as the
+ * M5Stack PaperS3 GT911 block above).
+ *
+ * NOTE: the GT911 lives on the same I2C bus as epdiy's PCA9535 +
+ * TPS65185. epdiy creates its own bus on I2C port 0 inside
+ * epd_init(), so the touchscreen component cannot create a second
+ * bus on the same port. Until the touchscreen component grows
+ * support for an externally-supplied bus handle, touch on this
+ * board may fail to initialise at runtime (logged as a touchscreen
+ * init error; firmware continues without touch). */
+#define TOUCH_I2C_ADDR  0x5D
+#define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
+#define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO
+#define TOUCH_NATIVE_W  540
+#define TOUCH_NATIVE_H  960
+#define TOUCH_SWAP_XY   1
+#define TOUCH_MIRROR_X  1
+#define TOUCH_MIRROR_Y  0
+
+/* Battery monitor.
+ *
+ * The T5 E-Paper S3 Pro routes the LiPo cell through a BQ25896
+ * charger + BQ27220YZFR fuel gauge, both on the shared I2C bus
+ * (BQ27220 at 0x55, BQ25896 at 0x6B). There is NO dedicated GPIO
+ * ADC pin for the cell voltage. The ADC-only battery component
+ * (components/battery/battery.cpp) therefore cannot read the
+ * battery on this board; we set BATT_ADC_PIN=-1 (battery_init
+ * becomes a no-op) and DRAFTLING_HAS_BATTERY is left unset so the
+ * editor UI hides its battery indicator. A future fuel-gauge-aware
+ * battery backend would replace this stub. */
+#define BATT_ADC_PIN    -1
+#define BATT_EN_PIN     -1
+#define BATT_DIVIDER    1
+
+/* Deep-sleep wakeup on the BOOT button (GPIO 0, active-low strapping
+ * pin with a board-level pull-up; RTC-capable so EXT0 wake works).
+ * Matches BOARD_BOOT_BTN in examples/factory/main/utilities.h. */
+#define WAKEUP_GPIO_NUM 0
+
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* ----- M5Stack PaperS3 -----
  *
