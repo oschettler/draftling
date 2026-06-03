@@ -157,10 +157,12 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     default n
 
 # Minimum backlight percentage offered by the Settings menu. The
-# editor cycles through the steps {0, 10, 25, 50, 75, 100} %, but on
-# some panels the lowest steps are too dark to be usable. Bumping
-# this value drops the dim steps from the cycle so the user cannot
-# accidentally land on an unreadable brightness. The 0 % step is
+# editor cycles through the steps {0, 10, 25, 50, 75, 100} % (with
+# an extra 5 % step on the LilyGO T5 E-Paper S3 Pro / Pro Lite
+# front-light), but on some panels the lowest steps are too dark
+# to be usable. Bumping this value drops the dim steps from the
+# cycle so the user cannot accidentally land on an unreadable
+# brightness. The 0 % step is
 # only included when this value is 0 (it makes sense for reflective
 # / e-paper panels that stay readable without any back/front-light;
 # transmissive LCDs would just go fully dark). Non-prompted; set
