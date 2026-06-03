@@ -325,7 +325,33 @@ extern "C" void display_flush(void)
      * cheaper (and cleaner) than a giant partial. */
     bool huge = ((long)dw * dh) * 4 > ((long)s_width * s_height) * 3;
 
-    bool do_full = s_force_full || huge ||
+    /* Under rapid back-to-back flushes (e.g. typing at the top of a
+     * long document, which reflows nearly every line), epdiy's LCD
+     * render path on the ESP32-S3 has been observed to wedge both
+     * `epd_prep` feeder tasks busy-spinning at top priority on both
+     * cores, starving IDLE0 and tripping the task watchdog with no
+     * recovery. The trigger is large MODE_GL16 partials issued
+     * back-to-back before the EPD rail has fully settled. Promote
+     * near-full partials to a MODE_GC16 full refresh whenever the
+     * previous flush finished less than `FAST_SCROLL_GAP_MS` ago:
+     * one ~430 ms full refresh is more predictable than a sequence
+     * of ~430 ms 60-90% partials, and the flash is barely visible
+     * during fast scrolling because the content is changing anyway.
+     * Threshold of 40% of screen area is well below the 75% `huge`
+     * cutoff above, so steady-state small partials (cursor blink,
+     * status bar) are unaffected. */
+    static const int     FAST_SCROLL_GAP_MS       = 800;
+    static const long    FAST_SCROLL_AREA_NUM     = 2;   /* >= 2/5 ... */
+    static const long    FAST_SCROLL_AREA_DEN     = 5;   /* ... of screen */
+    static int64_t       s_last_flush_us          = 0;
+    int64_t now_us = esp_timer_get_time();
+    bool fast_scroll =
+        (s_last_flush_us != 0) &&
+        ((now_us - s_last_flush_us) < (int64_t)FAST_SCROLL_GAP_MS * 1000) &&
+        (((long)dw * dh) * FAST_SCROLL_AREA_DEN >
+         ((long)s_width * s_height) * FAST_SCROLL_AREA_NUM);
+
+    bool do_full = s_force_full || huge || fast_scroll ||
                    s_partial_count >= EPDIY_FULL_REFRESH_INTERVAL;
 
     epd_poweron();
@@ -344,6 +370,7 @@ extern "C" void display_flush(void)
     }
     epd_poweroff();
 
+    s_last_flush_us = esp_timer_get_time();
     clear_dirty();
 }
 
