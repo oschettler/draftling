@@ -129,12 +129,15 @@
  * M5Stack PaperS3 GT911 block above).
  *
  * NOTE: the GT911 lives on the same I2C bus as epdiy's PCA9535 +
- * TPS65185. epdiy creates its own bus on I2C port 0 inside
- * epd_init(), so the touchscreen component cannot create a second
- * bus on the same port. Until the touchscreen component grows
- * support for an externally-supplied bus handle, touch on this
- * board may fail to initialise at runtime (logged as a touchscreen
- * init error; firmware continues without touch). */
+ * TPS65185. epdiy 2.0.0 (the published managed component) installs
+ * the LEGACY driver/i2c.h on port 0; our touchscreen component uses
+ * driver/i2c_master.h (driver-NG) on the same port. ESP-IDF refuses
+ * to mix the two drivers and aborts at boot. The Kconfig default
+ * for DRAFTLING_TOUCHSCREEN is therefore `n` on both Pro and Lite,
+ * and main.cpp additionally hard-skips touchscreen_init when
+ * DISPLAY_EPDIY is selected. Touch on these boards will require
+ * either an epdiy upstream release with the driver-NG migration or
+ * shared-bus support in the touchscreen component. */
 #define TOUCH_I2C_ADDR  0x5D
 #define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO

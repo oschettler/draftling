@@ -37,3 +37,25 @@ if(NOT CONFIG_SPIRAM)
         "If your target chip has no PSRAM support at all (e.g. ESP32-S2, "
         "bare ESP32-C3 modules without PSRAM), it is not supported.")
 endif()
+
+# Silence warnings emitted from the vroland/epdiy managed component
+# (last upstream release 2.0.0, Nov 2023). The component still uses
+# APIs that have since been deprecated in ESP-IDF:
+#   - gdma_new_channel / gdma_set_transfer_ability  (-Wdeprecated-declarations)
+#   - legacy driver/adc.h and esp_adc_cal.h         (raw #warning -> -Wcpp)
+# and has a few unused locals (flags, vcomreg, int1reg, -Wunused-variable).
+# These warnings are in third-party code we don't maintain and the build
+# is still correct, so suppress them only for that component's library
+# (and only when it's actually present in the build, i.e. when a LilyGO
+# T5 EPD S3 (Pro/Pro Lite) board is selected and the component manager
+# pulled epdiy in). This does not affect warnings in any draftling code.
+idf_build_get_property(build_components BUILD_COMPONENTS)
+if("vroland__epdiy" IN_LIST build_components)
+    idf_component_get_property(epdiy_lib vroland__epdiy COMPONENT_LIB)
+    if(epdiy_lib)
+        target_compile_options(${epdiy_lib} PRIVATE
+            -Wno-deprecated-declarations
+            -Wno-unused-variable
+            -Wno-cpp)
+    endif()
+endif()

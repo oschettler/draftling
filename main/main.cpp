@@ -303,7 +303,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
     ble_keyboard_init();
 
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN) && !defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
     /* Initialize the touchscreen and register the LVGL pointer
      * indev. Must run after the display (LVGL needs the default
      * display) and before standby_init (standby queries the touch
@@ -335,6 +335,20 @@ extern "C" void app_main(void)
         tcfg.user_rotate_deg = DISPLAY_ROTATE;
         touchscreen_init(&tcfg);
     }
+#elif defined(CONFIG_DRAFTLING_TOUCHSCREEN) && defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* Touch is force-skipped on epdiy boards (LilyGO T5 E-Paper S3
+     * Pro / Pro Lite). epdiy 2.0.0 installs the LEGACY driver/i2c.h
+     * on I2C port 0 for its TPS65185 + PCA9535; our touchscreen
+     * component would install the new driver/i2c_master.h on the
+     * same port and IDF aborts with "CONFLICT! driver_ng is not
+     * allowed to be used with this old driver". The Kconfig default
+     * for both T5 variants is `n` for this reason; this branch only
+     * exists to keep stale sdkconfig files with TOUCHSCREEN=y from
+     * crashing the device. Remove this guard once epdiy upstream's
+     * driver-NG migration ships in a tagged release we can pin. */
+    ESP_LOGW(TAG, "Touchscreen disabled: epdiy holds I2C port 0 with the "
+                  "legacy driver, incompatible with driver-NG touch on "
+                  "this board.");
 #endif
 
     /* WiFi is lazy-initialized on first wifi_manager_connect() call.

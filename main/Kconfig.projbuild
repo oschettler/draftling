@@ -291,13 +291,20 @@ config DRAFTLING_TOUCHSCREEN
     default y if DRAFTLING_MODEL_JC3248W535
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    # LilyGO T5 Pro Lite: hardware also carries a GT911 controller on
-    # the same I2C bus as the Pro variant, but Draftling's plan calls
-    # out the Lite SKU as a "no extras" configuration. Default off so
-    # the Lite firmware does not depend on the touchscreen / I2C-bus-
-    # sharing path; users can enable it manually in menuconfig if
-    # they want touch on a Lite board.
+    # LilyGO T5 E-Paper S3 Pro / Pro Lite: the GT911 capacitive touch
+    # controller sits on the same I2C bus (port 0) as epdiy's PCA9535
+    # I/O expander + TPS65185 power-management IC. epdiy 2.0.0 (the
+    # published managed component) drives that bus with the LEGACY
+    # `driver/i2c.h` API, while our touchscreen component uses the new
+    # `driver/i2c_master.h` (driver-NG). ESP-IDF refuses to share an
+    # I2C port between the two drivers ("CONFLICT! driver_ng is not
+    # allowed to be used with this old driver") and the failing call
+    # aborts the firmware at boot. Until epdiy upstream migrates to
+    # driver-NG (already done on main, not yet released) or our touch
+    # driver grows shared-bus support, default touch OFF on both T5
+    # variants. main.cpp additionally hard-skips touchscreen_init when
+    # DRAFTLING_DISPLAY_EPDIY is selected so a stale sdkconfig with
+    # TOUCHSCREEN=y does not bring the conflict back.
     default n
     help
         Enable I2C touch-controller support and an LVGL pointer
