@@ -3342,6 +3342,21 @@ static void handle_browser_key(const kb_event_t *ev)
             }
             return;
         }
+#if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
+        if (ck == 'b') {
+            /* Ctrl+B: cycle to the next backlight / front-light
+             * brightness step (same behaviour as in the editor). */
+            int bi = find_backlight_option(s_backlight_pct);
+            bi = (bi + 1) % BACKLIGHT_OPTION_COUNT;
+            s_backlight_pct = BACKLIGHT_OPTIONS[bi];
+            save_backlight_to_nvs();
+            display_set_backlight(s_backlight_pct);
+            char sbuf[32];
+            snprintf(sbuf, sizeof(sbuf), "Backlight: %d%%", s_backlight_pct);
+            editor_ui_set_status(sbuf);
+            return;
+        }
+#endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         if (ck == 'r') {
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
