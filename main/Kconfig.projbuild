@@ -56,6 +56,18 @@ config DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
         IPS color LCD, 640x172, AXS15231B controller over QSPI.
         Touch input is not used (Draftling is keyboard-driven).
 
+config DRAFTLING_MODEL_M5STACK_TAB5
+    bool "M5Stack Tab5 (ESP32-P4, ILI9881C, 5\" color MIPI-DSI LCD, 1280x720)"
+    depends on IDF_TARGET_ESP32P4
+    help
+        M5Stack Tab5 tablet (ESP32-P4): 5" IPS color LCD, 1280x720,
+        ILI9881C controller over MIPI-DSI (2 lanes). On-board GT911
+        capacitive touchscreen on I2C. Powered by a 3.7 V Li-ion
+        battery with USB-C charging; integrated PMIC, IMU, microphone
+        array, speaker, and MicroSD slot. The ESP32-P4 also exposes a
+        USB-HS host port and an ESP32-C6 co-processor for Wi-Fi /
+        Bluetooth. See https://docs.m5stack.com/en/core/Tab5.
+
 config DRAFTLING_MODEL_JC3248W535
     bool "Guition JC3248W535 (ESP32-S3, AXS15231B, 3.5\" color LCD, 480x320)"
     depends on IDF_TARGET_ESP32S3
