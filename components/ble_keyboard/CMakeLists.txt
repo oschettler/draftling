@@ -33,16 +33,33 @@ if(CONFIG_IDF_TARGET_ESP32P4 AND NOT CONFIG_BT_BLUEDROID_ENABLED)
         "for details.")
 endif()
 
-set(BLE_KB_REQS nvs_flash)
-if(CONFIG_BT_BLUEDROID_ENABLED)
-    list(APPEND BLE_KB_REQS bt esp_hid)
-    if(CONFIG_BT_CONTROLLER_DISABLED)
-        list(APPEND BLE_KB_REQS espressif__esp_hosted)
-    endif()
-endif()
-
+## NOTE on Kconfig-conditional REQUIRES:
+##
+## ESP-IDF processes each component's CMakeLists.txt in two passes:
+##   1. Early expansion -- extracts REQUIRES/PRIV_REQUIRES to build
+##      the inter-component dependency graph.
+##   2. Full build configuration.
+## During the early-expansion pass, sdkconfig has NOT been parsed
+## yet, so every CONFIG_* symbol is empty/undefined. That means a
+## naive `if(CONFIG_BT_BLUEDROID_ENABLED) list(APPEND ... bt esp_hid)`
+## block placed before idf_component_register() always evaluates
+## to false and silently drops those requirements -- you then get
+## `fatal error: esp_bt_main.h: No such file or directory` even
+## though sdkconfig clearly has CONFIG_BT_BLUEDROID_ENABLED=y.
+##
+## The supported workaround is idf_component_optional_requires(),
+## which is evaluated in the second pass after Kconfig values are
+## known. See the "Optional Project Requirements" section in
+## ESP-IDF's Build System guide.
 idf_component_register(
     SRCS "ble_keyboard.cpp"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES ${BLE_KB_REQS}
+    PRIV_REQUIRES nvs_flash
 )
+
+if(CONFIG_BT_BLUEDROID_ENABLED)
+    idf_component_optional_requires(PRIVATE bt esp_hid)
+    if(CONFIG_BT_CONTROLLER_DISABLED)
+        idf_component_optional_requires(PRIVATE espressif__esp_hosted)
+    endif()
+endif()
