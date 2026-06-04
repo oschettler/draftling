@@ -69,41 +69,29 @@ CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
 
 # ---------------------------------------------------------------
-# Bluetooth via ESP-Hosted VHCI
+# Bluetooth on ESP32-P4 -- DISABLED for now
 #
-# CONFIG_BT_CONTROLLER_DISABLED tells ESP-IDF that there is no
-# on-chip BT controller (the P4 has none); the controller lives
-# on the C6 and is exposed to Bluedroid through ESP-Hosted's
-# VHCI driver. ble_keyboard.cpp detects this via
-# CONFIG_BT_CONTROLLER_DISABLED and calls esp_hosted_bt_controller_*
-# + hosted_hci_bluedroid_open + esp_bluedroid_attach_hci_driver
-# instead of the native esp_bt_controller_* path used on S3.
+# The P4 has no on-chip BT radio; the only way to get BLE is to
+# route Bluedroid through the on-board ESP32-C6 over ESP-Hosted's
+# VHCI driver. That requires both an ESP-IDF revision that ships
+# the Bluedroid host headers (esp_bt_main.h, esp_gap_ble_api.h,
+# esp_gattc_api.h, ...) when CONFIG_BT_CONTROLLER_DISABLED=y and
+# an esp_hosted release that publishes a matching VHCI-mode
+# Kconfig. Until both pieces are in place, building with
+# CONFIG_BT_BLUEDROID_ENABLED=y on P4 fails at compile time with
+# "esp_bt_main.h: No such file or directory" because the bt
+# component does not install the Bluedroid api/include headers on
+# this target.
 #
-# We constrain to BLE 4.2 features only -- the BLE HID keyboard
-# does not need 5.x extended advertising, and 4.2 has the smallest
-# Bluedroid footprint. Match the S3 build's BLE feature selection
-# otherwise so the keyboard pairing/connect flow behaves the same.
+# Explicitly turn the whole BT stack off here. This overrides
+# `CONFIG_BT_ENABLED=y` / `CONFIG_BT_BLUEDROID_ENABLED=y` from the
+# common sdkconfig.defaults; ble_keyboard.cpp then falls back to
+# its no-op stubs (see the `#if !defined(CONFIG_BT_BLUEDROID_ENABLED)`
+# branch) and Tab5 simply has no BLE keyboard support for the
+# moment. Re-enable once the headers above are reachable.
 # ---------------------------------------------------------------
-CONFIG_BT_ENABLED=y
-CONFIG_BT_CONTROLLER_DISABLED=y
-CONFIG_BT_BLUEDROID_ENABLED=y
-CONFIG_BT_BLE_ENABLED=y
-CONFIG_BT_GATTC_ENABLE=y
-CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
-CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
-CONFIG_BT_BLE_SMP_ENABLE=y
-CONFIG_BT_HID_HOST_ENABLED=y
-# Mirror the ESP32-S3 build: keep Bluedroid host environment on the
-# heap (so SPIRAM_FIRST can land it in PSRAM) and use the IDF default
-# GATTC notification registration cap so reconnects don't silently
-# drop input on keyboards that register many CCCDs.
-CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
-CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
-CONFIG_BT_GATTC_NOTIF_REG_MAX=30
-
-# Attach ESP-Hosted's HCI driver to Bluedroid as the VHCI transport.
-CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
-CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+# CONFIG_BT_ENABLED is not set
+# CONFIG_BT_BLUEDROID_ENABLED is not set
 
 # The default ESP-IDF main task stack (3.5 KB) is too tight for the
 # editor's call chains; match the ESP32-S3 build.
