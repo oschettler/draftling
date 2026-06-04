@@ -1851,10 +1851,37 @@ extern "C" void editor_ui_set_status(const char *msg)
 
 extern "C" void editor_ui_show_fatal(const char *msg)
 {
-    /* Persistent variant of editor_ui_set_status() for unrecoverable
-     * boot-time errors. The message stays on screen until the user
-     * power-cycles or resets the device. */
-    set_status_with_timeout(msg, 0);
+    /* Full-screen, centered, word-wrapped variant of
+     * editor_ui_set_status() for unrecoverable boot-time errors
+     * (e.g. ESP-Hosted link to the on-board ESP32-C6 not coming up).
+     *
+     * The regular status label is FONT_11 with LV_LABEL_LONG_CLIP and
+     * a width constrained by status_avail_width(), so a multi-line
+     * instruction message would be silently clipped to its first line.
+     * Instead we build a dedicated screen and load it, so the message
+     * fills the panel and survives any future editor_ui_set_status()
+     * calls. The screen stays on until power-cycle / reset. */
+    ESP_LOGE(TAG, "Fatal: %s", msg);
+    if (!msg) msg = "";
+
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr, theme_bg(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(scr, 10, 0);
+    lv_obj_set_style_border_width(scr, 0, 0);
+    lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(scr);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl, SCR_W - 20);
+    lv_obj_set_style_text_font(lbl, FONT_14, 0);
+    lv_obj_set_style_text_color(lbl, theme_fg(), 0);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(lbl, msg);
+    lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+
+    lv_scr_load(scr);
 }
 
 /* ---- Menu system ---- */

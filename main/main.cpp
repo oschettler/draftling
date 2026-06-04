@@ -411,10 +411,14 @@ extern "C" void app_main(void)
                           "ESP-Hosted slave firmware. Halting.",
                      hosted_err);
             const char *fatal_msg =
-                "ERROR: ESP32-C6 not responding.\n"
-                "Flash the on-board ESP32-C6 with the matching\n"
-                "ESP-Hosted slave firmware. See\n"
-                "docs/tab5-esp-hosted.md.";
+                "ESP32-C6 not responding.\n\n"
+                "The on-board ESP32-C6 co-processor is not "
+                "responding over the ESP-Hosted SDIO link. "
+                "This usually means it has not been flashed "
+                "with the matching ESP-Hosted slave firmware.\n\n"
+                "Please flash the ESP32-C6 with the ESP-Hosted "
+                "slave firmware, then power-cycle the device.\n\n"
+                "See docs/tab5-esp-hosted.md for instructions.";
             if (draftling_lvgl_port_lock(-1)) {
                 editor_ui_show_fatal(fatal_msg);
                 draftling_lvgl_port_unlock();
