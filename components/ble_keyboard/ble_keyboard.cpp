@@ -66,7 +66,17 @@ int ble_keyboard_get_battery_level(void)                                 { retur
 #include <freertos/task.h>
 #include <freertos/timers.h>
 #include <esp_log.h>
+#if !defined(CONFIG_BT_CONTROLLER_DISABLED)
+/* esp_bt.h declares the on-chip BT *controller* API
+ * (esp_bt_controller_init/enable/mem_release, ESP_BT_MODE_*,
+ * BT_CONTROLLER_INIT_CONFIG_DEFAULT). On targets without a
+ * native controller (ESP32-P4: CONFIG_BT_CONTROLLER_DISABLED=y),
+ * the header is not even installed by ESP-IDF's `bt` component,
+ * and we don't need any of those symbols -- the controller lives
+ * on the C6 and is reached via ESP-Hosted's VHCI (see the
+ * CONFIG_BT_CONTROLLER_DISABLED branch in ble_keyboard_init()). */
 #include <esp_bt.h>
+#endif
 #include <esp_bt_main.h>
 #include <esp_gap_ble_api.h>
 #include <esp_gattc_api.h>
