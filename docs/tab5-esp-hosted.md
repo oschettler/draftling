@@ -72,7 +72,7 @@ bsp_feature_enable(BSP_FEATURE_WIFI, true);
 The BSP transparently brings up the I/O expander on first use, so
 this call is the only thing needed; the underlying
 `bsp_i2c_init()` is already invoked earlier from the display
-bring-up. A short `vTaskDelay(50 ms)` after the enable lets the C6
+bring-up. A `vTaskDelay(200 ms)` after the enable lets the C6
 LDO settle and the ROM bootloader reach a known state before the
 host pulses `Slave_Reset`.
 

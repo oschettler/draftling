@@ -362,7 +362,13 @@ extern "C" void app_main(void)
          * the espressif/m5stack_tab5 BSP and wait briefly for the C6
          * LDO to settle and the ROM bootloader to come up. bsp_i2c_init()
          * has already been called above (display path), and
-         * bsp_feature_enable() is idempotent. */
+         * bsp_feature_enable() is idempotent.
+         *
+         * A 50 ms post-enable delay was empirically insufficient on cold
+         * boot (SDIO CMD5 then times out with sdmmc_init_ocr: send_op_cond
+         * returned 0x107 even though the host pulses Slave_Reset on GPIO15
+         * afterwards). 200 ms gives the C6 LDO + CHIP_PU + ROM bootloader
+         * comfortable headroom before SDIO probing starts. */
         esp_err_t pwr_err = bsp_feature_enable(BSP_FEATURE_WIFI, true);
         if (pwr_err != ESP_OK) {
             ESP_LOGE(TAG, "bsp_feature_enable(BSP_FEATURE_WIFI) failed: %s",
@@ -370,7 +376,7 @@ extern "C" void app_main(void)
         } else {
             ESP_LOGI(TAG, "ESP32-C6 power rail (WLAN_PWR_EN) enabled");
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(200));
 #endif
         ESP_LOGI(TAG, "Initializing ESP-Hosted link to ESP32-C6...");
 

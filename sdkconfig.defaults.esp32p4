@@ -92,7 +92,14 @@ CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
 CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
 CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
-CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
+# Reset polarity: use the umbrella CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW
+# symbol. The per-bus CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW sits inside a
+# `choice ESP_HOSTED_SDIO_RESET_GPIO_CONFIG` whose default is ACTIVE_HIGH;
+# the umbrella bool (default y if *_ACTIVE_LOW) is the symbol the host
+# driver actually reads (#ifdef CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW
+# in host/port/esp/freertos/include/port_esp_hosted_host_config.h). Set
+# it directly to avoid any confusion about which knob is in effect.
+CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW=y
 # Streaming RX mode pre-allocates a 15+ KB-per-block mempool that is
 # too large for the P4's tight internal DMA-capable SRAM at the point
 # hosted_mempool_create() runs; keep packet mode so the per-block size
