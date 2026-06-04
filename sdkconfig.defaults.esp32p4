@@ -82,7 +82,18 @@ CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
 CONFIG_ESP_HOSTED_GPIO_SLAVE_RESET_SLAVE=15
 CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
 CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW=y
-CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
+# Streaming RX mode pre-allocates a 15+ KB-per-block mempool that is
+# too large for the P4's tight internal DMA-capable SRAM at the point
+# hosted_mempool_create() runs; keep packet mode so the per-block size
+# stays at MAX_SDIO_BUFFER_SIZE (1536 B).
+# CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE is not set
+
+# On ESP32-P4 the GDMA engine can reach PSRAM through the cache, so
+# let ESP-Hosted allocate its SDIO transport mempool from the 32 MB
+# HEX PSRAM instead of the ~480 KB internal SRAM. Without this knob
+# hosted_malloc_align() falls back to MALLOC_CAP_INTERNAL|DMA|8BIT
+# and sdio_drv.c's `assert(buf_mp_g)` fires at boot.
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
 
 # ---------------------------------------------------------------
 # Wi-Fi Remote -- redirect esp_wifi_* into ESP-Hosted RPCs so
@@ -91,29 +102,28 @@ CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
 
 # ---------------------------------------------------------------
-# Bluetooth on ESP32-P4 -- DISABLED for now
+# Bluetooth on ESP32-P4 -- Bluedroid host + hosted-VHCI controller
 #
-# The P4 has no on-chip BT radio; the only way to get BLE is to
-# route Bluedroid through the on-board ESP32-C6 over ESP-Hosted's
-# VHCI driver. That requires both an ESP-IDF revision that ships
-# the Bluedroid host headers (esp_bt_main.h, esp_gap_ble_api.h,
-# esp_gattc_api.h, ...) when CONFIG_BT_CONTROLLER_DISABLED=y and
-# an esp_hosted release that publishes a matching VHCI-mode
-# Kconfig. Until both pieces are in place, building with
-# CONFIG_BT_BLUEDROID_ENABLED=y on P4 fails at compile time with
-# "esp_bt_main.h: No such file or directory" because the bt
-# component does not install the Bluedroid api/include headers on
-# this target.
+# The P4 has no on-chip BT radio, so the BLE controller lives on
+# the on-board ESP32-C6 and is reached over ESP-Hosted's SDIO
+# transport. ESP-IDF therefore forces CONFIG_BT_CONTROLLER_DISABLED=y
+# on this target while still installing the Bluedroid host headers
+# (esp_bt_main.h, esp_gap_ble_api.h, esp_gattc_api.h, ...). The
+# ble_keyboard component has a CONFIG_BT_CONTROLLER_DISABLED branch
+# that brings up esp_hosted_bt_controller_* and attaches the
+# hosted-VHCI HCI driver to Bluedroid before esp_bluedroid_init().
 #
-# Explicitly turn the whole BT stack off here. This overrides
-# `CONFIG_BT_ENABLED=y` / `CONFIG_BT_BLUEDROID_ENABLED=y` from the
-# common sdkconfig.defaults; ble_keyboard.cpp then falls back to
-# its no-op stubs (see the `#if !defined(CONFIG_BT_BLUEDROID_ENABLED)`
-# branch) and Tab5 simply has no BLE keyboard support for the
-# moment. Re-enable once the headers above are reachable.
+# The two CONFIG_ESP_HOSTED_* knobs below tell `espressif/esp_hosted`
+# to compile in its Bluedroid VHCI shim; without them the hosted_*
+# symbols ble_keyboard.cpp links against are not produced. Recipe
+# mirrors examples/host_bluedroid_ble_compatibility_test in
+# espressif/esp-hosted-mcu. The C6 slave only speaks BLE 4.2, so
+# pin BT_BLE_42 and turn off BLE 5.0 features.
 # ---------------------------------------------------------------
-# CONFIG_BT_ENABLED is not set
-# CONFIG_BT_BLUEDROID_ENABLED is not set
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_LE_50_FEATURE_SUPPORT=n
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
 
 # The default ESP-IDF main task stack (3.5 KB) is too tight for the
 # editor's call chains; match the ESP32-S3 build.
