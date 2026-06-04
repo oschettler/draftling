@@ -8,6 +8,28 @@
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
+# ---------------------------------------------------------------
+# Chip revision -- target pre-production ESP32-P4 (ECO2, v1.x)
+#
+# ESP-IDF's default minimum supported P4 revision is v3.1 (mass
+# production silicon). Engineering samples / pre-production boards
+# report revision v1.x (ROM banner "esp32p4-eco2-20240710") and
+# are refused by the bootloader's chip-revision check:
+#   "bootloader.bin requires chip revision in range [v3.1 - v3.99]
+#    (this chip is revision v1.3). Use --force to flash anyway."
+# Even with --force the firmware crashes immediately (Illegal
+# instruction in the bootloader) because v3.x-only ROM workarounds
+# and instructions are taken on a v1.x die.
+#
+# Selecting REV_LESS_V3 + REV_MIN_100 builds a binary that targets
+# v1.0..v1.99 silicon (covering v1.3). Note: ESP-IDF makes <3.0 and
+# >=3.0 mutually exclusive, so a binary built this way will NOT run
+# on production v3.x Tab5 boards. Drop these two lines once all
+# supported hardware is on ECO3/v3.x silicon.
+# ---------------------------------------------------------------
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_100=y
+
 # PSRAM -- Tab5 carries 32 MB HEX-mode PSRAM (200 MHz). The MIPI-DSI
 # DPI panel framebuffer (1280 * 720 * 2 = ~1.8 MB) and our LVGL
 # rendering buffers must all live in PSRAM; internal SRAM on the
