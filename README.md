@@ -1,17 +1,17 @@
 # Draftling
 
-A distraction-free Markdown text editor for ESP32-S3-based development
-boards with reflective LCD, e-paper or small color LCD displays.
+A distraction-free Markdown text editor for ESP32-S3- and ESP32-P4-based
+development boards with reflective LCD, e-paper or color LCD displays.
 
 
 ## Supported hardware
 
-Draftling currently runs on six ESP32-S3 development boards. All of
-them share the same firmware image; the target board is picked at
-build time with `idf.py menuconfig` -> **DRAFTLING Configuration >
-Hardware Model**. Display resolution, driver, pin map, touch
-controller and the deep-sleep wake source are derived automatically
-from that choice.
+Draftling currently runs on seven development boards (six ESP32-S3 and
+one ESP32-P4). All of them share the same firmware image; the target
+board is picked at build time with `idf.py menuconfig` -> **DRAFTLING
+Configuration > Hardware Model**. Display resolution, driver, pin map,
+touch controller and the deep-sleep wake source are derived
+automatically from that choice.
 
 - **[Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2)** --
   4.2" reflective LCD (400x300, SPI). No touch. Battery monitored on
@@ -39,9 +39,25 @@ from that choice.
   3.5" IPS color LCD (480x320, AXS15231B over QSPI). AXS5106L
   capacitive touch on I2C. No user buttons -- the touch INT line is
   the deep-sleep wake source. External SD on a separate SPI bus.
+- **[M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5)** --
+  ESP32-P4 tablet with a 5" 1280x720 IPS color LCD (ILI9881C or
+  ST7123, MIPI-DSI 2-lane, auto-detected by the upstream
+  `espressif/m5stack_tab5` BSP). GT911 capacitive touch on I2C
+  (backup address 0x14). Li-ion battery + PMIC + USB-C charging.
+  Wi-Fi / Bluetooth are routed through an on-board ESP32-C6
+  co-processor over ESP-Hosted and are **not yet wired up in
+  Draftling**. The firmware builds with BT disabled at the
+  sdkconfig level (the BLE keyboard component compiles to no-op
+  stubs); the Wi-Fi manager is still linked in -- esp_netif and
+  esp_wifi exist on the P4 -- but Git sync will fail at runtime
+  until ESP-Hosted is integrated. Touch and the on-board MicroSD
+  slot work; this board has been added without on-hardware testing
+  and will likely need bring-up tweaks.
 
-All boards use an ESP32-S3 with at least 8 MB of PSRAM and 16 MB of
-flash, BLE for the HID keyboard and 802.11 b/g/n WiFi for Git sync.
+All ESP32-S3 boards use at least 8 MB of PSRAM and 16 MB of flash, BLE
+for the HID keyboard and 802.11 b/g/n Wi-Fi for Git sync. The Tab5
+board uses 32 MB HEX-mode PSRAM on the ESP32-P4 and currently lacks
+native BLE / Wi-Fi (see above).
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
 

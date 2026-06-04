@@ -63,9 +63,10 @@
  * -------
  * Draftling renders LVGL in *logical* pixels (panel size /
  * DRAFTLING_DISPLAY_SCALE). On Tab5 SCALE=2, so LVGL paints
- * 360 x 640 (post-rotation 640 x 360) and we expand each logical
- * pixel into a SCALE x SCALE block of panel pixels when copying
- * into the panel framebuffer.
+ * 360 x 640 (which becomes 640 x 360 landscape after lvgl_port's
+ * 90 degree software rotation) and we nearest-neighbor expand
+ * each logical pixel into a SCALE x SCALE block of panel pixels
+ * when copying into the panel framebuffer.
  *
  * Rotation
  * --------
@@ -242,6 +243,9 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
 
     if (!ensure_scratch((size_t)pw * (size_t)ph)) return true;
 
+    /* color_map is a tightly-packed RGB565 LVGL framebuffer; LVGL
+     * v9 hands these out 2-byte aligned (lv_display_set_buffers
+     * pads to a multiple of LV_DRAW_BUF_ALIGN, default 4). */
     const uint16_t *src = (const uint16_t *)color_map;
     /* For each source row, write SCALE destination rows; for each
      * source pixel, write SCALE destination pixels horizontally. */
