@@ -102,28 +102,34 @@ CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
 
 # ---------------------------------------------------------------
-# Bluetooth on ESP32-P4 -- Bluedroid host + hosted-VHCI controller
+# Bluetooth on ESP32-P4 -- DISABLED
 #
-# The P4 has no on-chip BT radio, so the BLE controller lives on
-# the on-board ESP32-C6 and is reached over ESP-Hosted's SDIO
-# transport. ESP-IDF therefore forces CONFIG_BT_CONTROLLER_DISABLED=y
-# on this target while still installing the Bluedroid host headers
-# (esp_bt_main.h, esp_gap_ble_api.h, esp_gattc_api.h, ...). The
-# ble_keyboard component has a CONFIG_BT_CONTROLLER_DISABLED branch
-# that brings up esp_hosted_bt_controller_* and attaches the
-# hosted-VHCI HCI driver to Bluedroid before esp_bluedroid_init().
+# The P4 has no on-chip BT radio. While it is possible to run the
+# Bluedroid host on the P4 and route HCI over ESP-Hosted's SDIO
+# transport to the on-board ESP32-C6 (see the
+# CONFIG_BT_CONTROLLER_DISABLED branch in components/ble_keyboard/
+# ble_keyboard.cpp), Bluetooth is intentionally turned off on this
+# target. ble_keyboard_init() then falls back to its
+# !defined(CONFIG_BT_BLUEDROID_ENABLED) no-op stub at the top of
+# ble_keyboard.cpp, which Draftling startup calls unconditionally.
 #
-# The two CONFIG_ESP_HOSTED_* knobs below tell `espressif/esp_hosted`
-# to compile in its Bluedroid VHCI shim; without them the hosted_*
-# symbols ble_keyboard.cpp links against are not produced. Recipe
-# mirrors examples/host_bluedroid_ble_compatibility_test in
-# espressif/esp-hosted-mcu. The C6 slave only speaks BLE 4.2, so
-# pin BT_BLE_42 and turn off BLE 5.0 features.
+# These =n lines override the BT block in the common
+# sdkconfig.defaults (CONFIG_BT_ENABLED=y et al.). Without them,
+# `idf.py reconfigure` inherits CONFIG_BT_ENABLED=y from the common
+# defaults and pulls the whole Bluedroid host into the build.
 # ---------------------------------------------------------------
+CONFIG_BT_ENABLED=n
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_BLE_ENABLED=n
+CONFIG_BT_GATTC_ENABLE=n
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_SMP_ENABLE=n
+CONFIG_BT_HID_HOST_ENABLED=n
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=n
 CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
 CONFIG_BT_LE_50_FEATURE_SUPPORT=n
-CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
-CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=n
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=n
 
 # The default ESP-IDF main task stack (3.5 KB) is too tight for the
 # editor's call chains; match the ESP32-S3 build.
