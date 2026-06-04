@@ -51,6 +51,31 @@ and is the SDMMC slot wired to the on-board C6).
 > Tab5 uses for the C6 reset line. Always override the
 > `_PRIV_SDIO_PIN_*_SLOT_1` knobs instead.
 
+## Powering the on-board C6
+
+On the Tab5 the C6's 3V3 rail is **not** connected to the always-on
+supply. It is gated by the **WLAN_PWR_EN** line on the second
+PI4IOE5V6408 I/O expander (I2C address `0x44`, pin `P0`) sitting on
+the system I2C bus (SDA `GPIO31`, SCL `GPIO32`). Until WLAN_PWR_EN
+is driven HIGH the C6 has no VDD; the host's slave-reset pulse on
+`GPIO15` then toggles a dead chip and `esp_hosted_init()` times out
+waiting for `ESP_HOSTED_EVENT_TRANSPORT_UP`.
+
+`main/main.cpp` therefore enables the rail before initialising
+ESP-Hosted by calling the BSP helper
+
+```c
+bsp_feature_enable(BSP_FEATURE_WIFI, true);
+```
+
+(from `espressif/m5stack_tab5`, declared in `bsp/m5stack_tab5.h`).
+The BSP transparently brings up the I/O expander on first use, so
+this call is the only thing needed; the underlying
+`bsp_i2c_init()` is already invoked earlier from the display
+bring-up. A short `vTaskDelay(50 ms)` after the enable lets the C6
+LDO settle and the ROM bootloader reach a known state before the
+host pulses `Slave_Reset`.
+
 ## One-time C6 slave firmware flashing
 
 The C6 needs the ESP-Hosted slave firmware. Draftling does not
@@ -142,10 +167,12 @@ the editor restores from autosave on the next run.
 Implications:
 - Editor state in PSRAM is lost across standby; rely on autosave.
 - The ESP32-C6 co-processor stays powered through P4 deep sleep
-  (the C6 has no enable pin we control); the SDIO link is torn
-  down implicitly when the P4's SDIO peripheral powers off, and
-  `esp_hosted_init()` re-establishes it on the next cold boot.
-  No explicit teardown is needed in `standby_enter_sleep()`.
+  because its 3V3 rail is gated by WLAN_PWR_EN (PI4IOE5V6408 #2,
+  address 0x44, P0) on the system I2C bus, which retains its
+  register state across P4 reset and sleep transitions. The SDIO
+  link is torn down implicitly when the P4's SDIO peripheral powers
+  off, and `esp_hosted_init()` re-establishes it on the next cold
+  boot. No explicit teardown is needed in `standby_enter_sleep()`.
 - `DRAFTLING_STANDBY_WAKE_ON_TOUCH` must NOT be enabled on Tab5:
   GPIO 23 is not LP_IO and the EXT0 API is not available on the
   P4 at all (`SOC_PM_SUPPORT_EXT0_WAKEUP` is undefined).

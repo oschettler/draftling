@@ -353,6 +353,25 @@ extern "C" void app_main(void)
      * BLE/Wi-Fi initialisation abort the firmware. */
 #if defined(CONFIG_ESP_HOSTED_ENABLED)
     {
+#if defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
+        /* On the M5Stack Tab5 the ESP32-C6 co-processor's 3V3 rail is
+         * gated by WLAN_PWR_EN (PI4IOE5V6408 #2, address 0x44, P0).
+         * Until this pin is driven HIGH the C6 has no power, so the
+         * host's reset pulse on GPIO15 below targets a dead chip and
+         * the SDIO handshake never completes. Drive the rail high via
+         * the espressif/m5stack_tab5 BSP and wait briefly for the C6
+         * LDO to settle and the ROM bootloader to come up. bsp_i2c_init()
+         * has already been called above (display path), and
+         * bsp_feature_enable() is idempotent. */
+        esp_err_t pwr_err = bsp_feature_enable(BSP_FEATURE_WIFI, true);
+        if (pwr_err != ESP_OK) {
+            ESP_LOGE(TAG, "bsp_feature_enable(BSP_FEATURE_WIFI) failed: %s",
+                     esp_err_to_name(pwr_err));
+        } else {
+            ESP_LOGI(TAG, "ESP32-C6 power rail (WLAN_PWR_EN) enabled");
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+#endif
         ESP_LOGI(TAG, "Initializing ESP-Hosted link to ESP32-C6...");
 
         /* esp_hosted_init() posts ESP_HOSTED_EVENT_TRANSPORT_UP via
