@@ -548,7 +548,7 @@ config DRAFTLING_DISPLAY_HEIGHT
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
-    default DRAFTLING_DISPLAY_ROTATE_90 if DRAFTLING_MODEL_M5STACK_TAB5
+    default DRAFTLING_DISPLAY_ROTATE_270 if DRAFTLING_MODEL_M5STACK_TAB5
     default DRAFTLING_DISPLAY_ROTATE_0
     help
         Rotation angle for the display in degrees.
