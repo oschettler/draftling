@@ -95,9 +95,19 @@ int ble_keyboard_get_battery_level(void)                                 { retur
 #include <esp_bluedroid_hci.h>
 /* ESP-Hosted hosted-VHCI driver (esp_hosted_bt_controller_*,
  * hosted_hci_bluedroid_*). Only pulled in when ESP-Hosted is in
- * use, i.e. on the ESP32-P4 build. */
+ * use, i.e. on the ESP32-P4 build.
+ *
+ * NOTE: upstream esp_hosted_bluedroid.h (and the esp_hosted_bt.h
+ * it transitively pulls in) ship WITHOUT an `extern "C"` guard,
+ * so we must wrap them ourselves; otherwise this C++ TU looks for
+ * the C++-mangled name `hosted_hci_bluedroid_open()` while the
+ * actual symbol defined in espressif/esp_hosted's vhci_drv.c has
+ * plain C linkage, producing an undefined-reference at link time.
+ * esp_hosted.h itself is already C-guarded. */
 #include <esp_hosted.h>
+extern "C" {
 #include <esp_hosted_bluedroid.h>
+}
 #endif
 
 static const char *TAG = "BLEKeyboard";
