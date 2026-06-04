@@ -45,19 +45,19 @@ automatically from that choice.
   `espressif/m5stack_tab5` BSP). GT911 capacitive touch on I2C
   (backup address 0x14). Li-ion battery + PMIC + USB-C charging.
   Wi-Fi / Bluetooth are routed through an on-board ESP32-C6
-  co-processor over ESP-Hosted and are **not yet wired up in
-  Draftling**. The firmware builds with BT disabled at the
-  sdkconfig level (the BLE keyboard component compiles to no-op
-  stubs); the Wi-Fi manager is still linked in -- esp_netif and
-  esp_wifi exist on the P4 -- but Git sync will fail at runtime
-  until ESP-Hosted is integrated. Touch and the on-board MicroSD
-  slot work; this board has been added without on-hardware testing
-  and will likely need bring-up tweaks.
+  co-processor via ESP-Hosted-MCU over SDIO; both `wifi_manager`
+  (Git sync) and `ble_keyboard` (BLE HID host) work the same as
+  on the ESP32-S3 boards. The C6 must be flashed once with the
+  matching ESP-Hosted slave firmware -- see
+  `docs/tab5-esp-hosted.md` for the procedure. Touch and the
+  on-board MicroSD slot work; this board has been added without
+  on-hardware testing and will likely need bring-up tweaks.
 
 All ESP32-S3 boards use at least 8 MB of PSRAM and 16 MB of flash, BLE
 for the HID keyboard and 802.11 b/g/n Wi-Fi for Git sync. The Tab5
-board uses 32 MB HEX-mode PSRAM on the ESP32-P4 and currently lacks
-native BLE / Wi-Fi (see above).
+board uses 32 MB HEX-mode PSRAM on the ESP32-P4 and reaches the same
+BLE / Wi-Fi functionality through its on-board ESP32-C6 co-processor
+via ESP-Hosted-MCU (see above and `docs/tab5-esp-hosted.md`).
 
 A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
 

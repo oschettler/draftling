@@ -14,6 +14,10 @@
 #endif
 #include "sdkconfig.h"
 
+#if defined(CONFIG_ESP_HOSTED_ENABLED)
+#include "esp_hosted.h"
+#endif
+
 #include "app_config.h"
 #include "display.h"
 #include "lvgl_port.h"
@@ -326,6 +330,39 @@ extern "C" void app_main(void)
             lvgl_port_unlock();
         }
     }
+
+    /* Bring up the ESP-Hosted SDIO link to the on-board ESP32-C6
+     * co-processor before Bluetooth or Wi-Fi. The C6 provides the
+     * BLE controller (attached to Bluedroid via VHCI in
+     * ble_keyboard.cpp) and the 2.4 GHz Wi-Fi radio (used through
+     * esp_wifi_remote by wifi_manager.cpp). On any failure we log
+     * and continue: ble_keyboard_init() and wifi_manager_connect()
+     * will then fail loudly on their next call, which matches the
+     * pre-hosted behaviour where Wi-Fi/BT were simply unavailable
+     * on the P4. See docs/tab5-esp-hosted.md. */
+#if defined(CONFIG_ESP_HOSTED_ENABLED)
+    {
+        ESP_LOGI(TAG, "Initializing ESP-Hosted link to ESP32-C6...");
+        int hosted_err = esp_hosted_init();
+        if (hosted_err != 0) {
+            ESP_LOGE(TAG, "esp_hosted_init failed (%d) -- Wi-Fi and "
+                          "BLE will be unavailable on this boot",
+                     hosted_err);
+        } else {
+            hosted_err = esp_hosted_connect_to_slave();
+            if (hosted_err != 0) {
+                ESP_LOGE(TAG, "esp_hosted_connect_to_slave failed (%d) -- "
+                              "Wi-Fi and BLE will be unavailable on this "
+                              "boot. Verify the on-board ESP32-C6 is flashed "
+                              "with the matching ESP-Hosted slave firmware "
+                              "(see docs/tab5-esp-hosted.md).",
+                         hosted_err);
+            } else {
+                ESP_LOGI(TAG, "ESP-Hosted link up");
+            }
+        }
+    }
+#endif
 
     /* Initialize Bluetooth keyboard */
     ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");

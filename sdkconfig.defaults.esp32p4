@@ -26,12 +26,84 @@ CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=1
 
 # Wi-Fi / Bluetooth on the ESP32-P4 are unavailable natively (no
-# on-chip 2.4 GHz radio). Tab5 instead routes both through an on-board
-# ESP32-C6 co-processor via the ESP-Hosted protocol over SDIO; we do
-# not enable that here. The ble_keyboard component compiles to no-op
-# stubs when CONFIG_BT_ENABLED is unset, and wifi_manager is only
-# brought up lazily on the first Git-sync attempt so it stays inert.
-# CONFIG_BT_ENABLED is intentionally left unset.
+# on-chip 2.4 GHz radio). Tab5 routes both through an on-board
+# ESP32-C6 co-processor via ESP-Hosted-MCU over SDIO. The host
+# component is `espressif/esp_hosted` (added in main/idf_component.yml
+# under `target == esp32p4`); Wi-Fi calls are redirected through
+# `espressif/esp_wifi_remote`; Bluedroid talks to the C6's BLE
+# controller through ESP-Hosted's VHCI driver. See
+# docs/tab5-esp-hosted.md for the C6 slave firmware version and
+# the one-time flashing procedure.
+
+# ---------------------------------------------------------------
+# ESP-Hosted-MCU transport (SDIO, 4-bit, 40 MHz)
+#
+# Tab5 SDIO pin map between P4 (host) and C6 (slave). These match
+# the M5Tab5-UserDemo sdkconfig and the Tab5 schematic.
+# RESET line to the C6 is GPIO15, active-low (verified against
+# M5Stack's reference firmware).
+# ---------------------------------------------------------------
+CONFIG_ESP_HOSTED_ENABLED=y
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
+CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=4
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=12
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=13
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=11
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=10
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=9
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=8
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
+CONFIG_ESP_HOSTED_GPIO_SLAVE_RESET_SLAVE=15
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
+CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW=y
+CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
+
+# ---------------------------------------------------------------
+# Wi-Fi Remote -- redirect esp_wifi_* into ESP-Hosted RPCs so
+# wifi_manager.cpp does not need a P4-specific code path.
+# ---------------------------------------------------------------
+CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
+
+# ---------------------------------------------------------------
+# Bluetooth via ESP-Hosted VHCI
+#
+# CONFIG_BT_CONTROLLER_DISABLED tells ESP-IDF that there is no
+# on-chip BT controller (the P4 has none); the controller lives
+# on the C6 and is exposed to Bluedroid through ESP-Hosted's
+# VHCI driver. ble_keyboard.cpp detects this via
+# CONFIG_BT_CONTROLLER_DISABLED and calls esp_hosted_bt_controller_*
+# + hosted_hci_bluedroid_open + esp_bluedroid_attach_hci_driver
+# instead of the native esp_bt_controller_* path used on S3.
+#
+# We constrain to BLE 4.2 features only -- the BLE HID keyboard
+# does not need 5.x extended advertising, and 4.2 has the smallest
+# Bluedroid footprint. Match the S3 build's BLE feature selection
+# otherwise so the keyboard pairing/connect flow behaves the same.
+# ---------------------------------------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_HID_HOST_ENABLED=y
+# Mirror the ESP32-S3 build: keep Bluedroid host environment on the
+# heap (so SPIRAM_FIRST can land it in PSRAM) and use the IDF default
+# GATTC notification registration cap so reconnects don't silently
+# drop input on keyboards that register many CCCDs.
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
+CONFIG_BT_GATTC_NOTIF_REG_MAX=30
+
+# Attach ESP-Hosted's HCI driver to Bluedroid as the VHCI transport.
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
 
 # The default ESP-IDF main task stack (3.5 KB) is too tight for the
 # editor's call chains; match the ESP32-S3 build.

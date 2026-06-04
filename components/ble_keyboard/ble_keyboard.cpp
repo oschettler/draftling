@@ -1,14 +1,20 @@
 /*
- * BLE HID Host keyboard driver for ESP32-S3.
+ * BLE HID Host keyboard driver.
  *
  * Uses ESP-IDF Bluedroid BLE stack for scanning and the unified HID
- * host component (esp_hidh) for HID-over-GATT.  ESP32-S3 does not
- * support Bluetooth Classic, so only BLE is used.
+ * host component (esp_hidh) for HID-over-GATT. Only BLE is used
+ * (no Classic BT) on every supported board.
  *
- * Note: esp_bt.h is the BT *controller* API, required for both
- * Classic BT and BLE.  On ESP32-S3 it provides BLE-only controller
- * functions (init, enable, memory release).  Classic BT memory is
- * explicitly released at startup so only BLE resources are kept.
+ * Note: esp_bt.h is the BT *controller* API, required on boards
+ * with a native on-chip BLE controller (ESP32-S3). On the ESP32-P4
+ * (M5Stack Tab5) there is no on-chip 2.4 GHz radio, so the BLE
+ * controller actually lives on the on-board ESP32-C6 co-processor
+ * and is reached over ESP-Hosted-MCU's SDIO transport. The
+ * Bluedroid host runs on the P4 just the same; we attach a
+ * hosted-VHCI HCI driver to it instead of initializing the native
+ * esp_bt_controller. This switch is driven by
+ * CONFIG_BT_CONTROLLER_DISABLED in ble_keyboard_init() below; see
+ * docs/tab5-esp-hosted.md for the C6 slave firmware setup.
  *
  * Multi-pairing: stores up to MAX_BONDED bonded device addresses in
  * NVS.  On startup it tries the last-connected device first, then
@@ -18,12 +24,10 @@
  * pairs, a random 6-digit passkey is generated and shown on the
  * display; the user types it on the keyboard to confirm.
  *
- * Targets without a usable Bluetooth controller (e.g. ESP32-P4 on
- * the M5Stack Tab5, where BLE is only available via the on-board
- * ESP32-C6 co-processor through ESP-Hosted and not natively) are
- * compiled to no-op stubs at the bottom of this file. They link
- * the same public API so Draftling startup code can call
- * ble_keyboard_init() unconditionally.
+ * Targets without a usable Bluetooth controller of either kind
+ * (CONFIG_BT_ENABLED unset) are compiled to no-op stubs at the
+ * bottom of this file. They link the same public API so Draftling
+ * startup code can call ble_keyboard_init() unconditionally.
  */
 
 #include "sdkconfig.h"
@@ -69,6 +73,20 @@ int ble_keyboard_get_battery_level(void)                                 { retur
 #include <esp_hidh.h>
 #include <nvs_flash.h>
 #include <nvs.h>
+
+#if defined(CONFIG_BT_CONTROLLER_DISABLED)
+/* Bluedroid HCI driver attachment API
+ * (esp_bluedroid_attach_hci_driver +
+ * esp_bluedroid_hci_driver_operations_t). Available in ESP-IDF's
+ * bt component when the Bluedroid host is built without its
+ * default on-chip HCI transport. */
+#include <esp_bluedroid_hci.h>
+/* ESP-Hosted hosted-VHCI driver (esp_hosted_bt_controller_*,
+ * hosted_hci_bluedroid_*). Only pulled in when ESP-Hosted is in
+ * use, i.e. on the ESP32-P4 build. */
+#include <esp_hosted.h>
+#include <esp_hosted_bluedroid.h>
+#endif
 
 static const char *TAG = "BLEKeyboard";
 
@@ -1278,6 +1296,41 @@ extern "C" void ble_keyboard_init(void)
     /* Load bonded device list from NVS */
     bonded_load();
 
+#if defined(CONFIG_BT_CONTROLLER_DISABLED)
+    /* Hosted-BT path (ESP32-P4 / M5Stack Tab5).
+     *
+     * The P4 has no on-chip BT controller; the BLE controller lives
+     * on the on-board ESP32-C6 and is reached over ESP-Hosted's SDIO
+     * transport. CONFIG_BT_CONTROLLER_DISABLED tells ESP-IDF to omit
+     * the native esp_bt_controller_* code, so we must:
+     *   1. bring up the hosted BT controller via the C6;
+     *   2. open the hosted-VHCI HCI driver;
+     *   3. attach it to Bluedroid as its HCI transport;
+     * before the standard esp_bluedroid_init/enable calls below.
+     *
+     * The actual SDIO transport (esp_hosted_init +
+     * esp_hosted_connect_to_slave) is already up: it is brought up
+     * in main.cpp ahead of ble_keyboard_init() so that any failure
+     * is logged once with full context rather than aborting the BLE
+     * stack here.
+     *
+     * Mirrors examples/host_bluedroid_ble_compatibility_test/main
+     * from espressif/esp-hosted-mcu. */
+    ESP_ERROR_CHECK(esp_hosted_bt_controller_init());
+    ESP_ERROR_CHECK(esp_hosted_bt_controller_enable());
+    ESP_LOGI(TAG, "Hosted BT controller enabled (BLE on C6)");
+
+    hosted_hci_bluedroid_open();
+    esp_bluedroid_hci_driver_operations_t hci_ops = {
+        .send                   = hosted_hci_bluedroid_send,
+        .check_send_available   = hosted_hci_bluedroid_check_send_available,
+        .register_host_callback = hosted_hci_bluedroid_register_host_callback,
+    };
+    ESP_ERROR_CHECK(esp_bluedroid_attach_hci_driver(&hci_ops));
+    ESP_LOGI(TAG, "Hosted VHCI attached to Bluedroid");
+#else
+    /* Native BT controller path (ESP32-S3). */
+
     /* Release Classic BT memory (ESP32-S3 is BLE-only) */
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
     ESP_LOGI(TAG, "Classic BT memory released");
@@ -1287,6 +1340,7 @@ extern "C" void ble_keyboard_init(void)
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
     ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
     ESP_LOGI(TAG, "BT controller enabled (BLE mode)");
+#endif /* CONFIG_BT_CONTROLLER_DISABLED */
 
     /* Initialize Bluedroid */
     ESP_ERROR_CHECK(esp_bluedroid_init());
