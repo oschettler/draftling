@@ -40,9 +40,9 @@ static kb_event_callback_t s_callback = NULL;
 /* Set true while at least one HID keyboard interface is open */
 static volatile bool s_kbd_connected = false;
 
-/* Tasks + queue used to drive the USB host library and the HID host
- * event pump from outside the application thread. */
-static TaskHandle_t  s_usb_lib_task    = NULL;
+/* Tasks + queue used to drive the HID host event pump from outside
+ * the application thread. (The USB Host library task is owned by
+ * the BSP -- see bsp_usb_host_start() in espressif/esp-bsp.) */
 static TaskHandle_t  s_hid_event_task  = NULL;
 static QueueHandle_t s_hid_event_queue = NULL;
 
@@ -62,24 +62,9 @@ typedef struct {
 } hid_event_t;
 
 /* ---- USB Host library task ---- */
-
-static void usb_lib_task(void *arg)
-{
-    while (true) {
-        uint32_t event_flags = 0;
-        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            /* No registered clients left; free unused devices so the
-             * lib can shut down cleanly if requested. We never call
-             * usb_host_uninstall() ourselves -- usb_kbd_init() is a
-             * one-shot bring-up -- so this is purely defensive. */
-            usb_host_device_free_all();
-        }
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
-            ESP_LOGD(TAG, "USB host lib: all devices freed");
-        }
-    }
-}
+/* Owned by the BSP on Tab5 (bsp_usb_host_start spawns usb_lib_task).
+ * No-op in this component to avoid a duplicate usb_host_install
+ * call. */
 
 /* ---- HID host event helpers ---- */
 
@@ -244,7 +229,13 @@ static void hid_event_task(void *arg)
             /* Force boot protocol so we always get the fixed 8-byte
              * report layout regardless of the keyboard's native
              * report-descriptor preferences. */
-            hid_class_request_set_protocol(evt.handle, HID_REPORT_PROTOCOL_BOOT);
+            esp_err_t pe = hid_class_request_set_protocol(evt.handle,
+                                                          HID_REPORT_PROTOCOL_BOOT);
+            if (pe != ESP_OK) {
+                ESP_LOGW(TAG, "set_protocol(BOOT) failed: %s "
+                              "(keyboard may send report-descriptor format "
+                              "instead of boot)", esp_err_to_name(pe));
+            }
             /* SetIdle 0 -> only report on state change (no autorepeat
              * floods). */
             hid_class_request_set_idle(evt.handle, 0, 0);
@@ -263,22 +254,13 @@ static void hid_event_task(void *arg)
 
 extern "C" int usb_kbd_init(void)
 {
-    /* Install the USB Host library first. */
-    const usb_host_config_t host_cfg = {
-        .skip_phy_setup = false,
-        .intr_flags     = ESP_INTR_FLAG_LOWMED,
-    };
-    esp_err_t err = usb_host_install(&host_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "usb_host_install failed: %s", esp_err_to_name(err));
-        return -1;
-    }
-
-    if (xTaskCreate(usb_lib_task, "usb_lib", 4096, NULL, 5,
-                    &s_usb_lib_task) != pdTRUE) {
-        ESP_LOGE(TAG, "usb_lib task create failed");
-        return -1;
-    }
+    /* NOTE: We deliberately do NOT call usb_host_install() or spawn a
+     * usb_lib_task here. On Tab5 bsp_usb_host_start() already does
+     * both (see espressif/esp-bsp bsp/m5stack_tab5/src/bsp_usb.c).
+     * Calling usb_host_install a second time returns
+     * ESP_ERR_INVALID_STATE. Callers on boards without that BSP
+     * helper must install the host library themselves before
+     * invoking usb_kbd_init(). */
 
     /* Spin up the queue + task that will service hid_drv_cb events. */
     s_hid_event_queue = xQueueCreate(8, sizeof(hid_event_t));
@@ -292,8 +274,8 @@ extern "C" int usb_kbd_init(void)
         return -1;
     }
 
-    /* Finally install the HID host driver. It spawns its own
-     * background task to drive control transfers. */
+    /* Install the HID host driver. It spawns its own background task
+     * to drive control transfers. */
     const hid_host_driver_config_t hid_cfg = {
         .create_background_task = true,
         .task_priority          = 5,
@@ -302,13 +284,13 @@ extern "C" int usb_kbd_init(void)
         .callback               = hid_drv_cb,
         .callback_arg           = NULL,
     };
-    err = hid_host_install(&hid_cfg);
+    esp_err_t err = hid_host_install(&hid_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "hid_host_install failed: %s", esp_err_to_name(err));
         return -1;
     }
 
-    ESP_LOGI(TAG, "USB Host + HID driver installed; waiting for keyboard");
+    ESP_LOGI(TAG, "HID host driver installed; waiting for keyboard");
     return 0;
 }
 
