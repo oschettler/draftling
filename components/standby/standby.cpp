@@ -8,6 +8,9 @@
  *   * Default (deep sleep + button wake):
  *     esp_deep_sleep_start(); wake via EXT0 on
  *     CONFIG_DRAFTLING_WAKEUP_GPIO (the per-board BOOT button).
+ *     On targets that have no EXT0 support (ESP32-P4) and no
+ *     LP_IO-capable user input, this falls back to RESET-only
+ *     wake (cold boot, autosave restore).
  *
  *   * CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH (deep sleep + touch wake):
  *     same as above but EXT0 is armed on the touchscreen INT pin
@@ -40,6 +43,7 @@
 #include <driver/rtc_io.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <soc/soc_caps.h>
 #include "sdkconfig.h"
 
 #include "standby.h"
@@ -345,6 +349,7 @@ extern "C" void standby_enter_sleep(void)
 
     gpio_num_t wake_gpio = resolve_wake_gpio();
 
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
     /* Enable the internal RTC pull-up on the wake pin and disable any
      * pull-down so the EXT0 wake-on-low source does not fire
      * immediately. The supported buttons (RLCD-4.2 button on GPIO18
@@ -380,8 +385,30 @@ extern "C" void standby_enter_sleep(void)
     }
 
     /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */
-    ESP_ERROR_CHECK(esp_sleep_enable_ext0_wakeup(wake_gpio, 0));
-    ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
+    esp_err_t wake_err = esp_sleep_enable_ext0_wakeup(wake_gpio, 0);
+    if (wake_err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_sleep_enable_ext0_wakeup(GPIO%d) failed: %s -- "
+                      "device will only wake via RESET",
+                 (int)wake_gpio, esp_err_to_name(wake_err));
+    } else {
+        ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
+    }
+#else
+    /* Target has no EXT0 wake source (ESP32-P4, ESP32-C2/C3/C6/H2/...).
+     * Some of these support EXT1 / LP_IO GPIO wakeup but only for a
+     * restricted set of pins (LP_IO range, e.g. GPIO0-15 on P4). On
+     * the only P4 board currently supported (M5Stack Tab5) no user
+     * button or touch INT lands on an LP_IO pin, so the only viable
+     * wake path is the hardware RESET button -- the chip cold-boots
+     * and the editor restores state from autosave on the next run.
+     * We therefore skip GPIO-wake arming entirely on these targets;
+     * any timer / touch wake source can still be enabled by the
+     * caller via the standard esp_sleep_* APIs before invoking
+     * standby_enter_sleep(). */
+    (void)wake_gpio;
+    ESP_LOGI(TAG, "Entering deep sleep (no GPIO wake source on this target; "
+                  "wake via RESET)...");
+#endif
     esp_deep_sleep_start();
     /* Does not return */
 #endif /* !CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF */

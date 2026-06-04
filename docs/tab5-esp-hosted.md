@@ -117,10 +117,25 @@ I (xxxx) BLEKeyboard: Bluedroid enabled
 
 ## Deep sleep
 
-The Tab5 standby path is `DRAFTLING_STANDBY_DISPLAY_OFF` (MCU
-stays awake, only the panel is blanked), so the C6 link is not
-torn down. If the standby mode is ever switched to true deep
-sleep on the Tab5, the C6 link must be deinitialised before
-`esp_deep_sleep_start()` and re-initialised on wake -- see the
-`host_shuts_down_slave_to_power_save` example in
-`espressif/esp-hosted-mcu`.
+The Tab5 standby path is real ESP32-P4 deep sleep
+(`esp_deep_sleep_start()`). The GT911 touch INT (GPIO 23) and the
+on-board USER button are not wired to LP_IO pins (GPIO 0-15) on
+the P4, so no GPIO wake source is available. The chip therefore
+wakes only via the hardware **RESET** button: it cold-boots and
+the editor restores from autosave on the next run.
+
+Implications:
+- Editor state in PSRAM is lost across standby; rely on autosave.
+- The ESP32-C6 co-processor stays powered through P4 deep sleep
+  (the C6 has no enable pin we control); the SDIO link is torn
+  down implicitly when the P4's SDIO peripheral powers off, and
+  `esp_hosted_init()` re-establishes it on the next cold boot.
+  No explicit teardown is needed in `standby_enter_sleep()`.
+- `DRAFTLING_STANDBY_WAKE_ON_TOUCH` must NOT be enabled on Tab5:
+  GPIO 23 is not LP_IO and the EXT0 API is not available on the
+  P4 at all (`SOC_PM_SUPPORT_EXT0_WAKEUP` is undefined).
+
+If a future Tab5 hardware revision wires a user input to an LP_IO
+pin, switch `components/standby/standby.cpp` to
+`esp_deep_sleep_enable_gpio_wakeup()` (the P4 equivalent of EXT0)
+for that pin.

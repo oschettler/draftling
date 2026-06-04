@@ -302,12 +302,14 @@ config DRAFTLING_WAKEUP_GPIO
     default 0  if DRAFTLING_MODEL_JC3248W535
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
-    # M5Stack Tab5 (ESP32-P4) has no BOOT button on a low-numbered
-    # RTC-capable GPIO that we can use for EXT0 wake. Standby on
-    # Tab5 defaults to DRAFTLING_STANDBY_DISPLAY_OFF (keeps MCU
-    # running, blanks panel) so the wake source is "any LVGL input
-    # event" -- this value is just a fallback if a user explicitly
-    # turns DISPLAY_OFF off, and will not actually wake the device.
+    # M5Stack Tab5 (ESP32-P4): no BOOT button is wired to an LP_IO
+    # (the only LP_IO range on the P4 is GPIO0-15), so there is no
+    # GPIO wake source available. On Tab5 standby enters real deep
+    # sleep and the only wake path is the hardware RESET button --
+    # the chip cold-boots and the editor restores from autosave.
+    # This value is set anyway for code paths that reference
+    # WAKEUP_GPIO_NUM directly but no EXT0/LP_IO arming is done on
+    # the P4 (see standby.cpp).
     default 0  if DRAFTLING_MODEL_M5STACK_TAB5
     default 0
 
@@ -403,10 +405,12 @@ config DRAFTLING_TOUCH_INT_GPIO
     # BSP so the GT911 powers up at its backup I2C address (0x14)
     # instead of the primary 0x5D -- a hardware pull-up resistor on
     # this board forces the alternate-address path. ESP32-P4
-    # GPIO23 is not LP_IO so EXT0/EXT1 deep-sleep wake on this pin
-    # is unavailable; on Tab5 we therefore default to the
-    # DRAFTLING_STANDBY_DISPLAY_OFF code path (MCU stays awake,
-    # panel goes black) rather than real deep sleep + wake-on-touch.
+    # GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake on
+    # this pin is unavailable: standby on Tab5 therefore enters
+    # real deep sleep with NO GPIO wake source and the only wake
+    # path is the hardware RESET button (cold boot, autosave is
+    # restored). DRAFTLING_STANDBY_WAKE_ON_TOUCH must NOT be set
+    # on Tab5 -- it would try to arm EXT0 on a non-LP_IO pin.
     default 23 if DRAFTLING_MODEL_M5STACK_TAB5
     default -1
 
@@ -449,7 +453,6 @@ config DRAFTLING_TOUCH_RST_GPIO
 # sleep + wake-on-touch.
 config DRAFTLING_STANDBY_DISPLAY_OFF
     bool "Standby: turn display off (keep MCU running) instead of deep sleep"
-    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
     help
         On standby, blank the display and put the panel into its

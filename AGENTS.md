@@ -308,6 +308,13 @@ workaround; both woke the device immediately, the latter because
 M5GFX initializes only the e-paper panel (not the touch
 controller), so the GT911 is left uninitialized and holds INT low.
 
+On targets that have no EXT0 support (the ESP32-P4 / M5Stack Tab5,
+where `SOC_PM_SUPPORT_EXT0_WAKEUP` is undefined), the EXT0 arming
+is compiled out entirely. The Tab5 has no user button or touch INT
+on an LP_IO pin (GPIO 0-15) either, so the only wake path is the
+hardware RESET button: the chip cold-boots and the editor restores
+from autosave on the next run. See `docs/tab5-esp-hosted.md`.
+
 Before arming EXT0, `standby_enter_sleep()` enables the chip's
 internal RTC pull-up on the wake GPIO and disables any pull-down.
 The supported boards (RLCD-4.2 button on GPIO18 and PaperS3 BOOT on

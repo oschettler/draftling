@@ -586,12 +586,14 @@
 #define BATT_EN_PIN         -1
 #define BATT_DIVIDER        1
 
-/* Standby on Tab5 uses DRAFTLING_STANDBY_DISPLAY_OFF (Kconfig
- * default), not real deep sleep + EXT0 wake -- the touch INT pin
- * (GPIO 23) is not an LP_IO on the ESP32-P4 so it cannot wake the
- * chip from deep sleep, and there is no other RTC-capable user
- * button. WAKEUP_GPIO_NUM is set anyway for code paths that
- * reference it directly. */
+/* Standby on Tab5 uses real deep sleep (esp_deep_sleep_start). The
+ * touch INT pin (GPIO 23) is not an LP_IO on the ESP32-P4 and no
+ * user button is wired to a LP_IO either, so there is no usable
+ * GPIO wake source: the only wake path is the hardware RESET
+ * button (cold boot, autosave restores the editor state).
+ * WAKEUP_GPIO_NUM is set anyway for code paths that reference it
+ * directly but is NOT armed as an EXT0/LP_IO wake source on the
+ * P4 (see components/standby/standby.cpp). */
 #define WAKEUP_GPIO_NUM     0
 
 #else
