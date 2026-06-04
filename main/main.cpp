@@ -504,6 +504,16 @@ extern "C" void app_main(void)
     /* Initialize Bluetooth keyboard */
     if (usb_kbd_present) {
         ESP_LOGI(TAG, "USB keyboard detected; skipping BLE keyboard");
+        /* editor_ui_init() left the "Searching for BLE keyboard..."
+         * prompt screen active because at that point we did not yet
+         * know whether a USB keyboard would enumerate. Now that the
+         * USB keyboard is up there is no BLE connect callback that
+         * will ever transition the UI, so jump straight to the file
+         * browser. */
+        if (draftling_lvgl_port_lock(-1)) {
+            editor_ui_show_file_browser();
+            draftling_lvgl_port_unlock();
+        }
     } else {
         ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
         ble_keyboard_init();
