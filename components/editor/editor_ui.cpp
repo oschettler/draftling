@@ -391,7 +391,7 @@ static lv_obj_t *s_img_logo    = NULL;
  * text 3 seconds after a transient message (e.g. "File too large")
  * was posted via editor_ui_set_status(). NULL when no message is
  * currently pending auto-clear. Runs inside lv_timer_handler() and
- * therefore does not need explicit lvgl_port_lock(). */
+ * therefore does not need explicit draftling_lvgl_port_lock(). */
 static lv_timer_t *s_status_clear_timer = NULL;
 
 /* BLE connection prompt screen */
@@ -3477,7 +3477,7 @@ static void apply_pending_connect_state(void);
 
 /* LVGL timer callback: drains the key-event queue in a batch.
  * This runs inside lv_timer_handler() which already holds the LVGL
- * mutex, so we must NOT call lvgl_port_lock() here. */
+ * mutex, so we must NOT call draftling_lvgl_port_lock() here. */
 static void key_drain_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -3555,7 +3555,7 @@ static void key_repeat_cb(lv_timer_t *timer)
 
 static void passkey_display_cb(uint32_t passkey)
 {
-    if (!lvgl_port_lock(100)) return;
+    if (!draftling_lvgl_port_lock(100)) return;
 
     if (passkey == BLE_PASSKEY_DISMISS) {
         /* Hide the passkey overlay */
@@ -3573,7 +3573,7 @@ static void passkey_display_cb(uint32_t passkey)
         }
     }
 
-    lvgl_port_unlock();
+    draftling_lvgl_port_unlock();
 }
 
 /* ---- BLE connection status callback ---- */
@@ -3589,7 +3589,7 @@ static volatile int8_t s_pending_conn_state = -1;
 
 /* Run on the LVGL task (from key_drain_cb). At this point the LVGL
  * mutex is already held by the LVGL task, so we must NOT call
- * lvgl_port_lock() here. */
+ * draftling_lvgl_port_lock() here. */
 static void apply_pending_connect_state(void)
 {
     int8_t pending = s_pending_conn_state;
@@ -3666,14 +3666,14 @@ static void ble_connect_status_cb(bool connected)
 static void ble_status_text_cb(const char *text)
 {
     if (!s_ble_prompt_lbl) return;
-    if (!lvgl_port_lock(200)) return;
+    if (!draftling_lvgl_port_lock(200)) return;
 
     /* Only update when the BLE prompt screen is active */
     if (lv_scr_act() == s_scr_ble_prompt) {
         lv_label_set_text(s_ble_prompt_lbl, text);
     }
 
-    lvgl_port_unlock();
+    draftling_lvgl_port_unlock();
 }
 
 /* ---- WiFi connect task ----
@@ -3687,9 +3687,9 @@ static void wifi_connect_task(void *arg)
     if (ret == ESP_ERR_NOT_FOUND) {
         /* No credentials -- the wifi_state callback will not fire,
          * so update the status bar directly. */
-        if (lvgl_port_lock(200)) {
+        if (draftling_lvgl_port_lock(200)) {
             editor_ui_set_status("WiFi: no credentials found");
-            lvgl_port_unlock();
+            draftling_lvgl_port_unlock();
         }
     }
     vTaskDelete(NULL);
@@ -3711,7 +3711,7 @@ static void wifi_connect_async(void)
  * any UI objects. */
 static void wifi_state_cb(wifi_state_t state)
 {
-    if (!lvgl_port_lock(200)) return;
+    if (!draftling_lvgl_port_lock(200)) return;
 
     /* While a Git sync is running, do not overwrite the on-screen
      * progress messages with WiFi state notifications -- the user
@@ -3759,7 +3759,7 @@ static void wifi_state_cb(wifi_state_t state)
     }
 
     update_wifi_icons();
-    lvgl_port_unlock();
+    draftling_lvgl_port_unlock();
 }
 
 /* ---- Git sync callback ----
@@ -3767,7 +3767,7 @@ static void wifi_state_cb(wifi_state_t state)
  * Must take the LVGL lock before touching any UI objects. */
 static void git_sync_cb(git_sync_state_t state, const char *message)
 {
-    if (!lvgl_port_lock(200)) return;
+    if (!draftling_lvgl_port_lock(200)) return;
 
     switch (state) {
     case GIT_SYNC_IN_PROGRESS:
@@ -3829,7 +3829,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
         break;
     }
 
-    lvgl_port_unlock();
+    draftling_lvgl_port_unlock();
 }
 
 /* ---- Initialization ---- */

@@ -210,9 +210,9 @@ static void lvgl_task(void *arg)
 {
     uint32_t delay_ms = LVGL_TASK_MAX_DELAY_MS;
     for (;;) {
-        if (lvgl_port_lock(-1)) {
+        if (draftling_lvgl_port_lock(-1)) {
             delay_ms = lv_timer_handler();
-            lvgl_port_unlock();
+            draftling_lvgl_port_unlock();
         }
         if (delay_ms > LVGL_TASK_MAX_DELAY_MS) delay_ms = LVGL_TASK_MAX_DELAY_MS;
         if (delay_ms < LVGL_TASK_MIN_DELAY_MS) delay_ms = LVGL_TASK_MIN_DELAY_MS;
@@ -220,7 +220,7 @@ static void lvgl_task(void *arg)
     }
 }
 
-extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
+extern "C" void draftling_lvgl_port_init(int width, int height, int rotate_deg)
 {
     /* Stash the user-requested rotation and the backend-native panel
      * dimensions so flush_cb can software-rotate each LVGL tile back
@@ -236,11 +236,11 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     s_phys_h = height;
 
     /* Recursive mutex so a task that already holds it can call
-     * lvgl_port_lock() again without deadlocking. The "Sleep now"
+     * draftling_lvgl_port_lock() again without deadlocking. The "Sleep now"
      * menu path is the motivating case: it runs inside the LVGL
      * timer/key handler (mutex held) and then calls
      * standby_enter_sleep() -> pre_sleep_autosave(), which itself
-     * takes lvgl_port_lock() to wipe the panel to white before deep
+     * takes draftling_lvgl_port_lock() to wipe the panel to white before deep
      * sleep. With a plain mutex the second take would block forever
      * and the screen would never get the white frame. */
     s_lvgl_mux = xSemaphoreCreateRecursiveMutex();
@@ -310,13 +310,13 @@ extern "C" void lvgl_port_init(int width, int height, int rotate_deg)
     ESP_LOGI(TAG, "LVGL port initialized (%dx%d, rotation=%d)", width, height, rotate_deg);
 }
 
-extern "C" bool lvgl_port_lock(int timeout_ms)
+extern "C" bool draftling_lvgl_port_lock(int timeout_ms)
 {
     TickType_t t = (timeout_ms == -1) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     return xSemaphoreTakeRecursive(s_lvgl_mux, t) == pdTRUE;
 }
 
-extern "C" void lvgl_port_unlock(void)
+extern "C" void draftling_lvgl_port_unlock(void)
 {
     xSemaphoreGiveRecursive(s_lvgl_mux);
 }

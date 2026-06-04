@@ -564,7 +564,7 @@
  *
  * GT911 reports panel-native coordinates 720 x 1280 portrait
  * (BSP panel orientation, INT/USB-C edge at the top of the GT911
- * frame). lvgl_port_init() is called with rotate_deg=90 to render
+ * frame). draftling_lvgl_port_init() is called with rotate_deg=90 to render
  * the editor landscape, and the touchscreen component applies the
  * same user_rotate_deg to map GT911 (x,y) -> LVGL (x,y). The
  * BSP-side swap/mirror is identity, so set both to 0 here too;

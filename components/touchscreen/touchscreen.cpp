@@ -429,7 +429,7 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
     }
 
     /* Register LVGL pointer indev. lv_init() was already called by
-     * lvgl_port_init(); we just attach the new device to the default
+     * draftling_lvgl_port_init(); we just attach the new device to the default
      * display. */
     s_indev = lv_indev_create();
     if (s_indev) {

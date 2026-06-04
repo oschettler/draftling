@@ -62,17 +62,17 @@ static void pre_sleep_autosave(void)
      * exclusive access to its M5GFX instance). */
     /* Take the LVGL mutex if we can so the wipe does not race with
      * the LVGL task's flush_cb. The mutex is recursive
-     * (lvgl_port_init), so this also works when pre_sleep_autosave
+     * (draftling_lvgl_port_init), so this also works when pre_sleep_autosave
      * runs inside the LVGL task itself (the "Sleep now" menu path).
      * If for any reason the lock cannot be obtained quickly, wipe
      * anyway -- a clean white frame on the panel matters more than
      * the slim chance of a flush_cb collision right before deep
      * sleep. */
-    bool locked = lvgl_port_lock(200);
+    bool locked = draftling_lvgl_port_lock(200);
     display_clear(0xFF);
     display_full_refresh();
     if (locked) {
-        lvgl_port_unlock();
+        draftling_lvgl_port_unlock();
     } else {
         ESP_LOGW(TAG, "pre_sleep wipe: LVGL lock not acquired, proceeded anyway");
     }
@@ -255,7 +255,7 @@ extern "C" void app_main(void)
      * pixel to a SCALE x SCALE block of physical panel pixels. With
      * SCALE = 1 the logical and panel dimensions are identical. */
     ESP_LOGI(TAG, "Initializing LVGL...");
-    lvgl_port_init(DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT, DISPLAY_ROTATE);
+    draftling_lvgl_port_init(DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT, DISPLAY_ROTATE);
 
     /* Initialize battery voltage monitor before the UI so the editor
      * status bar can show the battery level immediately. battery_init
@@ -278,9 +278,9 @@ extern "C" void app_main(void)
 
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");
-    if (lvgl_port_lock(-1)) {
+    if (draftling_lvgl_port_lock(-1)) {
         editor_ui_init();
-        lvgl_port_unlock();
+        draftling_lvgl_port_unlock();
     }
 
     /* Initialize SD card */
@@ -325,9 +325,9 @@ extern "C" void app_main(void)
 #endif
     if (sd_ret != ESP_OK) {
         ESP_LOGE(TAG, "SD card init failed: %s", esp_err_to_name(sd_ret));
-        if (lvgl_port_lock(-1)) {
+        if (draftling_lvgl_port_lock(-1)) {
             editor_ui_set_status("ERROR: SD card not ready");
-            lvgl_port_unlock();
+            draftling_lvgl_port_unlock();
         }
     }
 

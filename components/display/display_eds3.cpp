@@ -333,12 +333,12 @@ extern "C" void display_flush(void);
 static void deferred_flush_cb(void *arg)
 {
     (void)arg;
-    if (!lvgl_port_lock(-1)) return;
+    if (!draftling_lvgl_port_lock(-1)) return;
     s_deferred_pending = false;
     s_in_deferred_flush = true;
     display_flush();
     s_in_deferred_flush = false;
-    lvgl_port_unlock();
+    draftling_lvgl_port_unlock();
 }
 
 extern "C" void display_flush(void)
