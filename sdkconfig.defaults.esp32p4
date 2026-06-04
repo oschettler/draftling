@@ -64,24 +64,35 @@ CONFIG_BSP_LCD_DPI_BUFFER_NUMS=1
 # the M5Tab5-UserDemo sdkconfig and the Tab5 schematic.
 # RESET line to the C6 is GPIO15, active-low (verified against
 # M5Stack's reference firmware).
+#
+# NOTE: in espressif/esp_hosted >= 2.x, CONFIG_ESP_HOSTED_SDIO_PIN_*
+# are non-promptable derived ints (see upstream Kconfig: each is
+# `int` + `default ESP_HOSTED_PRIV_SDIO_PIN_*_SLOT_{0,1}`). Any
+# attempt to set CONFIG_ESP_HOSTED_SDIO_PIN_CLK=... here is silently
+# dropped by Kconfig and the value is recomputed from the per-slot
+# PRIV defaults (which on P4/SLOT_1 give CLK=18 CMD=19 D0=14 D1=15
+# D2=16 D3=17 -- not the Tab5 wiring, and D1=15 collides with the
+# C6 reset line). The promptable knobs are the
+# CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_*_SLOT_1 symbols below; those
+# DO override correctly. SLOT_1 is already the P4 default and is
+# the slot wired to the on-board C6.
 # ---------------------------------------------------------------
 CONFIG_ESP_HOSTED_ENABLED=y
 CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
 CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
 CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
+CONFIG_ESP_HOSTED_SDIO_SLOT_1=y
 CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
 CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=4
 CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
-CONFIG_ESP_HOSTED_SDIO_PIN_CLK=12
-CONFIG_ESP_HOSTED_SDIO_PIN_CMD=13
-CONFIG_ESP_HOSTED_SDIO_PIN_D0=11
-CONFIG_ESP_HOSTED_SDIO_PIN_D1=10
-CONFIG_ESP_HOSTED_SDIO_PIN_D2=9
-CONFIG_ESP_HOSTED_SDIO_PIN_D3=8
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CLK_SLOT_1=12
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_CMD_SLOT_1=13
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D0_SLOT_1=11
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D1_4BIT_BUS_SLOT_1=10
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D2_4BIT_BUS_SLOT_1=9
+CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_D3_4BIT_BUS_SLOT_1=8
 CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=15
-CONFIG_ESP_HOSTED_GPIO_SLAVE_RESET_SLAVE=15
 CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
-CONFIG_ESP_HOSTED_RESET_GPIO_ACTIVE_LOW=y
 # Streaming RX mode pre-allocates a 15+ KB-per-block mempool that is
 # too large for the P4's tight internal DMA-capable SRAM at the point
 # hosted_mempool_create() runs; keep packet mode so the per-block size

@@ -34,9 +34,22 @@ component is pulled in by `main/idf_component.yml` under a
 | C6 RESET (active LOW) | 15 |
 
 These match the M5Tab5-UserDemo reference firmware and the Tab5
-schematic. They are encoded as `CONFIG_ESP_HOSTED_SDIO_PIN_*` and
-`CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE` in
-`sdkconfig.defaults.esp32p4`.
+schematic. They are encoded in `sdkconfig.defaults.esp32p4` as the
+per-slot `CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_*_SLOT_1` symbols plus
+`CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE` (slot 1 is the P4 default
+and is the SDMMC slot wired to the on-board C6).
+
+> **Pitfall.** In `espressif/esp_hosted` ≥ 2.x the
+> `CONFIG_ESP_HOSTED_SDIO_PIN_CLK / _CMD / _D0..D3` symbols are
+> *non-promptable derived ints* whose values are computed from the
+> per-slot `_PRIV_SDIO_PIN_*_SLOT_{0,1}` defaults. Setting
+> `CONFIG_ESP_HOSTED_SDIO_PIN_CLK=12` in `sdkconfig.defaults` is
+> silently dropped by Kconfig, the upstream P4/SLOT_1 defaults
+> (CLK 18, CMD 19, D0 14, D1 15, D2 16, D3 17) win, and SDIO
+> bring-up fails with `sdmmc_init_ocr: send_op_cond (1) returned
+> 0x107` because the upstream D1 default (15) is the same pin the
+> Tab5 uses for the C6 reset line. Always override the
+> `_PRIV_SDIO_PIN_*_SLOT_1` knobs instead.
 
 ## One-time C6 slave firmware flashing
 
@@ -107,9 +120,11 @@ I (xxxx) BLEKeyboard: Bluedroid enabled
   `CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ` (e.g. to `20000`) and
   re-test.
 - **`esp_hosted_connect_to_slave failed (-1)`** -- the SDIO pin
-  map does not match the actual Tab5 wiring. Verify
-  `CONFIG_ESP_HOSTED_SDIO_PIN_*` against the schematic of your
-  specific Tab5 revision.
+  map does not match the actual Tab5 wiring. Verify the
+  `CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_*_SLOT_1` values (CLK / CMD /
+  D0 / D1_4BIT_BUS / D2_4BIT_BUS / D3_4BIT_BUS) against the
+  schematic of your specific Tab5 revision; do **not** edit the
+  `CONFIG_ESP_HOSTED_SDIO_PIN_*` symbols (see "Pitfall" above).
 - **Wi-Fi associates but BLE never connects** -- the C6 image is
   Wi-Fi-only. Re-flash with a build that has
   `HCI over SDIO / BLE only` in its capabilities line (see the
