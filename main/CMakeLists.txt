@@ -4,7 +4,7 @@
 ## init. We list it as a private requirement under a CONFIG guard so
 ## ESP32-S3 builds (which do not pull esp_hosted in at all) keep
 ## the same dependency set as before.
-set(MAIN_PRIV_REQS display sd_card ble_keyboard editor wifi_manager git_sync standby battery touchscreen power nvs_flash bt esp_hid driver)
+set(MAIN_PRIV_REQS display sd_card ble_keyboard editor wifi_manager git_sync standby battery touchscreen power nvs_flash bt esp_hid driver esp_event)
 if(CONFIG_ESP_HOSTED_ENABLED)
     list(APPEND MAIN_PRIV_REQS espressif__esp_hosted)
 endif()

@@ -1849,6 +1849,14 @@ extern "C" void editor_ui_set_status(const char *msg)
     set_status_with_timeout(msg, 3000);
 }
 
+extern "C" void editor_ui_show_fatal(const char *msg)
+{
+    /* Persistent variant of editor_ui_set_status() for unrecoverable
+     * boot-time errors. The message stays on screen until the user
+     * power-cycles or resets the device. */
+    set_status_with_timeout(msg, 0);
+}
+
 /* ---- Menu system ---- */
 
 /* Apply the "selected" styling to item `sel` and the "unselected"

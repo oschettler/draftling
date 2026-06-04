@@ -16,6 +16,9 @@
 
 #if defined(CONFIG_ESP_HOSTED_ENABLED)
 #include "esp_hosted.h"
+#include "esp_hosted_event.h"
+#include "esp_event.h"
+#include <freertos/event_groups.h>
 #endif
 
 #include "app_config.h"
@@ -335,32 +338,96 @@ extern "C" void app_main(void)
      * co-processor before Bluetooth or Wi-Fi. The C6 provides the
      * BLE controller (attached to Bluedroid via VHCI in
      * ble_keyboard.cpp) and the 2.4 GHz Wi-Fi radio (used through
-     * esp_wifi_remote by wifi_manager.cpp). On any failure we log
-     * and continue: ble_keyboard_init() and wifi_manager_connect()
-     * will then fail loudly on their next call, which matches the
-     * pre-hosted behaviour where Wi-Fi/BT were simply unavailable
-     * on the P4. See docs/tab5-esp-hosted.md. */
+     * esp_wifi_remote by wifi_manager.cpp).
+     *
+     * esp_hosted_init() / esp_hosted_connect_to_slave() return
+     * success even when the SDIO slave does not respond (the
+     * underlying transport_drv_reconfigure() failure is logged via
+     * ESP_ERROR_CHECK_WITHOUT_ABORT and swallowed). We therefore
+     * subscribe to the ESP_HOSTED_EVENT_TRANSPORT_UP event and
+     * require it to fire within a short timeout before continuing.
+     * If it doesn't, the most common cause is that the on-board
+     * ESP32-C6 is not flashed with the matching ESP-Hosted slave
+     * firmware (see docs/tab5-esp-hosted.md). In that case we show a
+     * persistent on-screen message and halt instead of letting later
+     * BLE/Wi-Fi initialisation abort the firmware. */
 #if defined(CONFIG_ESP_HOSTED_ENABLED)
     {
         ESP_LOGI(TAG, "Initializing ESP-Hosted link to ESP32-C6...");
+
+        /* esp_hosted_init() posts ESP_HOSTED_EVENT_TRANSPORT_UP via
+         * the default event loop, so it must exist before we call
+         * into ESP-Hosted. wifi_manager_init() creates it later; here
+         * we just ensure it's already up. ESP_ERR_INVALID_STATE means
+         * "already created", which is fine. */
+        esp_err_t loop_err = esp_event_loop_create_default();
+        if (loop_err != ESP_OK && loop_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s",
+                     esp_err_to_name(loop_err));
+        }
+
+        static EventGroupHandle_t s_hosted_evt = NULL;
+        s_hosted_evt = xEventGroupCreate();
+        constexpr EventBits_t HOSTED_UP_BIT = BIT0;
+
+        auto hosted_event_cb = [](void *arg, esp_event_base_t /*base*/,
+                                  int32_t id, void * /*data*/) {
+            if (id == ESP_HOSTED_EVENT_TRANSPORT_UP) {
+                xEventGroupSetBits(reinterpret_cast<EventGroupHandle_t>(arg),
+                                   HOSTED_UP_BIT);
+            }
+        };
+
+        esp_err_t reg_err = esp_event_handler_register(
+            ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID,
+            hosted_event_cb, s_hosted_evt);
+        if (reg_err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_event_handler_register(ESP_HOSTED_EVENT) "
+                          "failed: %s", esp_err_to_name(reg_err));
+        }
+
         int hosted_err = esp_hosted_init();
-        if (hosted_err != 0) {
-            ESP_LOGE(TAG, "esp_hosted_init failed (%d) -- Wi-Fi and "
-                          "BLE will be unavailable on this boot",
-                     hosted_err);
-        } else {
+        if (hosted_err == 0) {
             hosted_err = esp_hosted_connect_to_slave();
-            if (hosted_err != 0) {
-                ESP_LOGE(TAG, "esp_hosted_connect_to_slave failed (%d) -- "
-                              "Wi-Fi and BLE will be unavailable on this "
-                              "boot. Verify the on-board ESP32-C6 is flashed "
-                              "with the matching ESP-Hosted slave firmware "
-                              "(see docs/tab5-esp-hosted.md).",
-                         hosted_err);
-            } else {
-                ESP_LOGI(TAG, "ESP-Hosted link up");
+        }
+
+        /* Wait up to 5 seconds for the SDIO transport to come up. The
+         * normal handshake completes in well under a second on a
+         * healthy Tab5; 5 s leaves generous margin for slower retries
+         * without keeping the user staring at an empty screen for
+         * long. */
+        const TickType_t timeout = pdMS_TO_TICKS(5000);
+        EventBits_t bits = xEventGroupWaitBits(
+            s_hosted_evt, HOSTED_UP_BIT,
+            pdFALSE /* clear */, pdTRUE /* wait all */, timeout);
+
+        esp_event_handler_unregister(ESP_HOSTED_EVENT, ESP_EVENT_ANY_ID,
+                                     hosted_event_cb);
+
+        if ((bits & HOSTED_UP_BIT) == 0) {
+            ESP_LOGE(TAG, "ESP-Hosted link did not come up "
+                          "(hosted_err=%d). The on-board ESP32-C6 is "
+                          "probably not flashed with the matching "
+                          "ESP-Hosted slave firmware. Halting.",
+                     hosted_err);
+            const char *fatal_msg =
+                "ERROR: ESP32-C6 not responding.\n"
+                "Flash the on-board ESP32-C6 with the matching\n"
+                "ESP-Hosted slave firmware. See\n"
+                "docs/tab5-esp-hosted.md.";
+            if (draftling_lvgl_port_lock(-1)) {
+                editor_ui_show_fatal(fatal_msg);
+                draftling_lvgl_port_unlock();
+            }
+            /* Stop here. Do not proceed to ble_keyboard_init() /
+             * wifi_manager / etc.: those abort the firmware when the
+             * hosted link is down, which would wipe the message we
+             * just put on screen. */
+            while (true) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
             }
         }
+        ESP_LOGI(TAG, "ESP-Hosted link up");
     }
 #endif
 
