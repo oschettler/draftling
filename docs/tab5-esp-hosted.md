@@ -242,3 +242,36 @@ If a future Tab5 hardware revision wires a user input to an LP_IO
 pin, switch `components/standby/standby.cpp` to
 `esp_deep_sleep_enable_gpio_wakeup()` (the P4 equivalent of EXT0)
 for that pin.
+
+## USB-A keyboard (preempts BLE)
+
+The Tab5 carries a USB-A host receptacle wired to the P4 USB OTG
+peripheral, gated by `BSP_FEATURE_USB` (PI4IOE5V6408 #2 P5) in the
+`espressif/m5stack_tab5` BSP. Draftling brings the host stack up
+just before the keyboard subsystem (`components/usb_kbd`,
+`espressif/usb_host_hid`) and waits
+`CONFIG_DRAFTLING_USB_KBD_PROBE_MS` (default 1500 ms) for HID
+enumeration.
+
+- If a USB HID keyboard is enumerated in that window, `main.cpp`
+  skips `ble_keyboard_init()` entirely. The C6 BT controller is
+  never brought up, saving power and avoiding the BLE pairing
+  prompt.
+- If no USB keyboard is present, the build falls back to the BLE
+  HID keyboard path described above.
+
+The decision is one-shot at boot. Hot-plugging a USB keyboard after
+boot does not tear down BLE, and unplugging the USB keyboard does
+not start BLE pairing -- power-cycle to switch keyboards.
+
+## Battery indicator
+
+The Tab5 reads pack voltage from an INA226 power monitor at I2C
+address `0x41` on the system bus (`bsp_i2c_get_handle()`). The
+backend (`components/battery`, gated on
+`CONFIG_DRAFTLING_BATTERY_INA226`) reads the bus-voltage register
+(0x02, 1.25 mV/LSB), divides by the configured cell count (2 for
+the stock NP-F550 pack), and feeds the result through the standard
+4.2-3.6 V LiPo lookup table to derive percentage. No calibration
+register write is needed because we do not use current/power
+readings.

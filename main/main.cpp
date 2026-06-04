@@ -34,6 +34,9 @@
 #include "battery.h"
 #include "touchscreen.h"
 #include "power.h"
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+#include "usb_kbd.h"
+#endif
 
 static const char *TAG = "Draftling";
 
@@ -275,6 +278,16 @@ extern "C" void app_main(void)
                       "falling back to ADC backend");
         battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
     }
+#elif defined(CONFIG_DRAFTLING_BATTERY_INA226)
+    /* M5Stack Tab5: TI INA226 current/voltage monitor at I2C 0x41 on
+     * the shared system bus owned by the espressif/m5stack_tab5 BSP
+     * (bsp_i2c_init() is run earlier by display_init() via the MIPI
+     * DSI backend). Battery pack is a 2S NP-F550 (~6.0-8.4 V); the
+     * INA226 backend divides bus voltage by cell count before
+     * looking up the per-cell SoC table. */
+    if (battery_init_ina226(bsp_i2c_get_handle(), 0x41, 2) != 0) {
+        ESP_LOGW(TAG, "INA226 init failed; battery indicator disabled");
+    }
 #else
     battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
 #endif
@@ -460,9 +473,41 @@ extern "C" void app_main(void)
     }
 #endif
 
+    /* Bring up USB Host + HID keyboard driver (Tab5: USB-A port).
+     * If a USB keyboard is enumerated within the probe window we
+     * skip BLE bring-up entirely -- BLE pairing eats power and CPU
+     * on the C6 and a wired keyboard is unambiguously the user's
+     * preference. Note: the check is one-shot at boot; hot-plugging
+     * a USB keyboard later will not switch off BLE (and vice versa).
+     */
+    bool usb_kbd_present = false;
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+    ESP_LOGI(TAG, "Starting USB host...");
+    esp_err_t usb_err = bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV,
+                                            true /* limit to 500 mA */);
+    if (usb_err != ESP_OK) {
+        ESP_LOGW(TAG, "bsp_usb_host_start failed: %s",
+                 esp_err_to_name(usb_err));
+    } else if (usb_kbd_init() == 0) {
+        const int probe_ms = CONFIG_DRAFTLING_USB_KBD_PROBE_MS;
+        ESP_LOGI(TAG, "Probing for USB keyboard (%d ms)...", probe_ms);
+        /* Poll every 50 ms so we exit as soon as enumeration
+         * completes rather than always waiting the full window. */
+        for (int waited = 0; waited < probe_ms; waited += 50) {
+            if (usb_kbd_is_connected()) break;
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        usb_kbd_present = usb_kbd_is_connected();
+    }
+#endif
+
     /* Initialize Bluetooth keyboard */
-    ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
-    ble_keyboard_init();
+    if (usb_kbd_present) {
+        ESP_LOGI(TAG, "USB keyboard detected; skipping BLE keyboard");
+    } else {
+        ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
+        ble_keyboard_init();
+    }
 
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
     /* Initialize the touchscreen and register the LVGL pointer

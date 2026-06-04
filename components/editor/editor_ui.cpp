@@ -13,6 +13,9 @@
 #include "editor.h"
 #include "md_parser.h"
 #include "ble_keyboard.h"
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+#include "usb_kbd.h"
+#endif
 #include "kb_layout.h"
 #include "wifi_manager.h"
 #include "git_sync.h"
@@ -4109,8 +4112,13 @@ static void build_screens(void)
      * fired its callback before the UI was ready). */
     update_wifi_icons();
 
-    /* Register keyboard callback */
+    /* Register keyboard callback (BLE + USB feed the same handler;
+     * only one is wired at a time, chosen by main.cpp based on which
+     * keyboard was present at boot). */
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+    usb_kbd_set_callback((kb_event_callback_t)editor_ui_handle_key);
+#endif
 
     /* ---- BLE connection prompt screen ---- */
     s_scr_ble_prompt = lv_obj_create(NULL);

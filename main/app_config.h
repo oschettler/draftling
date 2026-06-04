@@ -579,9 +579,14 @@
 #define TOUCH_MIRROR_X      0
 #define TOUCH_MIRROR_Y      0
 
-/* No board-managed battery ADC: Tab5 carries a Li-ion cell behind
- * a PMIC + fuel gauge over I2C; integrating that gauge is a
- * follow-up. battery_init() is a no-op when BATT_ADC_PIN < 0. */
+/* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
+ * pack monitored by an INA226 power monitor at I2C 0x41 (on the
+ * system I2C bus, SDA=31 / SCL=32 above). main.cpp calls
+ * battery_init_ina226(bsp_i2c_get_handle(), 0x41, 2) under
+ * CONFIG_DRAFTLING_BATTERY_INA226 (defaulted y for this board), and
+ * the editor status bar picks the percentage up via
+ * DRAFTLING_HAS_BATTERY. The ADC-based battery_init() stays a
+ * no-op (BATT_ADC_PIN=-1). */
 #define BATT_ADC_PIN        -1
 #define BATT_EN_PIN         -1
 #define BATT_DIVIDER        1

@@ -249,6 +249,11 @@ config DRAFTLING_HAS_BATTERY
     # bus owned by main.cpp is passed to battery_init_bq27220().
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    # M5Stack Tab5: 2S NP-F550 Li-ion pack is monitored by an INA226
+    # power monitor on the system I2C bus at 0x41 (see
+    # DRAFTLING_BATTERY_INA226 below). main.cpp calls
+    # battery_init_ina226() with the BSP-owned I2C handle.
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
 
 # Selects the BQ27220 fuel-gauge backend in components/battery/
@@ -261,6 +266,39 @@ config DRAFTLING_BATTERY_BQ27220
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
+
+# Selects the TI INA226 bus-voltage backend in components/battery/.
+# main.cpp calls battery_init_ina226(i2c_bus, 0x41, 2) when this
+# symbol is set (Tab5 wires a 2S NP-F550 pack through the INA226).
+# Percentage is derived from per-cell voltage via the same 4.2-3.6 V
+# LiPo lookup table the ADC backend uses.
+config DRAFTLING_BATTERY_INA226
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
+    default n
+
+# Enables the USB Host stack + USB HID keyboard driver
+# (components/usb_kbd) on boards that wire a host-mode USB-A port.
+# On M5Stack Tab5 the USB-A connector is gated by BSP_FEATURE_USB
+# (PI4IOE5V6408 #2 P5); main.cpp brings it up before BLE so a
+# physically attached USB keyboard preempts BLE pairing. If a USB
+# keyboard is detected within DRAFTLING_USB_KBD_PROBE_MS at boot,
+# the ble_keyboard component is left uninitialised.
+config DRAFTLING_HAS_USB_HOST
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
+    default n
+
+config DRAFTLING_USB_KBD_PROBE_MS
+    int
+    depends on DRAFTLING_HAS_USB_HOST
+    default 1500
+    help
+        Milliseconds main.cpp waits after bringing up the USB Host
+        stack before deciding whether a USB keyboard is plugged in.
+        1500 ms covers reset + enumeration + boot-protocol switch on
+        all keyboards tested so far. If shorter, slow keyboards may
+        miss the window and BLE will be brought up instead.
 
 # DRAFTLING_HAS_POWER_LATCH is set automatically on boards that wire
 # the battery rail through a hardware latch (typically a TCA9554 IO

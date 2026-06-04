@@ -14,3 +14,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     PRIV_REQUIRES ${MAIN_PRIV_REQS}
 )
+
+if(CONFIG_DRAFTLING_HAS_USB_HOST)
+    idf_component_optional_requires(PRIVATE usb_kbd)
+endif()

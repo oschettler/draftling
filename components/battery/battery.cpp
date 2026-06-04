@@ -45,6 +45,7 @@ enum batt_backend {
     BATT_BACKEND_NONE = 0,
     BATT_BACKEND_ADC,
     BATT_BACKEND_BQ27220,
+    BATT_BACKEND_INA226,
 };
 static enum batt_backend s_backend = BATT_BACKEND_NONE;
 
@@ -60,6 +61,17 @@ static int                       s_divider = 3;
 #define BQ27220_REG_VOLTAGE     0x08    /* u16 LE, mV */
 #define BQ27220_REG_SOC         0x2C    /* u16 LE, 0-100 % */
 static i2c_master_dev_handle_t   s_bq_dev = NULL;
+
+/* ---- INA226 backend state ----
+ * Only the bus-voltage register is used. INA226_REG_BUSVOLTAGE is a
+ * 16-bit unsigned value with an LSB of 1.25 mV (datasheet section
+ * 7.6.3.3); reading 0x0CCC -> 4.095 V at the BUS pin. The Tab5
+ * routes the raw battery pack rail (NP-F550, 2S Li-ion, ~6.0-8.4 V)
+ * to the BUS input, so the per-cell voltage is bus_mv / cells. */
+#define INA226_REG_BUSVOLTAGE    0x02
+#define INA226_BUSVOLTAGE_LSB_UV 1250    /* microvolts per LSB */
+static i2c_master_dev_handle_t   s_ina226_dev = NULL;
+static int                       s_ina226_cells = 1;
 
 /* Exponential moving average state (ADC backend only -- the BQ27220
  * does its own smoothing internally). */
@@ -292,12 +304,85 @@ extern "C" int battery_init_bq27220(void *i2c_master_bus)
     return 0;
 }
 
+/* ---- INA226 backend ---- */
+
+extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
+                                   int cells)
+{
+    if (s_backend != BATT_BACKEND_NONE) return 0;
+
+    if (i2c_master_bus == NULL) {
+        ESP_LOGW(TAG, "INA226 init: NULL I2C bus handle");
+        return -1;
+    }
+    if (i2c_addr < 0 || i2c_addr > 0x7F) {
+        ESP_LOGW(TAG, "INA226 init: invalid I2C address 0x%02X", i2c_addr);
+        return -1;
+    }
+    if (cells < 1 || cells > 4) {
+        ESP_LOGW(TAG, "INA226 init: implausible cell count %d, "
+                 "clamping to 1", cells);
+        cells = 1;
+    }
+
+    i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)i2c_master_bus;
+
+    if (i2c_master_probe(bus, (uint8_t)i2c_addr, 100 /* ms */) != ESP_OK) {
+        ESP_LOGW(TAG, "INA226 not responding at 0x%02X", i2c_addr);
+        return -1;
+    }
+
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address  = (uint16_t)i2c_addr;
+    dev_cfg.scl_speed_hz    = 400000;
+    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &s_ina226_dev);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "INA226 bus_add_device failed: %s",
+                 esp_err_to_name(err));
+        s_ina226_dev = NULL;
+        return -1;
+    }
+
+    /* The INA226 powers up in continuous shunt+bus mode with 1.1 ms
+     * conversion times by default, which is fine for a voltage-only
+     * read. We deliberately do NOT touch the calibration register
+     * (current/power LSBs depend on the shunt resistor wiring, which
+     * is board-specific and irrelevant for percentage-from-voltage).
+     */
+
+    s_ina226_cells = cells;
+    s_backend = BATT_BACKEND_INA226;
+
+    int cell_mv = battery_read_mv();
+    int pct = mv_to_percent(cell_mv);
+    ESP_LOGI(TAG, "INA226 power monitor initialized at 0x%02X "
+             "(%dS pack, initial %d mV/cell, %d%%)", i2c_addr, cells,
+             cell_mv, pct);
+    return 0;
+}
+
 extern "C" int battery_read_mv(void)
 {
     if (s_backend == BATT_BACKEND_BQ27220) {
         uint16_t mv = 0;
         if (bq27220_read_u16(BQ27220_REG_VOLTAGE, &mv) != 0) return 0;
         return (int)mv;
+    }
+    if (s_backend == BATT_BACKEND_INA226) {
+        if (!s_ina226_dev) return 0;
+        uint8_t wr[1] = { INA226_REG_BUSVOLTAGE };
+        uint8_t rd[2] = { 0, 0 };
+        if (i2c_master_transmit_receive(s_ina226_dev, wr, 1, rd, 2,
+                                        100 /* ms */) != ESP_OK) {
+            return 0;
+        }
+        /* Big-endian on the wire. Convert raw LSBs to mV per cell. */
+        uint16_t raw = ((uint16_t)rd[0] << 8) | (uint16_t)rd[1];
+        uint32_t bus_uv = (uint32_t)raw * INA226_BUSVOLTAGE_LSB_UV;
+        int bus_mv = (int)(bus_uv / 1000U);
+        int cells = (s_ina226_cells > 0) ? s_ina226_cells : 1;
+        return bus_mv / cells;
     }
     if (s_backend != BATT_BACKEND_ADC) return 0;
 
@@ -328,6 +413,11 @@ extern "C" int battery_read_percent(void)
         if (bq27220_read_u16(BQ27220_REG_SOC, &soc) != 0) return -1;
         if (soc > 100) soc = 100;
         return (int)soc;
+    }
+    if (s_backend == BATT_BACKEND_INA226) {
+        int mv = battery_read_mv();
+        if (mv <= 0) return -1;
+        return mv_to_percent(mv);
     }
     if (s_backend != BATT_BACKEND_ADC) return -1;
 

@@ -3,3 +3,10 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_REQUIRES display sd_card ble_keyboard kb_layout wifi_manager git_sync standby battery lvgl__lvgl fonts nvs_flash
 )
+
+# Kconfig-conditional REQUIRES must use idf_component_optional_requires()
+# after register: CONFIG_* is empty during the early-expansion pass that
+# builds the requires graph.
+if(CONFIG_DRAFTLING_HAS_USB_HOST)
+    idf_component_optional_requires(PRIVATE usb_kbd)
+endif()

@@ -67,6 +67,32 @@ int battery_init(int gpio_num, int enable_gpio, int divider);
 int battery_init_bq27220(void *i2c_master_bus);
 
 /*
+ * Initialize a TI INA226 power-monitor backend on an existing I2C
+ * master bus. The INA226 measures battery rail voltage on its BUS
+ * input; this driver only reads the bus voltage register and maps
+ * it to percentage via a Li-ion discharge curve scaled by `cells`.
+ *
+ *   i2c_master_bus -- opaque pointer to an i2c_master_bus_handle_t
+ *                     (driver/i2c_master.h).
+ *   i2c_addr       -- I2C address of the INA226 (0x40..0x4F). The
+ *                     M5Stack Tab5 wires the part at 0x41.
+ *   cells          -- number of Li-ion cells in series the INA226
+ *                     bus rail measures. Use 1 for a single 18650 /
+ *                     LiPo cell (3.0-4.2 V) and 2 for an NP-F550-
+ *                     style 2S pack (6.0-8.4 V, e.g. the Tab5).
+ *
+ * Returns 0 on success, non-zero on failure. After a successful
+ * call, `battery_read_mv()` reports the per-cell voltage (so the
+ * existing 3.0-4.2 V LiPo mapping in mv_to_percent() applies
+ * regardless of `cells`) and `battery_read_percent()` runs that
+ * voltage through the same lookup table the ADC backend uses.
+ *
+ * The INA226 has no SoC / coulomb-count state, so percentage is
+ * voltage-derived and approximate.
+ */
+int battery_init_ina226(void *i2c_master_bus, int i2c_addr, int cells);
+
+/*
  * Read the current battery voltage in millivolts.
  * Returns 0 if the sensor has not been initialized.
  */
