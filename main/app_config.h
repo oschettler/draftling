@@ -505,6 +505,95 @@
  * wake-on-touch is enabled. */
 #define WAKEUP_GPIO_NUM     0
 
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+/* ----- M5Stack Tab5 -----
+ *
+ * 5" IPS color LCD, 1280 x 720 landscape, driven over MIPI-DSI
+ * (2 data lanes, DPI continuous scanout) by the ESP32-P4. Two
+ * hardware revisions exist in the wild:
+ *   v1: ILI9881C panel + GT911 capacitive touch (default in BSP)
+ *   v2: ST7123 panel + ST7123 touch (auto-detected by I2C probe)
+ *
+ * All panel + power-rail bring-up is handled by the upstream
+ * espressif/m5stack_tab5 BSP managed component, which is pulled in
+ * by components/display/idf_component.yml for the esp32p4 target.
+ * That includes:
+ *   - PI4IOE5V6408 I/O expander (I2C addr 0x43 / 0x44) that drives
+ *     LCD_EN (IO4) and TOUCH_EN (IO5) power rails;
+ *   - MIPI-DSI PHY LDO power-up;
+ *   - the ILI9881C / ST7123 init data blocks;
+ *   - LEDC PWM backlight on GPIO22.
+ *
+ * Pins listed below are the ones Draftling itself touches outside
+ * of the BSP (SD card, shared I2C bus carrying the GT911 touch).
+ * See https://docs.m5stack.com/en/core/Tab5 for the full pinout.
+ */
+#define BOARD_NAME          "M5Stack Tab5"
+
+/* On-board MicroSD slot, wired to ESP32-P4 SDMMC pins. The Draftling
+ * SD layer uses a generic SPI bus (sd_card_init_spi) on every board
+ * except the Waveshare RLCD-4.2; map the SDMMC pins (per BSP
+ * m5stack_tab5.h: BSP_SD_SPI_CLK=43, BSP_SD_SPI_MISO=39,
+ * BSP_SD_SPI_MOSI=44, BSP_SD_SPI_CS=42) to the SPI alias so the
+ * existing SPI3-host code path works without change. */
+#define SD_SPI_MOSI_PIN     44
+#define SD_SPI_MISO_PIN     39
+#define SD_SPI_SCK_PIN      43
+#define SD_SPI_CS_PIN       42
+#define SD_EN_PIN           -1
+
+/* I2C bus shared by the GT911 touch controller, PI4IOE5V6408
+ * I/O expander, BMI270 IMU, audio codecs and other on-board
+ * peripherals (BSP_I2C_SDA=31, BSP_I2C_SCL=32). The MIPI-DSI
+ * display backend creates this bus via bsp_i2c_init() and the
+ * touchscreen component shares it via touchscreen_config_t.i2c_bus
+ * (same pattern as the LilyGO T5 E-Paper S3 Pro / Pro Lite). */
+#define I2C_SDA_PIN         31
+#define I2C_SCL_PIN         32
+
+/* GT911 touch controller. The BSP forces the alternate (backup)
+ * I2C address 0x14 at startup by holding the INT line LOW during
+ * GT911 internal reset -- there is a hardware pull-up to 3V3 on
+ * INT that would otherwise select the primary 0x5D address but
+ * the GT911 stops responding under that condition (Tab5 board
+ * quirk documented in bsp/m5stack_tab5/src/bsp_display.c). The
+ * touchscreen component probes both addresses with primary first,
+ * so we list the backup here to skip the failing primary probe
+ * and speed up boot. RST is wired to the PI4IOE5V6408 (not to an
+ * ESP32-P4 GPIO), so we leave the dedicated RST at -1.
+ *
+ * GT911 reports panel-native coordinates 720 x 1280 portrait
+ * (BSP panel orientation, INT/USB-C edge at the top of the GT911
+ * frame). lvgl_port_init() is called with rotate_deg=90 to render
+ * the editor landscape, and the touchscreen component applies the
+ * same user_rotate_deg to map GT911 (x,y) -> LVGL (x,y). The
+ * BSP-side swap/mirror is identity, so set both to 0 here too;
+ * mirror flags can be flipped at hardware bring-up if the panel
+ * arrives factory-flashed with a different orientation. */
+#define TOUCH_I2C_ADDR      0x14
+#define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
+#define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
+#define TOUCH_NATIVE_W      720
+#define TOUCH_NATIVE_H      1280
+#define TOUCH_SWAP_XY       0
+#define TOUCH_MIRROR_X      0
+#define TOUCH_MIRROR_Y      0
+
+/* No board-managed battery ADC: Tab5 carries a Li-ion cell behind
+ * a PMIC + fuel gauge over I2C; integrating that gauge is a
+ * follow-up. battery_init() is a no-op when BATT_ADC_PIN < 0. */
+#define BATT_ADC_PIN        -1
+#define BATT_EN_PIN         -1
+#define BATT_DIVIDER        1
+
+/* Standby on Tab5 uses DRAFTLING_STANDBY_DISPLAY_OFF (Kconfig
+ * default), not real deep sleep + EXT0 wake -- the touch INT pin
+ * (GPIO 23) is not an LP_IO on the ESP32-P4 so it cannot wake the
+ * chip from deep sleep, and there is no other RTC-capable user
+ * button. WAKEUP_GPIO_NUM is set anyway for code paths that
+ * reference it directly. */
+#define WAKEUP_GPIO_NUM     0
+
 #else
 #error "No hardware model selected. Run idf.py menuconfig and choose a model."
 #endif

@@ -1,0 +1,38 @@
+# ESP32-P4-specific defaults
+# Applied automatically when: idf.py set-target esp32p4
+#
+# Currently the only ESP32-P4 board supported is the M5Stack Tab5,
+# which uses the upstream espressif/m5stack_tab5 BSP for all panel,
+# touch, MIPI-DSI PHY, I/O expander and audio-codec bring-up.
+
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM -- Tab5 carries 32 MB HEX-mode PSRAM (200 MHz). The MIPI-DSI
+# DPI panel framebuffer (1280 * 720 * 2 = ~1.8 MB) and our LVGL
+# rendering buffers must all live in PSRAM; internal SRAM on the
+# ESP32-P4 is reserved for DMA descriptors and time-critical code.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# MIPI-DSI / DPI panel framebuffer
+#
+# The m5stack_tab5 BSP's bsp_display_new_with_handles() creates one
+# CONFIG_BSP_LCD_DPI_BUFFER_NUMS framebuffer(s) internally. Draftling
+# pushes pixels via esp_lcd_panel_draw_bitmap() into that framebuffer,
+# so a single buffer is enough and saves ~1.8 MB of PSRAM.
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=1
+
+# Wi-Fi / Bluetooth on the ESP32-P4 are unavailable natively (no
+# on-chip 2.4 GHz radio). Tab5 instead routes both through an on-board
+# ESP32-C6 co-processor via the ESP-Hosted protocol over SDIO; we do
+# not enable that here. The ble_keyboard component compiles to no-op
+# stubs when CONFIG_BT_ENABLED is unset, and wifi_manager is only
+# brought up lazily on the first Git-sync attempt so it stays inert.
+# CONFIG_BT_ENABLED is intentionally left unset.
+
+# The default ESP-IDF main task stack (3.5 KB) is too tight for the
+# editor's call chains; match the ESP32-S3 build.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

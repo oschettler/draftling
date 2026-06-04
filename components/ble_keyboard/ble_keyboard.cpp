@@ -17,7 +17,43 @@
  * Pairing: uses DisplayOnly IO capability.  When a new keyboard
  * pairs, a random 6-digit passkey is generated and shown on the
  * display; the user types it on the keyboard to confirm.
+ *
+ * Targets without a usable Bluetooth controller (e.g. ESP32-P4 on
+ * the M5Stack Tab5, where BLE is only available via the on-board
+ * ESP32-C6 co-processor through ESP-Hosted and not natively) are
+ * compiled to no-op stubs at the bottom of this file. They link
+ * the same public API so Draftling startup code can call
+ * ble_keyboard_init() unconditionally.
  */
+
+#include "sdkconfig.h"
+#include "ble_keyboard.h"
+
+#if !defined(CONFIG_BT_ENABLED)
+
+#include <esp_log.h>
+
+extern "C" {
+
+static const char *TAG_STUB = "BLEKeyboard";
+
+void ble_keyboard_init(void)
+{
+    ESP_LOGW(TAG_STUB, "BT controller not enabled in sdkconfig; "
+                       "BLE keyboard support is disabled on this build.");
+}
+void ble_keyboard_set_callback(kb_event_callback_t /*cb*/)               {}
+void ble_keyboard_set_passkey_callback(ble_passkey_cb_t /*cb*/)          {}
+void ble_keyboard_set_connect_callback(ble_connect_cb_t /*cb*/)          {}
+void ble_keyboard_set_status_text_callback(ble_status_text_cb_t /*cb*/)  {}
+bool ble_keyboard_is_connected(void)                                     { return false; }
+void ble_keyboard_start_scan(void)                                       {}
+const char *ble_keyboard_get_device_name(void)                           { return ""; }
+int ble_keyboard_get_battery_level(void)                                 { return -1; }
+
+} /* extern "C" */
+
+#else /* CONFIG_BT_ENABLED */
 
 #include <cstdio>
 #include <cstdarg>
@@ -33,8 +69,6 @@
 #include <esp_hidh.h>
 #include <nvs_flash.h>
 #include <nvs.h>
-
-#include "ble_keyboard.h"
 
 static const char *TAG = "BLEKeyboard";
 
@@ -1338,3 +1372,5 @@ extern "C" int ble_keyboard_get_battery_level(void)
 {
     return s_battery_level;
 }
+
+#endif /* CONFIG_BT_ENABLED */

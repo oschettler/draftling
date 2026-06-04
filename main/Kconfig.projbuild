@@ -92,6 +92,7 @@ config DRAFTLING_DISPLAY_COLOR
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default y if DRAFTLING_MODEL_JC3248W535
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
 
 # DRAFTLING_DISPLAY_AXS15231B is set automatically when the selected
@@ -112,6 +113,18 @@ config DRAFTLING_DISPLAY_AXS15231B
 config DRAFTLING_DISPLAY_RLCD
     bool
     default y if DRAFTLING_MODEL_WAVESHARE_RLCD42
+    default n
+
+# DRAFTLING_DISPLAY_MIPI_DSI is set automatically when the selected
+# board uses a MIPI-DSI color LCD driven through the ESP32-P4's
+# DSI peripheral (currently only the M5Stack Tab5: ILI9881C or
+# ST7123 panel depending on the hardware revision). The MIPI-DSI
+# backend (components/display/display_mipi_dsi.cpp) is compiled in
+# only when this symbol is set, keeping the m5stack_tab5 BSP
+# managed-component dependency out of builds for other boards.
+config DRAFTLING_DISPLAY_MIPI_DSI
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
 
 # DRAFTLING_DISPLAY_EPD is set automatically when the selected
@@ -159,6 +172,7 @@ config DRAFTLING_DISPLAY_EPDIY
 config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     bool
     default y if DRAFTLING_DISPLAY_AXS15231B
+    default y if DRAFTLING_DISPLAY_MIPI_DSI
     # LilyGO T5 E-Paper S3 Pro / Pro Lite carry a controllable white
     # front-light edge-lit LED on GPIO 11 (BOARD_BL_EN in the LilyGO
     # factory firmware). The EPDIY display backend drives it with
@@ -288,6 +302,13 @@ config DRAFTLING_WAKEUP_GPIO
     default 0  if DRAFTLING_MODEL_JC3248W535
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    # M5Stack Tab5 (ESP32-P4) has no BOOT button on a low-numbered
+    # RTC-capable GPIO that we can use for EXT0 wake. Standby on
+    # Tab5 defaults to DRAFTLING_STANDBY_DISPLAY_OFF (keeps MCU
+    # running, blanks panel) so the wake source is "any LVGL input
+    # event" -- this value is just a fallback if a user explicitly
+    # turns DISPLAY_OFF off, and will not actually wake the device.
+    default 0  if DRAFTLING_MODEL_M5STACK_TAB5
     default 0
 
 # ---- Touchscreen support ----
@@ -306,6 +327,7 @@ config DRAFTLING_TOUCHSCREEN
     default y if DRAFTLING_MODEL_JC3248W535
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     # LilyGO T5 E-Paper S3 Pro / Pro Lite carry a GT911 capacitive
     # touch controller on the same on-board I2C bus as epdiy's
     # PCA9535 I/O expander + TPS65185 power-management IC. epdiy is
@@ -352,6 +374,7 @@ config DRAFTLING_TOUCH_GT911
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
     help
         Goodix GT911. Register-addressed protocol: 16-bit register
@@ -371,11 +394,20 @@ config DRAFTLING_TOUCH_GT911
 config DRAFTLING_TOUCH_INT_GPIO
     int
     depends on DRAFTLING_TOUCHSCREEN
-    range -1 48
+    range -1 54
     default 3  if DRAFTLING_MODEL_JC3248W535
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    # M5Stack Tab5: GT911 INT on GPIO23. Held LOW at startup by the
+    # BSP so the GT911 powers up at its backup I2C address (0x14)
+    # instead of the primary 0x5D -- a hardware pull-up resistor on
+    # this board forces the alternate-address path. ESP32-P4
+    # GPIO23 is not LP_IO so EXT0/EXT1 deep-sleep wake on this pin
+    # is unavailable; on Tab5 we therefore default to the
+    # DRAFTLING_STANDBY_DISPLAY_OFF code path (MCU stays awake,
+    # panel goes black) rather than real deep sleep + wake-on-touch.
+    default 23 if DRAFTLING_MODEL_M5STACK_TAB5
     default -1
 
 # Touchscreen reset GPIO. The reset line is often tied to the LCD
@@ -388,7 +420,7 @@ config DRAFTLING_TOUCH_INT_GPIO
 config DRAFTLING_TOUCH_RST_GPIO
     int
     depends on DRAFTLING_TOUCHSCREEN
-    range -1 48
+    range -1 54
     default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default -1
@@ -417,6 +449,7 @@ config DRAFTLING_TOUCH_RST_GPIO
 # sleep + wake-on-touch.
 config DRAFTLING_STANDBY_DISPLAY_OFF
     bool "Standby: turn display off (keep MCU running) instead of deep sleep"
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
     help
         On standby, blank the display and put the panel into its
@@ -446,32 +479,35 @@ config DRAFTLING_STANDBY_WAKE_ON_TOUCH
 
 config DRAFTLING_DISPLAY_WIDTH
     int
-    range 64 1024
+    range 64 2048
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 960 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 960 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 640 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 480 if DRAFTLING_MODEL_JC3248W535
+    default 720 if DRAFTLING_MODEL_M5STACK_TAB5
     help
         Display width in pixels (derived). Driven by the hardware-model
         choice. Must be a multiple of 8 for e-paper backends.
 
 config DRAFTLING_DISPLAY_HEIGHT
     int
-    range 64 1024
+    range 64 2048
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 540 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 540 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 172 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 320 if DRAFTLING_MODEL_JC3248W535
+    default 1280 if DRAFTLING_MODEL_M5STACK_TAB5
     help
         Display height in pixels (derived). Driven by the hardware-model
         choice.
 
 choice DRAFTLING_DISPLAY_ROTATE
     prompt "Display rotation angle"
+    default DRAFTLING_DISPLAY_ROTATE_90 if DRAFTLING_MODEL_M5STACK_TAB5
     default DRAFTLING_DISPLAY_ROTATE_0
     help
         Rotation angle for the display in degrees.
@@ -522,6 +558,10 @@ config DRAFTLING_DISPLAY_SCALE
     default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 2 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default 2 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    # M5Stack Tab5 1280x720 panel is dense (5", ~293 DPI); a 2x
+    # scale brings the editor canvas down to 640x360 logical
+    # pixels, comfortable for Greybeard-sized text.
+    default 2 if DRAFTLING_MODEL_M5STACK_TAB5
     default 1
 
 config DRAFTLING_EPD_FULL_REFRESH_INTERVAL

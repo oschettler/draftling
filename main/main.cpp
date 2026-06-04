@@ -8,6 +8,10 @@
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
 #include <driver/i2c_master.h>
 #endif
+#if defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
+#include <driver/i2c_master.h>
+#include "bsp/m5stack_tab5.h"
+#endif
 #include "sdkconfig.h"
 
 #include "app_config.h"
@@ -143,6 +147,23 @@ extern "C" void app_main(void)
     }
     display_set_shared_i2c_bus(shared_i2c_bus);
 #endif
+#if defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
+    /* M5Stack Tab5 shares its on-board I2C bus (SDA=31, SCL=32)
+     * between the PI4IOE5V6408 I/O expander (LCD_EN, TOUCH_EN, ...),
+     * the GT911 / ST7123 touch controller, the BMI270 IMU and the
+     * audio codec. The espressif/m5stack_tab5 BSP creates and owns
+     * the driver-NG bus inside bsp_i2c_init(); the touchscreen
+     * component picks it up further below via bsp_i2c_get_handle()
+     * + touchscreen_config_t.i2c_bus. Call bsp_i2c_init() once
+     * here, before display_init(), so the panel auto-detect probe
+     * inside the BSP can issue the read on a ready bus. */
+    {
+        esp_err_t bus_err = bsp_i2c_init();
+        if (bus_err != ESP_OK) {
+            ESP_LOGE(TAG, "bsp_i2c_init failed: %s", esp_err_to_name(bus_err));
+        }
+    }
+#endif
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
@@ -160,6 +181,14 @@ extern "C" void app_main(void)
      * its `epd_board_v7` configuration (8-bit parallel data bus on
      * direct GPIOs plus TPS65185 power management via a PCA9535 IO
      * expander on I2C). Pin parameters are ignored. */
+    display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#elif defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
+    /* M5Stack Tab5 MIPI-DSI panel. All panel GPIOs, the MIPI-DSI
+     * PHY LDO, the I/O expander wiring and the LEDC backlight
+     * channel are owned by the espressif/m5stack_tab5 BSP, which
+     * also auto-detects board v1 (ILI9881C + GT911) vs board v2
+     * (ST7123 + ST7123). display_init's pin parameters are ignored
+     * by this backend. */
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_AXS15231B)
     /* AXS15231B QSPI color LCD. Needs 9 GPIOs (CS/SCK/D0..D3/RST/TE/BL),
@@ -342,6 +371,12 @@ extern "C" void app_main(void)
         tcfg.user_rotate_deg = DISPLAY_ROTATE;
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
         tcfg.i2c_bus = (void *)shared_i2c_bus;
+#elif defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
+        /* The m5stack_tab5 BSP owns the I2C master bus (created
+         * by bsp_i2c_init() before display_init() above); hand
+         * its handle to the touchscreen component so we do not
+         * collide on i2c_new_master_bus() for the same port. */
+        tcfg.i2c_bus = (void *)bsp_i2c_get_handle();
 #endif
         touchscreen_init(&tcfg);
     }

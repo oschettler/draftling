@@ -44,3 +44,19 @@ dependencies:
     rules:
       - if: "idf_version >=5.3.0"
     require: public
+  ## espressif/m5stack_tab5 BSP, pulled in only for the ESP32-P4
+  ## M5Stack Tab5 build. Handles MIPI-DSI PHY LDO power-up,
+  ## ILI9881C / ST7123 panel init (auto-detected by I2C probe),
+  ## PI4IOE5V6408 I/O expander for the LCD / touch / USB power
+  ## rails, LEDC PWM backlight on GPIO22, and the GT911 / ST7123
+  ## touch controller. Draftling's display_mipi_dsi.cpp backend
+  ## uses the BSP's lower-level bsp_display_new_with_handles()
+  ## API to obtain an esp_lcd_panel_handle_t and bsp_i2c_init()
+  ## to obtain a shared driver-NG I2C bus handle (handed to the
+  ## touchscreen component the same way as on the LilyGO T5).
+  ## See https://components.espressif.com/components/espressif/m5stack_tab5
+  espressif/m5stack_tab5:
+    version: "^1.2.0~1"
+    rules:
+      - if: "target == esp32p4"
+    require: public
