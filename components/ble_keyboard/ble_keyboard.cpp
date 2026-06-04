@@ -24,16 +24,18 @@
  * pairs, a random 6-digit passkey is generated and shown on the
  * display; the user types it on the keyboard to confirm.
  *
- * Targets without a usable Bluetooth controller of either kind
- * (CONFIG_BT_ENABLED unset) are compiled to no-op stubs at the
- * bottom of this file. They link the same public API so Draftling
- * startup code can call ble_keyboard_init() unconditionally.
+ * Targets without a usable Bluedroid host (CONFIG_BT_BLUEDROID_ENABLED
+ * unset -- either because the whole BT stack is off, or because the
+ * IDF port for the target does not yet build the Bluedroid host) are
+ * compiled to no-op stubs at the bottom of this file. They link the
+ * same public API so Draftling startup code can call
+ * ble_keyboard_init() unconditionally.
  */
 
 #include "sdkconfig.h"
 #include "ble_keyboard.h"
 
-#if !defined(CONFIG_BT_ENABLED)
+#if !defined(CONFIG_BT_BLUEDROID_ENABLED)
 
 #include <esp_log.h>
 
@@ -43,7 +45,7 @@ static const char *TAG_STUB = "BLEKeyboard";
 
 void ble_keyboard_init(void)
 {
-    ESP_LOGW(TAG_STUB, "BT controller not enabled in sdkconfig; "
+    ESP_LOGW(TAG_STUB, "Bluedroid host not enabled in sdkconfig; "
                        "BLE keyboard support is disabled on this build.");
 }
 void ble_keyboard_set_callback(kb_event_callback_t /*cb*/)               {}
@@ -57,7 +59,7 @@ int ble_keyboard_get_battery_level(void)                                 { retur
 
 } /* extern "C" */
 
-#else /* CONFIG_BT_ENABLED */
+#else /* CONFIG_BT_BLUEDROID_ENABLED */
 
 #include <cstdio>
 #include <cstdarg>
@@ -1437,4 +1439,4 @@ extern "C" int ble_keyboard_get_battery_level(void)
     return s_battery_level;
 }
 
-#endif /* CONFIG_BT_ENABLED */
+#endif /* CONFIG_BT_BLUEDROID_ENABLED */
