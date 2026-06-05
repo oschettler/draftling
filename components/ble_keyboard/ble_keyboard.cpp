@@ -1489,7 +1489,7 @@ extern "C" void ble_keyboard_enable(void)
      * false and call start_reconnection() itself as soon as
      * ble_init_task() finishes setting the scan parameters. */
     if (s_scan_params_ready) {
-        ble_keyboard_start_scan();
+        start_reconnection();
     }
 }
 
