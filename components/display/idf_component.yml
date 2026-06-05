@@ -12,19 +12,35 @@
 ##   https://components.espressif.com/components/vroland/epdiy
 ##   https://github.com/vroland/epdiy
 dependencies:
-  ## Pinned to a post-2.0.0 git commit (no tagged release yet) that
-  ## carries vroland/epdiy PR #475 ("Migrate epdiy board I2C init to
-  ## the new ESP-IDF driver"). That PR migrates epdiy's on-board I2C
-  ## bus from the legacy `driver/i2c.h` to driver-NG
-  ## (`driver/i2c_master.h`) AND adds a new `epd_init_with_config()`
-  ## entry point that accepts a caller-supplied
-  ## `i2c_master_bus_handle_t` via `EpdInitConfig.i2c.bus_handle`.
-  ## Both pieces are required to share the LilyGO T5 E-Paper S3 Pro
-  ## (and Pro Lite) on-board I2C bus between epdiy (PCA9535 + TPS65185)
-  ## and the GT911 capacitive touch controller managed by the
-  ## Draftling touchscreen component (also driver-NG). Drop the pin
-  ## and switch back to a version range once a 2.0.1 / 2.1 tag
-  ## including PR #475 lands on the Espressif Component Registry.
+  ## Pinned to the head of vroland/epdiy's `idf-6.0-compatibility`
+  ## branch (PR #477, "IDF-6.0 support ported from #463"). That
+  ## branch is itself based on post-2.0.0 main and therefore
+  ## includes the earlier PR #475 ("Migrate epdiy board I2C init
+  ## to the new ESP-IDF driver"), which migrates epdiy's on-board
+  ## I2C bus from the legacy `driver/i2c.h` to driver-NG
+  ## (`driver/i2c_master.h`) and adds the
+  ## `epd_init_with_config()` entry point that accepts a
+  ## caller-supplied `i2c_master_bus_handle_t` via
+  ## `EpdInitConfig.i2c.bus_handle`. Both pieces are required to
+  ## share the LilyGO T5 E-Paper S3 Pro (and Pro Lite) on-board
+  ## I2C bus between epdiy (PCA9535 + TPS65185) and the GT911
+  ## capacitive touch controller managed by the Draftling
+  ## touchscreen component (also driver-NG).
+  ##
+  ## PR #477 additionally adapts `src/output_lcd/lcd_driver.c` to
+  ## ESP-IDF 6.0: the legacy `soc/lcd_periph.h` header was removed
+  ## in IDF 6.0 (tracked in vroland/epdiy#450), and the branch
+  ## gates the include and the `lcd_periph_signals` /
+  ## `lcd_periph_rgb_signals` lookups behind `ESP_IDF_VERSION`
+  ## checks so the driver builds against both 5.x and 6.x.
+  ## Without this pin the IDF 6.0+ build of the LilyGO T5 and
+  ## M5Stack PaperS3 backends fails with
+  ## `fatal error: soc/lcd_periph.h: No such file or directory`.
+  ##
+  ## Drop the pin and switch back to a tagged version range once
+  ## both PR #475 and PR #477 land in a tagged release on the
+  ## Espressif Component Registry.
+  ##
   ## epdiy only supports Xtensa targets (LX6/LX7); its board headers
   ## include xtensa/core-macros.h which does not exist in the RISC-V
   ## toolchain used for ESP32-P4. Exclude the dependency on ESP32-P4
@@ -34,7 +50,7 @@ dependencies:
   ## non-epdiy targets is sufficient.
   vroland/epdiy:
     git: "https://github.com/vroland/epdiy.git"
-    version: "a3426c0ec38f98282cf3ec33761e556f083b0f7c"
+    version: "9d2608b4ca637c9678d859dad24b261ca9e239f5"
     rules:
       - if: "target != esp32p4"
     require: public
