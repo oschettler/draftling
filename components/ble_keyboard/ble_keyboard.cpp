@@ -1011,7 +1011,13 @@ static void startup_timer_cb(TimerHandle_t timer)
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param)
 {
-    if (s_disabled) return;
+    /* SCAN_PARAM_SET_COMPLETE_EVT must be processed even while
+     * disabled so s_scan_params_ready latches and a later
+     * ble_keyboard_enable() can start scanning without an extra
+     * round-trip. All other events are suppressed when disabled. */
+    if (s_disabled && event != ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT) {
+        return;
+    }
     ESP_LOGI(TAG, "GAP event: %d", (int)event);
 
     switch (event) {
@@ -1024,8 +1030,12 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                 xTimerStop(s_startup_timer, 0);
             }
             /* Now that scan params are ready, start the reconnection
-             * sequence (which may trigger a scan). */
-            start_reconnection();
+             * sequence (which may trigger a scan). Skip while
+             * disabled (USB keyboard active) -- ble_keyboard_enable()
+             * will kick off scanning when input switches back to BLE. */
+            if (!s_disabled) {
+                start_reconnection();
+            }
         } else {
             ESP_LOGE(TAG, "Scan param set failed: 0x%x",
                      param->scan_param_cmpl.status);
@@ -1421,29 +1431,20 @@ extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
 
 extern "C" void ble_keyboard_disable(void)
 {
-    /* Idempotent. Once disabled we stay disabled until the next
-     * boot -- the wired-keyboard / BLE switch is intentionally
-     * one-shot (see docs/tab5-esp-hosted.md). */
+    /* Idempotent. Reversible via ble_keyboard_enable(): the public
+     * callback pointers are preserved so the editor keeps getting
+     * key events when BLE comes back online after a USB keyboard
+     * is unplugged. */
     if (s_disabled) return;
     s_disabled = true;
 
     ESP_LOGI(TAG, "Disabling BLE keyboard (USB keyboard active)");
 
-    /* Drop external callbacks so any late event arriving from the
-     * controller / Bluedroid task does not surface to the editor or
-     * the status bar. dispatch_key / notify_status also short-circuit
-     * on s_disabled, but clearing the pointers is cheap insurance. */
-    s_callback        = NULL;
-    s_status_text_cb  = NULL;
-    s_passkey_cb      = NULL;
-    /* Fire the connect callback once with `false` so the UI can
-     * reflect the keyboard going away (it would otherwise still
-     * show "connected" if a BLE keyboard had been bonded earlier
-     * this boot). Then clear it. */
+    /* Tell the UI that the BLE link is no longer active. The
+     * connect callback pointer is intentionally NOT cleared so a
+     * later ble_keyboard_enable() + reconnect can fire it again. */
     if (s_connect_cb) {
-        ble_connect_cb_t cb = s_connect_cb;
-        s_connect_cb = NULL;
-        cb(false);
+        s_connect_cb(false);
     }
 
     /* Stop our retry / safety timers so they cannot kick a fresh
@@ -1465,8 +1466,31 @@ extern "C" void ble_keyboard_disable(void)
 
     s_connected         = false;
     s_connecting        = false;
-    s_scan_params_ready = false;
     s_battery_level     = -1;
+    /* s_scan_params_ready stays true: the controller's scan-param
+     * state is preserved across stop_scanning, so when we re-enable
+     * we can call esp_ble_gap_start_scanning() directly without
+     * waiting for another SCAN_PARAM_SET_COMPLETE_EVT. */
+}
+
+extern "C" void ble_keyboard_enable(void)
+{
+    if (!s_disabled) return;
+    ESP_LOGI(TAG, "Re-enabling BLE keyboard (USB keyboard gone)");
+    s_disabled = false;
+    /* Reset reconnection bookkeeping so we walk through the bonded
+     * device list from the top, then fall back to a full scan. */
+    s_reconn_phase = RECONN_LAST;
+    s_reconn_idx   = 0;
+    notify_status("Searching for BLE keyboard...");
+    /* If scan params are already known to the controller, restart
+     * the reconnection sequence immediately. Otherwise the
+     * SCAN_PARAM_SET_COMPLETE_EVT handler will pick up s_disabled =
+     * false and call start_reconnection() itself as soon as
+     * ble_init_task() finishes setting the scan parameters. */
+    if (s_scan_params_ready) {
+        ble_keyboard_start_scan();
+    }
 }
 
 extern "C" void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb)

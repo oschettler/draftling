@@ -169,6 +169,11 @@ static void hid_iface_cb(hid_host_device_handle_t hid_dev_handle,
         }
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
         s_prev_mod = 0;
+        /* The wired keyboard is gone. Hand input back to the BLE
+         * keyboard subsystem (if BLE was initialised at boot) so
+         * the device starts scanning for a Bluetooth keyboard
+         * again. No-op when BLE has never been brought up. */
+        ble_keyboard_enable();
         break;
     case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
         ESP_LOGW(TAG, "USB HID transfer error (proto=%d)",
