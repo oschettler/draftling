@@ -244,6 +244,37 @@ backend (`components/battery`, gated on
 `CONFIG_DRAFTLING_BATTERY_INA226`) reads the bus-voltage register
 (0x02, 1.25 mV/LSB), divides by the configured cell count (2 for
 the stock NP-F550 pack), and feeds the result through the standard
-4.2-3.6 V LiPo lookup table to derive percentage. No calibration
-register write is needed because we do not use current/power
-readings.
+4.2-3.6 V LiPo lookup table to derive percentage.
+
+The same backend also exposes `battery_read_charging()` which
+returns 1 when current is flowing into the pack. This is read
+straight from the INA226 shunt-voltage register (0x01, signed
+2.5 µV/LSB) -- positive shunt voltage means current is flowing in
+the direction the on-board IP2326 charger drives during charging,
+so a non-trivial positive reading indicates the pack is being
+charged. The status bar prepends a `+` glyph to the battery
+percentage whenever charging is detected (`editor_ui.cpp` /
+`batt_timer_cb`, polled every 30 s).
+
+## Charging
+
+The Tab5 carries an autonomous IP2326 Li-ion charger between the
+USB-C input and the battery pack. The charger's `CHG_EN` input is
+wired to **bit 7 of the second PI4IOE5V6408 I/O expander** at I2C
+address `0x44` (output register `OUT_SET` = `0x05`). The
+espressif/m5stack_tab5 BSP does *not* expose this pin in
+`bsp_feature_enable()`, and M5Stack's reference
+`bsp_io_expander_pi4ioe_init()` deliberately boots the expander
+with `CHG_EN = 0` -- which is the underlying reason the battery
+does not charge out-of-the-box when USB-C is plugged in.
+
+Draftling's `main.cpp` enables charging at boot, right after
+`bsp_i2c_init()`, by writing the PI4IOE5V6408 directly through the
+shared system bus: it sets bit 7 of `IO_DIR` (`0x03`) to make the
+pin an output and then sets bit 7 of `OUT_SET` (`0x05`) to drive
+it HIGH. The expander latches the level and retains it across P4
+deep sleep (same as `WLAN_PWR_EN` on bit 0 of the same expander --
+see the *Deep sleep* section above), so the charger keeps running
+while the MCU sleeps and the battery comes back full after a long
+idle. As a result no special "no sleep while charging" path is
+needed in `components/standby/standby.cpp`.

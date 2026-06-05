@@ -107,13 +107,27 @@ Two backends:
   0x55 on the I2C bus shared with epdiy (TPS65185 / PCA9535) and
   GT911. main.cpp creates the bus and passes its handle in. Voltage
   comes from the Voltage register (0x08, mV), and percentage comes
-  straight from StateOfCharge (0x2C, 0-100 %).
+  straight from StateOfCharge (0x2C, 0-100 %). Charge state is
+  derived from the Flags register (0x06): bit 0 (`DSG`) is 0 while
+  charging or full and 1 while discharging.
+* **TI INA226 power monitor** over I2C
+  (`battery_init_ina226(bus, addr, cells)`): used on the M5Stack
+  Tab5. Bus voltage (register 0x02) is divided by the cell count
+  to derive per-cell mV. Charge state comes from the signed
+  shunt-voltage register (0x01): positive shunt voltage means
+  current is flowing into the pack (the Tab5 wires the shunt so
+  the IP2326 charger pushes positive current into the cell). See
+  `docs/tab5-esp-hosted.md` for the CHG_EN enable path.
 
 When no backend has been initialized, `battery_read_percent()`
 returns -1 and the editor UI hides the battery indicator.
+Similarly `battery_read_charging()` returns -1 on backends that
+cannot detect charge state (the GPIO-ADC backend), so the UI auto-
+hides the `+` charging glyph on those boards.
 
 Public API: `battery_init()`, `battery_init_bq27220()`,
-`battery_read_mv()`, `battery_read_percent()`.
+`battery_init_ina226()`, `battery_read_mv()`,
+`battery_read_percent()`, `battery_read_charging()`.
 
 ### components/ble_keyboard/
 
@@ -314,6 +328,19 @@ is compiled out entirely. The Tab5 has no user button or touch INT
 on an LP_IO pin (GPIO 0-15) either, so the only wake path is the
 hardware RESET button: the chip cold-boots and the editor restores
 from autosave on the next run. See `docs/tab5-esp-hosted.md`.
+
+On the LilyGO T5 E-Paper S3 Pro / Pro Lite, the standby pre-sleep
+callback is replaced with `pre_sleep_t5_deinit()` (`main/main.cpp`),
+which chains the standard `pre_sleep_autosave` and then walks every
+peripheral that the ESP-IDF default deep-sleep path would leave
+powered: GT911 (`touchscreen_sleep()`), SX1262 LoRa (`SetSleep`
+opcode over SPI3 on the Pro variant), MicroSD (`sd_card_deinit()`
+releases SPI3), the front-light LED on GPIO 11 (driven LOW + RTC IO
+hold), unused RTC-IO pins (`rtc_gpio_isolate()`), and finally
+`esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF)`.
+Without this hook the board pulled ~30 mA in sleep, draining the
+1500 mAh pack in two days; with the hook the figure drops to the
+tens of µA. Full peripheral table in `docs/lilygo-t5-power.md`.
 
 Before arming EXT0, `standby_enter_sleep()` enables the chip's
 internal RTC pull-up on the wake GPIO and disables any pull-down.
