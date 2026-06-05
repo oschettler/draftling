@@ -287,6 +287,9 @@ the `m5stack/M5GFX` managed component (used by the M5Stack PaperS3
 display backend) is not compatible with ESP-IDF 6.x. Use any ESP-IDF
 v5.x release (v5.3 - v5.5 confirmed working).
 
+Keep in mind that M5Stack Tab5 uses a different MCU, so the tatget
+should be set to 'esp32s4'.
+
 ```bash
 idf.py set-target esp32s3
 idf.py build
