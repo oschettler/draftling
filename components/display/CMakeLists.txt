@@ -6,7 +6,8 @@ idf_component_register(
     ## 6.0 peripherals migration guide). The display backends
     ## directly include `driver/gpio.h`, `driver/spi_master.h`,
     ## `driver/i2c_master.h`, and `driver/ledc.h`, so the matching
-    ## `esp_driver_*` components must be listed explicitly.
+    ## `esp_driver_*` components must be listed explicitly. They
+    ## also exist on IDF 5.3+, so the same list works on older IDFs.
     PRIV_REQUIRES driver esp_driver_gpio esp_driver_spi esp_driver_i2c esp_driver_ledc esp_lcd esp_timer lvgl__lvgl
 )
 

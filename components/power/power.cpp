@@ -6,7 +6,7 @@
  * ------------
  * The TCA9554 IO-expander is the only device this code talks to over
  * I2C, so we open a dedicated I2C master bus on the pins provided
- * via power_config_t (the same ESP-IDF i2c_master API the
+ * via power_config_t (the same ESP-IDF v5.x i2c_master API the
  * touchscreen component uses, which avoids pulling in a heavy
  * esp_io_expander_tca9554 dependency for the two writes we need to
  * make).
