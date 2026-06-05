@@ -78,9 +78,12 @@ static i2c_master_dev_handle_t   s_bq_dev = NULL;
  * without writing the calibration register (which would require the
  * exact shunt-resistor value from the schematic to convert the raw
  * value to amperes). On the Tab5 the IP2326 charger sits between
- * the USB-C input and the cell, the INA226 shunt is on the cell-
- * side rail, and current flowing into the cell yields a positive
- * shunt voltage -- so positive shunt voltage => charging. A small
+ * the USB-C input and the cell and the INA226 shunt is on the cell-
+ * side rail. Empirically the shunt's IN+/IN- inputs are wired such
+ * that current flowing *out* of the cell (i.e. the system running
+ * on battery) produces a positive shunt-voltage reading, and current
+ * flowing *into* the cell while charging produces a negative one --
+ * so on the Tab5 a negative shunt voltage means "charging". A small
  * noise threshold filters out the few-microvolt offset reading the
  * INA226 returns when no current is flowing. */
 #define INA226_REG_SHUNTVOLTAGE  0x01
@@ -506,7 +509,7 @@ extern "C" int battery_read_charging(void)
         }
         /* Big-endian on the wire; the register is signed two's complement. */
         int16_t raw = (int16_t)(((uint16_t)rd[0] << 8) | (uint16_t)rd[1]);
-        if (raw >= INA226_SHUNT_CHARGE_THRESHOLD) return 1;
+        if (raw <= -INA226_SHUNT_CHARGE_THRESHOLD) return 1;
         return 0;
     }
     /* ADC backend and "no backend" cannot tell. */
