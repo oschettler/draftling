@@ -48,6 +48,7 @@ void ble_keyboard_init(void)
     ESP_LOGW(TAG_STUB, "Bluedroid host not enabled in sdkconfig; "
                        "BLE keyboard support is disabled on this build.");
 }
+void ble_keyboard_disable(void)                                          {}
 void ble_keyboard_set_callback(kb_event_callback_t /*cb*/)               {}
 void ble_keyboard_set_passkey_callback(ble_passkey_cb_t /*cb*/)          {}
 void ble_keyboard_set_connect_callback(ble_connect_cb_t /*cb*/)          {}
@@ -175,11 +176,23 @@ static ble_status_text_cb_t s_status_text_cb = NULL;
  * throughout the file.  Sized to match BONDED_NAME_LEN. */
 static char s_dev_name[BONDED_NAME_LEN] = "";
 
+/* Set true when ble_keyboard_disable() is called (USB keyboard hot-
+ * plug path). Once set, every public entry point and internal task
+ * short-circuits so no further BLE activity is started, no events
+ * are dispatched to the editor, and no status text is pushed to the
+ * UI. The flag is one-shot for the rest of this boot.
+ *
+ * Defined this far up the file so notify_status() / dispatch_key()
+ * (which sit above the rest of the state block) can test it.  All
+ * other state lives lower down, in the "State" block. */
+static volatile bool s_disabled = false;
+
 /* Helper: notify the UI of a human-readable status message */
 static void notify_status(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
 static void notify_status(const char *fmt, ...)
 {
+    if (s_disabled) return;
     if (!s_status_text_cb) return;
     char buf[128];
     va_list ap;
@@ -390,6 +403,7 @@ static bool key_in_report(uint8_t key, const uint8_t *keys, int count)
 /* Dispatch a single key event to the registered callback */
 static void dispatch_key(uint8_t modifier, uint8_t keycode, bool pressed)
 {
+    if (s_disabled) return;
     if (!s_callback) return;
     kb_event_t ev = {};
     ev.modifier  = modifier;
@@ -626,6 +640,7 @@ static void process_keyboard_report(const uint8_t *data, int len,
 static void hidh_callback(void *handler_args, esp_event_base_t base,
                            int32_t id, void *event_data)
 {
+    if (s_disabled) return;
     esp_hidh_event_t event = (esp_hidh_event_t)id;
     esp_hidh_event_data_t *param = (esp_hidh_event_data_t *)event_data;
 
@@ -888,6 +903,7 @@ static void try_connect_bonded(int idx)
 
 static void start_reconnection(void)
 {
+    if (s_disabled) return;
     if (s_connected || s_connecting) return;
 
     switch (s_reconn_phase) {
@@ -995,6 +1011,7 @@ static void startup_timer_cb(TimerHandle_t timer)
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param)
 {
+    if (s_disabled) return;
     ESP_LOGI(TAG, "GAP event: %d", (int)event);
 
     switch (event) {
@@ -1402,6 +1419,56 @@ extern "C" void ble_keyboard_set_callback(kb_event_callback_t callback)
     s_callback = callback;
 }
 
+extern "C" void ble_keyboard_disable(void)
+{
+    /* Idempotent. Once disabled we stay disabled until the next
+     * boot -- the wired-keyboard / BLE switch is intentionally
+     * one-shot (see docs/tab5-esp-hosted.md). */
+    if (s_disabled) return;
+    s_disabled = true;
+
+    ESP_LOGI(TAG, "Disabling BLE keyboard (USB keyboard active)");
+
+    /* Drop external callbacks so any late event arriving from the
+     * controller / Bluedroid task does not surface to the editor or
+     * the status bar. dispatch_key / notify_status also short-circuit
+     * on s_disabled, but clearing the pointers is cheap insurance. */
+    s_callback        = NULL;
+    s_status_text_cb  = NULL;
+    s_passkey_cb      = NULL;
+    /* Fire the connect callback once with `false` so the UI can
+     * reflect the keyboard going away (it would otherwise still
+     * show "connected" if a BLE keyboard had been bonded earlier
+     * this boot). Then clear it. */
+    if (s_connect_cb) {
+        ble_connect_cb_t cb = s_connect_cb;
+        s_connect_cb = NULL;
+        cb(false);
+    }
+
+    /* Stop our retry / safety timers so they cannot kick a fresh
+     * scan after we have torn everything down below. */
+    if (s_scan_timer)    { xTimerStop(s_scan_timer,    0); }
+    if (s_reconn_timer)  { xTimerStop(s_reconn_timer,  0); }
+    if (s_startup_timer) { xTimerStop(s_startup_timer, 0); }
+
+    /* Tell the controller to stop scanning. Returns an error if no
+     * scan is in flight, which we ignore. */
+    esp_ble_gap_stop_scanning();
+
+    /* If a keyboard is currently connected, close the HIDH device
+     * so the controller link to the peripheral drops cleanly. */
+    if (s_hidh_dev) {
+        esp_hidh_dev_close(s_hidh_dev);
+        s_hidh_dev = NULL;
+    }
+
+    s_connected         = false;
+    s_connecting        = false;
+    s_scan_params_ready = false;
+    s_battery_level     = -1;
+}
+
 extern "C" void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb)
 {
     s_passkey_cb = cb;
@@ -1419,11 +1486,13 @@ extern "C" void ble_keyboard_set_status_text_callback(ble_status_text_cb_t cb)
 
 extern "C" bool ble_keyboard_is_connected(void)
 {
+    if (s_disabled) return false;
     return s_connected;
 }
 
 extern "C" void ble_keyboard_start_scan(void)
 {
+    if (s_disabled) return;
     if (!s_connected && !s_connecting) {
         if (!s_scan_params_ready) {
             ESP_LOGW(TAG, "Scan params not ready yet, deferring scan");

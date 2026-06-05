@@ -328,9 +328,24 @@ extern "C" void app_main(void)
      * expander -- see docs/tab5-esp-hosted.md), so charging continues
      * while the MCU sleeps.
      *
+     * IMPORTANT: the PI4IOE5V6408 also has an "Output High-Impedance"
+     * register (`OUT_H_IM` = 0x07). When a bit is 1 the corresponding
+     * pin is in high-impedance regardless of the IO_DIR / OUT_SET
+     * setting. On power-up *and* after the
+     * `espressif/esp_io_expander_pi4ioe5v6408` driver's reset()
+     * (called from `bsp_io_expander1_init()`, which `bsp_feature_enable`
+     * triggers for `BSP_FEATURE_WIFI`), OUT_H_IM defaults to 0xFF —
+     * i.e. all pins, including P7 (CHG_EN), boot in high-Z. Setting
+     * IO_DIR + OUT_SET alone is therefore not enough to drive the
+     * charger enable line; we also have to clear bit 7 of OUT_H_IM
+     * so the pin is push-pull driven. Without this the IP2326 never
+     * sees CHG_EN go high and the battery does not charge.
+     *
      * Reference: m5stack/M5Tab5-UserDemo
      *   platforms/tab5/components/m5stack_tab5/m5stack_tab5.c
-     *   (functions `bsp_set_charge_en` and `bsp_io_expander_pi4ioe_init`).
+     *   (functions `bsp_set_charge_en` and `bsp_io_expander_pi4ioe_init`,
+     *   which writes OUT_H_IM = 0b00000110 to drop the high-Z mask
+     *   on every pin actually used on the second expander).
      */
     {
         i2c_master_bus_handle_t sys_bus = bsp_i2c_get_handle();
@@ -355,6 +370,20 @@ extern "C" void app_main(void)
                     uint8_t wr[2] = { 0x03, (uint8_t)(dir | (1u << 7)) };
                     err = i2c_master_transmit(pi4, wr, 2, 100);
                 }
+                /* Read-modify-write OUT_H_IM (0x07): clear bit 7 so P7
+                 * is push-pull driven instead of high-impedance. We
+                 * preserve every other bit so the BSP-managed pins
+                 * (WLAN_PWR_EN on P0, USB_EN on P3) keep their
+                 * current drive mode. */
+                if (err == ESP_OK) {
+                    rd_reg = 0x07;
+                    uint8_t hiz = 0;
+                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &hiz, 1, 100);
+                    if (err == ESP_OK) {
+                        uint8_t wr[2] = { 0x07, (uint8_t)(hiz & ~(1u << 7)) };
+                        err = i2c_master_transmit(pi4, wr, 2, 100);
+                    }
+                }
                 /* Read-modify-write OUT_SET (0x05): set bit 7 = 1 (CHG_EN). */
                 if (err == ESP_OK) {
                     rd_reg = 0x05;
@@ -366,7 +395,7 @@ extern "C" void app_main(void)
                     }
                 }
                 if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (PI4IOE2 P7 = 1)");
+                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (PI4IOE2 P7 = 1, drive enabled)");
                 } else {
                     ESP_LOGW(TAG, "Tab5 CHG_EN write failed: %s",
                              esp_err_to_name(err));
@@ -719,6 +748,17 @@ extern "C" void app_main(void)
         }
     } else {
         ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
+        /* Now that we know we are going down the BLE path, replace
+         * the neutral "Initializing..." caption editor_ui_init()
+         * put on the boot screen with the actual "Searching for BLE
+         * keyboard..." prompt. Doing it here (rather than in
+         * editor_ui_init) keeps that message off the screen on the
+         * USB-keyboard path. */
+        if (draftling_lvgl_port_lock(-1)) {
+            editor_ui_set_ble_prompt_text(
+                "Searching for BLE keyboard...\nPlease turn on your keyboard");
+            draftling_lvgl_port_unlock();
+        }
         ble_keyboard_init();
     }
 

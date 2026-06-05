@@ -232,9 +232,17 @@ enumeration.
 - If no USB keyboard is present, the build falls back to the BLE
   HID keyboard path described above.
 
-The decision is one-shot at boot. Hot-plugging a USB keyboard after
-boot does not tear down BLE, and unplugging the USB keyboard does
-not start BLE pairing -- power-cycle to switch keyboards.
+The decision to bring up BLE is one-shot at boot: if no USB
+keyboard was detected at boot we take the BLE path and stay there
+even if a USB keyboard is plugged in later. Hot-plugging a USB
+keyboard *after* BLE has already started, however, immediately
+disables the BLE keyboard interface -- `usb_kbd.cpp` calls
+`ble_keyboard_disable()` as soon as the wired keyboard enumerates,
+which stops scanning, closes any connected HID device, drops all
+event/status callbacks and prevents further BLE messages from
+reaching the editor. Going the other way (unplugging the USB
+keyboard) does not start BLE pairing -- power-cycle to fall back
+to BLE.
 
 ## Battery indicator
 
@@ -254,7 +262,7 @@ the direction the on-board IP2326 charger drives during charging,
 so a non-trivial positive reading indicates the pack is being
 charged. The status bar prepends a `+` glyph to the battery
 percentage whenever charging is detected (`editor_ui.cpp` /
-`batt_timer_cb`, polled every 30 s).
+`batt_timer_cb`, polled every 5 s).
 
 ## Charging
 
@@ -271,8 +279,18 @@ does not charge out-of-the-box when USB-C is plugged in.
 Draftling's `main.cpp` enables charging at boot, right after
 `bsp_i2c_init()`, by writing the PI4IOE5V6408 directly through the
 shared system bus: it sets bit 7 of `IO_DIR` (`0x03`) to make the
-pin an output and then sets bit 7 of `OUT_SET` (`0x05`) to drive
-it HIGH. The expander latches the level and retains it across P4
+pin an output, **clears bit 7 of `OUT_H_IM` (`0x07`)** to take the
+pin out of the high-impedance state the part comes up in, and
+finally sets bit 7 of `OUT_SET` (`0x05`) to drive it HIGH. The
+`OUT_H_IM` step is the part that is easy to miss: both the silicon
+and the upstream `esp_io_expander_pi4ioe5v6408` driver leave every
+output high-Z on reset (`OUT_H_IM = 0xFF`), and `bsp_feature_enable()`
+only clears that bit for pins it knows about (e.g. `WIFI_EN`). Without
+the `OUT_H_IM` clear the `OUT_SET` bit latches but the pin keeps
+floating, the IP2326 sees no enable and charging silently never
+starts -- which is what produced the original "USB plugged in but
+the percentage never moves and the charging icon never appears"
+symptom on Tab5. The expander latches the resulting level and retains it across P4
 deep sleep (same as `WLAN_PWR_EN` on bit 0 of the same expander --
 see the *Deep sleep* section above), so the charger keeps running
 while the MCU sleeps and the battery comes back full after a long
