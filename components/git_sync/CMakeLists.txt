@@ -16,5 +16,9 @@ endif()
 idf_component_register(
     SRCS "git_sync.cpp"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES esp_http_client esp-tls ${_git_sync_cjson_component} sd_card wifi_manager nvs_flash
+    ## mbedtls is needed for mbedtls_base64_* and for the PSA Crypto
+    ## API used by the git blob SHA-1 helper on ESP-IDF 6.x (Mbed
+    ## TLS 4.x removed the legacy mbedtls_sha1_* API; see the
+    ## ESP-IDF 6.0 security migration guide).
+    PRIV_REQUIRES esp_http_client esp-tls mbedtls ${_git_sync_cjson_component} sd_card wifi_manager nvs_flash
 )
