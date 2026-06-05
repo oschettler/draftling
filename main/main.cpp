@@ -395,7 +395,7 @@ extern "C" void app_main(void)
                     }
                 }
                 if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (PI4IOE2 P7 = 1, drive enabled)");
+                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (second PI4IOE5V6408 P7 = 1, drive enabled)");
                 } else {
                     ESP_LOGW(TAG, "Tab5 CHG_EN write failed: %s",
                              esp_err_to_name(err));
