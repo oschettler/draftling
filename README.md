@@ -407,3 +407,7 @@ components/
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for
 details.
+
+Copyright (c) 2025 clackups@gmail.com
+
+Fediverse: [@clackups@social.noleron.com](https://social.noleron.com/@clackups)
