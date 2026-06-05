@@ -9,7 +9,16 @@
 #include <esp_heap_caps.h>
 #include <cJSON.h>
 #include <mbedtls/base64.h>
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION_MAJOR >= 6
+/* ESP-IDF 6.0 upgrades to Mbed TLS 4.x which removes the legacy
+ * `mbedtls/sha1.h` low-level API in favour of PSA Crypto (see the
+ * ESP-IDF 6.0 security migration guide). Use psa/crypto.h for the
+ * git blob SHA-1 helper instead. */
+#include <psa/crypto.h>
+#else
 #include <mbedtls/sha1.h>
+#endif
 
 #include "git_sync.h"
 #include "sd_card.h"
@@ -177,6 +186,17 @@ static void compute_blob_sha(const char *content, size_t len, char out_hex[41])
     char header[32];
     int hlen = snprintf(header, sizeof(header), "blob %zu", len);
 
+#if ESP_IDF_VERSION_MAJOR >= 6
+    /* Mbed TLS 4.x removed the legacy mbedtls_sha1_* API; use PSA
+     * Crypto. ESP-IDF initialises PSA during normal startup, so no
+     * psa_crypto_init() call is needed here. */
+    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
+    size_t hash_len = 0;
+    psa_hash_setup(&op, PSA_ALG_SHA_1);
+    psa_hash_update(&op, (const unsigned char *)header, hlen + 1);
+    psa_hash_update(&op, (const unsigned char *)content, len);
+    psa_hash_finish(&op, hash, sizeof(hash), &hash_len);
+#else
     mbedtls_sha1_context ctx;
     mbedtls_sha1_init(&ctx);
     mbedtls_sha1_starts(&ctx);
@@ -184,6 +204,7 @@ static void compute_blob_sha(const char *content, size_t len, char out_hex[41])
     mbedtls_sha1_update(&ctx, (const unsigned char *)content, len);
     mbedtls_sha1_finish(&ctx, hash);
     mbedtls_sha1_free(&ctx);
+#endif
 
     for (int i = 0; i < 20; i++)
         snprintf(out_hex + i * 2, 3, "%02x", hash[i]);
