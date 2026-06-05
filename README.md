@@ -287,6 +287,12 @@ can be independently enabled or disabled. By default **US-English** and
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/)
 v5.3 or later (v5.3 - v5.5 confirmed working).
 
+> **Note:** the e-paper boards (M5Stack PaperS3 and LilyGO T5 E-Paper
+> S3 Pro / Pro Lite) currently require **ESP-IDF 5.5.x**. The
+> `vroland/epdiy` driver is not yet compatible with ESP-IDF 6.x;
+> please stay on the 5.5.x release line for these devices until the
+> driver becomes compatible.
+
 Keep in mind that M5Stack Tab5 uses a different MCU, so the tatget
 should be set to 'esp32s4'.
 
