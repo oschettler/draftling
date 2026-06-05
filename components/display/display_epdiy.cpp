@@ -588,7 +588,7 @@ extern "C" void display_deep_sleep_prepare(void)
      * display_init() from scratch, so it is safe to fully release
      * here. epd_poweroff() drives the TPS65185 WAKEUP line LOW via
      * the PCA9535 expander, dropping the EPD power IC into its
-     * <1 µA standby. */
+     * <1 uA standby. */
     epd_poweroff();
     epd_deinit();
     s_initialized = false;

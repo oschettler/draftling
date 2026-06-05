@@ -72,7 +72,7 @@ static i2c_master_dev_handle_t   s_bq_dev = NULL;
  * 2S Li-ion, ~6.0-8.4 V) to the BUS input, so the per-cell voltage
  * is bus_mv / cells.
  *
- * INA226_REG_SHUNTVOLTAGE is a signed 16-bit register with a 2.5 µV
+ * INA226_REG_SHUNTVOLTAGE is a signed 16-bit register with a 2.5 uV
  * LSB. Its sign indicates the direction of current flow across the
  * shunt and is therefore enough to detect "charging vs discharging"
  * without writing the calibration register (which would require the
@@ -90,8 +90,8 @@ static i2c_master_dev_handle_t   s_bq_dev = NULL;
 #define INA226_REG_BUSVOLTAGE    0x02
 #define INA226_BUSVOLTAGE_LSB_UV 1250    /* microvolts per LSB */
 /* Noise threshold for charge detection, in raw LSB units of the
- * shunt-voltage register (2.5 µV/LSB). 8 LSB == 20 µV across the
- * shunt; with the typical 10 mΩ Tab5 shunt that is ~2 mA, well
+ * shunt-voltage register (2.5 uV/LSB). 8 LSB == 20 uV across the
+ * shunt; with the typical 10 mohm Tab5 shunt that is ~2 mA, well
  * below idle MCU draw and well above the INA226 zero-offset. */
 #define INA226_SHUNT_CHARGE_THRESHOLD 8
 /* Per-cell voltage threshold below which the INA226 backend treats

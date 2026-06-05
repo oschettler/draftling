@@ -2,7 +2,15 @@
 
 ## Code Style
 
-- Do not use non-ASCII characters in code, comments, or string literals. All source files must be ASCII-only.
+- Do not use non-ASCII characters anywhere in the repository -- in code,
+  comments, string literals, commit messages, or documentation (including
+  Markdown files under `docs/` and this `AGENTS.md`). All files must be
+  ASCII-only. Use ASCII equivalents instead: `u` (or `micro`) for `mu`,
+  `->` for an arrow, `--` for an em-dash, `>=` / `<=` for the inequality
+  glyphs, `ohm` for the ohm symbol, `deg` for the degree sign, `sec.` for
+  the section sign, etc. The only exception is the auto-generated LVGL
+  font sources under `components/fonts/` (e.g. `greybeard_*.c`), whose
+  comments reference the Unicode glyphs they encode.
 - All board-specific configuration -- pin numbers, panel dimensions,
   wakeup GPIOs, brand strings, etc. -- belongs in `main/Kconfig.projbuild`
   and `main/app_config.h`. C and C++ files outside `main/` must NOT
@@ -343,7 +351,7 @@ hold), unused RTC-IO pins (`rtc_gpio_isolate()`), and finally
 `esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF)`.
 Without this hook the board pulled ~30 mA in sleep, draining the
 1500 mAh pack in two days; with the hook the figure drops to the
-tens of µA. Full peripheral table in `docs/lilygo-t5-power.md`.
+tens of uA. Full peripheral table in `docs/lilygo-t5-power.md`.
 
 Before arming EXT0, `standby_enter_sleep()` enables the chip's
 internal RTC pull-up on the wake GPIO and disables any pull-down.
