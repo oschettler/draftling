@@ -4,7 +4,10 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <driver/spi_common.h>
+#include <driver/spi_master.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
 #include <driver/i2c_master.h>
 #endif
@@ -54,7 +57,6 @@ static void pre_sleep_autosave(void)
      * itself is unmodified, so reopening the file resumes at the
      * last position. No-op if no file is currently open. */
     editor_save_meta();
-
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* E-paper retains its image without power. Wipe the panel to a
      * clean white frame so the user does not see the editor frozen on
@@ -84,6 +86,139 @@ static void pre_sleep_autosave(void)
     }
 #endif
 }
+
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+/* LilyGO T5 E-Paper S3 Pro / Pro Lite: deep-sleep current budget.
+ *
+ * Without this hook the board pulls ~30 mA in deep sleep (a 1500 mAh
+ * NP-F battery dies in ~2 days). Target after this hook is < 100 µA,
+ * giving > 2 weeks idle. Each step plugs one peripheral:
+ *
+ *   Peripheral             Sleep state we drive it to            Source
+ *   --------------------   ----------------------------------    ----------
+ *   GT911 touch ctrlr      cmd 0x05 -> "sleep" (~8 µA)           GT911 DS §6
+ *   SX1262 LoRa (Pro)      SetSleep(0x00) (~600 nA cold)         SX126x DS §13.1.7
+ *   SD card (SPI)          SPI3 bus freed; card to standby        sd_card_deinit()
+ *   EPDIY (TPS65185+exp)   epd_poweroff() -> WAKEUP low (<1 µA)   epdiy README
+ *   Front-light LED (G11)  driven LOW + RTC IO hold                display_deep_sleep_prepare()
+ *   ESP32-S3 RTC_PERIPH    powered down                            esp_sleep_pd_config()
+ *
+ * The display + touch deinit must happen with the I2C bus still
+ * alive, so the sequence is:
+ *   touchscreen_sleep()              (uses I2C)
+ *   display_deep_sleep_prepare()     (uses I2C, then tears it down)
+ *   sd_card_deinit()                 (releases SPI3)
+ *   SX1262 SetSleep over SPI3        (must run BEFORE spi_bus_free,
+ *                                     but sd_card_deinit closes the
+ *                                     bus, so we do LoRa first)
+ *   esp_sleep_pd_config(RTC_PERIPH)  (final hint to PMU)
+ *   gpio_deep_sleep_hold_en()        (latch all gpio_hold_en pads)
+ *
+ * `standby_enter_sleep()` does the actual `esp_deep_sleep_start()`
+ * after this callback returns.
+ */
+
+/* SX1262 SetSleep opcode (sx126x datasheet §13.1.7). We issue a
+ * cold-start sleep (no register retention -- we don't have any
+ * persistent radio state to keep). 1-byte opcode + 1-byte param. */
+static void t5_lora_sleep(void)
+{
+#if defined(BOARD_LORA_CS_PIN) && (BOARD_LORA_CS_PIN >= 0)
+    /* The SX1262 sits on SPI3 (shared with the SD card). Talk to it
+     * directly via spi_bus_add_device using the LoRa CS, then remove
+     * the device when done. Failure is non-fatal -- the radio chip
+     * is depopulated on the Lite variant, so a NACK / no-response is
+     * the expected outcome there. */
+    spi_device_handle_t lora = NULL;
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = 1 * 1000 * 1000;  /* 1 MHz is safe for SetSleep */
+    devcfg.mode           = 0;
+    devcfg.spics_io_num   = BOARD_LORA_CS_PIN;
+    devcfg.queue_size     = 1;
+    esp_err_t err = spi_bus_add_device(SPI3_HOST, &devcfg, &lora);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "SX1262 spi_bus_add_device failed: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+    uint8_t tx[2] = { 0x84 /* SetSleep */, 0x00 /* cold start */ };
+    spi_transaction_t t = {};
+    t.length    = sizeof(tx) * 8;
+    t.tx_buffer = tx;
+    err = spi_device_polling_transmit(lora, &t);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "SX1262 entered sleep mode");
+    } else {
+        ESP_LOGD(TAG, "SX1262 SetSleep transmit failed: %s",
+                 esp_err_to_name(err));
+    }
+    spi_bus_remove_device(lora);
+#endif
+}
+
+/* Sweep a hard-coded list of GPIOs that are not wired to any
+ * peripheral on the T5 (per the LilyGO factory schematic) and
+ * isolate them so they don't leak through floating inputs in deep
+ * sleep. We restrict the list to RTC-capable pins because
+ * rtc_gpio_isolate() is the documented low-power state for those.
+ * Non-RTC pins are released to high-Z via gpio_reset_pin -- the
+ * pad's analog input is already off in deep sleep, so a high-Z
+ * output is the lowest-leakage state available. */
+static void t5_isolate_unused_gpios(void)
+{
+    /* ESP32-S3 RTC-IO range is GPIO0..GPIO21. Skip pins that are
+     * actively used in deep sleep:
+     *   GPIO0  -- BOOT button, EXT0 wake (handled by standby.cpp)
+     *   GPIO11 -- front-light, held LOW (display_deep_sleep_prepare)
+     *   GPIO13 -- SD MOSI / shared SPI3 (released by sd_card_deinit)
+     *   GPIO14 -- SD SCK  / shared SPI3 (released by sd_card_deinit)
+     *   GPIO21 -- SD MISO / shared SPI3 (released by sd_card_deinit)
+     *   GPIO12 -- SD CS (released by sd_card_deinit)
+     */
+    static const int rtc_unused[] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20
+    };
+    for (size_t i = 0; i < sizeof(rtc_unused) / sizeof(rtc_unused[0]); ++i) {
+        gpio_num_t g = (gpio_num_t)rtc_unused[i];
+        if (rtc_gpio_is_valid_gpio(g)) {
+            (void)rtc_gpio_isolate(g);
+        }
+    }
+}
+
+static void pre_sleep_t5_deinit(void)
+{
+    /* Run the editor autosave + EPD wipe first; that path uses the
+     * touch / display / I2C / SD subsystems while they are still up. */
+    pre_sleep_autosave();
+
+    /* GT911 touch controller -> sleep (uses the shared I2C bus). */
+    touchscreen_sleep();
+
+    /* SX1262 LoRa -> sleep (Pro variant only; harmless NACK on Lite). */
+    t5_lora_sleep();
+
+    /* Release the SD card + SPI3 bus so the card itself drops to
+     * standby and the bus pins float free. After this point any SPI3
+     * transaction (including the LoRa one above) is illegal -- which
+     * is why we do LoRa first. */
+    (void)sd_card_deinit();
+
+    /* Isolate every unused RTC-IO pin so floating inputs don't leak. */
+    t5_isolate_unused_gpios();
+
+    /* Power down the RTC peripherals domain. We have no ULP and no
+     * RTC SLOW memory data to retain across wake (the SoC cold-boots
+     * on wake and the editor restores from autosave), so dropping
+     * this domain saves ~40 µA on ESP32-S3 over the default. */
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+
+    /* Latch every pad that called gpio_hold_en() (the front-light,
+     * specifically) so the level stays driven through deep sleep. */
+    gpio_deep_sleep_hold_en();
+}
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE] */
 
 extern "C" void app_main(void)
 {
@@ -652,7 +787,12 @@ extern "C" void app_main(void)
     /* Initialize standby manager (deep sleep on inactivity) */
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+    standby_set_pre_sleep_cb(pre_sleep_t5_deinit);
+#else
     standby_set_pre_sleep_cb(pre_sleep_autosave);
+#endif
 
 #if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
     /* On PWR long-press, run the full shutdown sequence via the

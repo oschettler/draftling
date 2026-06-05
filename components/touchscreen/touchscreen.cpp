@@ -197,6 +197,8 @@ static bool poll_axs5106l(int *out_x, int *out_y)
  * two bytes, high-byte first. */
 #define GT911_REG_STATUS    0x814E  /* status / buffer-ready / point count */
 #define GT911_REG_POINT1    0x814F  /* first touch point (8 bytes) */
+#define GT911_REG_COMMAND   0x8040  /* command register (0x05 = sleep) */
+#define GT911_CMD_SLEEP     0x05    /* enter low-power sleep mode */
 
 static esp_err_t gt911_read_reg(uint16_t reg, uint8_t *buf, size_t len)
 {
@@ -495,6 +497,32 @@ extern "C" bool touchscreen_is_pressed(void)
     return s_pressed_latch;
 }
 
+extern "C" void touchscreen_sleep(void)
+{
+    if (!s_initialized || !s_dev) return;
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    /* GT911 datasheet, section 6 (command register 0x8040):
+     * writing 0x05 puts the controller into sleep mode (typical
+     * standby current < 10 µA). It wakes when the INT pin is
+     * driven high by the host, or on the next reset. We hold the
+     * mutex so we don't race a concurrent poll_controller(). */
+    if (s_mux && xSemaphoreTake(s_mux, pdMS_TO_TICKS(50)) == pdTRUE) {
+        esp_err_t err = gt911_write_reg(GT911_REG_COMMAND, GT911_CMD_SLEEP);
+        xSemaphoreGive(s_mux);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "GT911 entered sleep mode");
+        } else {
+            ESP_LOGW(TAG, "GT911 sleep cmd failed: %s",
+                     esp_err_to_name(err));
+        }
+    }
+#else
+    /* AXS5106L has no documented sleep command in the public
+     * register map; it idles to ~100 µA on its own once polling
+     * stops, which is acceptable on the Tab5 (separate rail). */
+#endif
+}
+
 #else /* !CONFIG_DRAFTLING_TOUCHSCREEN */
 
 /* Provide weak stubs so callers can compile-and-link without
@@ -510,5 +538,6 @@ extern "C" bool touchscreen_is_initialized(void) { return false; }
 extern "C" int  touchscreen_get_int_gpio(void)    { return -1; }
 extern "C" bool touchscreen_read(int *x, int *y)  { (void)x; (void)y; return false; }
 extern "C" bool touchscreen_is_pressed(void)      { return false; }
+extern "C" void touchscreen_sleep(void)           { }
 
 #endif /* CONFIG_DRAFTLING_TOUCHSCREEN */
