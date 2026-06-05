@@ -503,7 +503,7 @@ extern "C" void touchscreen_sleep(void)
 #if defined(CONFIG_DRAFTLING_TOUCH_GT911)
     /* GT911 datasheet, section 6 (command register 0x8040):
      * writing 0x05 puts the controller into sleep mode (typical
-     * standby current < 10 µA). It wakes when the INT pin is
+     * standby current < 10 uA). It wakes when the INT pin is
      * driven high by the host, or on the next reset. We hold the
      * mutex so we don't race a concurrent poll_controller(). */
     if (s_mux && xSemaphoreTake(s_mux, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -518,7 +518,7 @@ extern "C" void touchscreen_sleep(void)
     }
 #else
     /* AXS5106L has no documented sleep command in the public
-     * register map; it idles to ~100 µA on its own once polling
+     * register map; it idles to ~100 uA on its own once polling
      * stops, which is acceptable on the Tab5 (separate rail). */
 #endif
 }

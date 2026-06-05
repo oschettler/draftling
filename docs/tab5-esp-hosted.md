@@ -21,7 +21,72 @@ The P4-side wiring is automatic: it is enabled in
 component is pulled in by `main/idf_component.yml` under a
 `target == esp32p4` rule, so ESP32-S3 builds are unaffected.
 
-## Tab5 P4↔C6 pin map
+## ESP32-P4 chip revision (menuconfig)
+
+The default `sdkconfig.defaults.esp32p4` targets recent ESP32-P4
+silicon (chip revision v3.0 and newer). Early Tab5 units shipped
+with **older P4 dies** -- the reference unit this project was
+validated on is an ESP32-P4 **revision v1.3**, in a Tab5
+manufactured in 2024. Such boards will not boot a firmware built
+for the default minimum revision and `idf.py flash` refuses to
+write the image to the chip.
+
+### Typical symptom
+
+`idf.py -p /dev/ttyACM0 flash` aborts after the chip-detect step
+with an error similar to:
+
+```
+A fatal error occurred: This chip is ESP32-P4 v1.3 (revision v1.3),
+which does not meet the minimum chip revision specified in the
+application (v3.0). Detected chip revision is incompatible with
+the application binary.
+Use --force flag to flash anyway.
+```
+
+(`esptool` reports the actual detected revision -- v1.3 in the
+example above -- against the minimum the linked image was built
+for.) The application binary itself encodes the minimum required
+chip revision in its image header, so simply re-running the
+command does not help; the firmware has to be rebuilt with a lower
+minimum revision before it will flash and boot.
+
+### Fix: lower the minimum revision in menuconfig
+
+For older P4 silicon, rebuild with the minimum chip revision
+relaxed to match your hardware:
+
+```bash
+idf.py set-target esp32p4
+idf.py menuconfig
+```
+
+then navigate to
+
+```
+Component config  --->
+  Hardware Settings  --->
+    Chip revision  --->
+      (X) Minimum Supported ESP32-P4 Revision
+          -> v0.0  (or whichever revision matches your die)
+      Maximum Supported ESP32-P4 Revision  --->  v3.99
+```
+
+Save (`S`), exit (`Q`), then `idf.py build flash monitor`. With
+the minimum lowered to `v0.0` the same image flashes and boots on
+both the early v1.x dies (such as the v1.3 reference unit) and
+current v3.x silicon. The relevant Kconfig symbols are
+`CONFIG_ESP32P4_REV_MIN_*` and `CONFIG_ESP32P4_REV_MAX_*`; you can
+also set them directly in a local `sdkconfig` override if you
+prefer not to use the curses UI.
+
+> Bypassing the check with `esptool ... --force` is **not** a
+> substitute: the bootloader re-validates the image header against
+> the chip revision at every boot and will refuse to launch an
+> application whose minimum revision is higher than the silicon
+> it is running on.
+
+## Tab5 P4<->C6 pin map
 
 | Function | P4 GPIO |
 |----------|--------:|
@@ -39,7 +104,7 @@ per-slot `CONFIG_ESP_HOSTED_PRIV_SDIO_PIN_*_SLOT_1` symbols plus
 `CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE` (slot 1 is the P4 default
 and is the SDMMC slot wired to the on-board C6).
 
-> **Pitfall.** In `espressif/esp_hosted` ≥ 2.x the
+> **Pitfall.** In `espressif/esp_hosted` >= 2.x the
 > `CONFIG_ESP_HOSTED_SDIO_PIN_CLK / _CMD / _D0..D3` symbols are
 > *non-promptable derived ints* whose values are computed from the
 > per-slot `_PRIV_SDIO_PIN_*_SLOT_{0,1}` defaults. Setting
@@ -84,7 +149,7 @@ slave image must be flashed with esp-hosted-mcu firmware of version
 **2.x**. The M5Stack prebuilt image that ships with M5Tab5-UserDemo
 (`ESP32C6-WiFi-SDIO-Interface-V1.4.1-96bea3a_0x0.bin`) was built
 against an older 1.x slave and its RPC interface is **not** compatible
-with `esp_hosted >= 2.x` — using it will look exactly like "C6 not
+with `esp_hosted >= 2.x` -- using it will look exactly like "C6 not
 responding" (the SDIO bus comes up but the INIT event never
 arrives). Build a matching 2.x slave from upstream.
 
@@ -103,8 +168,8 @@ idf.py build
 The C6 has no boot button on the Tab5. To enter the ROM
 download mode you must hold its **GPIO 9** strapping pin LOW
 while it is reset (this is the standard ESP32-C6
-`BOOT_MODE` strap: GPIO 9 LOW at reset → serial download mode,
-HIGH → run flash). On the Tab5 the C6's GPIO 9 is exposed on
+`BOOT_MODE` strap: GPIO 9 LOW at reset -> serial download mode,
+HIGH -> run flash). On the Tab5 the C6's GPIO 9 is exposed on
 the secondary header next to the C6 module. Procedure:
 
 1. Power the Tab5 with the P4 firmware halted (or simply
@@ -121,7 +186,7 @@ the secondary header next to the C6 module. Procedure:
 
 If the C6 never enters download mode, double-check that
 GPIO 9 is actually being held LOW for the entire duration of
-the reset pulse — a momentary touch is not enough; the strap
+the reset pulse -- a momentary touch is not enough; the strap
 is sampled at the instant CHIP_PU goes high.
 
 ### 3. Flash and clean up
@@ -257,7 +322,7 @@ the stock NP-F550 pack), and feeds the result through the standard
 The same backend also exposes `battery_read_charging()` which
 returns 1 when current is flowing into the pack. This is read
 straight from the INA226 shunt-voltage register (0x01, signed
-2.5 µV/LSB) -- positive shunt voltage means current is flowing in
+2.5 uV/LSB) -- positive shunt voltage means current is flowing in
 the direction the on-board IP2326 charger drives during charging,
 so a non-trivial positive reading indicates the pack is being
 charged. The status bar prepends a `+` glyph to the battery

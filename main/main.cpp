@@ -89,15 +89,15 @@ static void pre_sleep_autosave(void)
 /* LilyGO T5 E-Paper S3 Pro / Pro Lite: deep-sleep current budget.
  *
  * Without this hook the board pulls ~30 mA in deep sleep (a 1500 mAh
- * NP-F battery dies in ~2 days). Target after this hook is < 100 µA,
+ * NP-F battery dies in ~2 days). Target after this hook is < 100 uA,
  * giving > 2 weeks idle. Each step plugs one peripheral:
  *
  *   Peripheral             Sleep state we drive it to            Source
  *   --------------------   ----------------------------------    ----------
- *   GT911 touch ctrlr      cmd 0x05 -> "sleep" (~8 µA)           GT911 DS §6
- *   SX1262 LoRa (Pro)      SetSleep(0x00) (~600 nA cold)         SX126x DS §13.1.7
+ *   GT911 touch ctrlr      cmd 0x05 -> "sleep" (~8 uA)           GT911 DS sec.6
+ *   SX1262 LoRa (Pro)      SetSleep(0x00) (~600 nA cold)         SX126x DS sec.13.1.7
  *   SD card (SPI)          SPI3 bus freed; card to standby        sd_card_deinit()
- *   EPDIY (TPS65185+exp)   epd_poweroff() -> WAKEUP low (<1 µA)   epdiy README
+ *   EPDIY (TPS65185+exp)   epd_poweroff() -> WAKEUP low (<1 uA)   epdiy README
  *   Front-light LED (G11)  driven LOW + RTC IO hold                display_deep_sleep_prepare()
  *   ESP32-S3 RTC_PERIPH    powered down                            esp_sleep_pd_config()
  *
@@ -116,7 +116,7 @@ static void pre_sleep_autosave(void)
  * after this callback returns.
  */
 
-/* SX1262 SetSleep opcode (sx126x datasheet §13.1.7). We issue a
+/* SX1262 SetSleep opcode (sx126x datasheet sec.13.1.7). We issue a
  * cold-start sleep (no register retention -- we don't have any
  * persistent radio state to keep). 1-byte opcode + 1-byte param. */
 static void t5_lora_sleep(void)
@@ -208,7 +208,7 @@ static void pre_sleep_t5_deinit(void)
     /* Power down the RTC peripherals domain. We have no ULP and no
      * RTC SLOW memory data to retain across wake (the SoC cold-boots
      * on wake and the editor restores from autosave), so dropping
-     * this domain saves ~40 µA on ESP32-S3 over the default. */
+     * this domain saves ~40 uA on ESP32-S3 over the default. */
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
 
     /* Latch every pad that called gpio_hold_en() (the front-light,
