@@ -129,6 +129,17 @@ bool touchscreen_read(int *out_x, int *out_y);
  * standby manager. */
 bool touchscreen_is_pressed(void);
 
+/* Put the touch controller into its lowest-power sleep mode. The
+ * controller stops scanning and drops to a few µA until the host
+ * either resets it or wakes it via the INT line. Used by the
+ * standby manager immediately before esp_deep_sleep_start() on
+ * boards (LilyGO T5 E-Paper S3 Pro/Lite) where the controller
+ * would otherwise keep scanning and draining the pack.
+ *
+ * On non-GT911 backends and on the no-touchscreen build this is
+ * a no-op so callers don't need conditional compilation. */
+void touchscreen_sleep(void);
+
 #ifdef __cplusplus
 }
 #endif

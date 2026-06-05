@@ -73,6 +73,16 @@ typedef void (*ble_connect_cb_t)(bool connected);
 typedef void (*ble_status_text_cb_t)(const char *text);
 
 void ble_keyboard_init(void);
+/* Stop all BLE keyboard activity (scanning, reconnection timers,
+ * status text updates) and disconnect from any currently paired
+ * keyboard. Safe to call at any time, including before
+ * ble_keyboard_init() (in which case it is a no-op).
+ *
+ * Used when a USB HID keyboard is hot-plugged: the BLE component
+ * stops driving the radio and stops emitting key events / status
+ * text so the wired keyboard becomes the sole input source. The
+ * decision is one-shot for the rest of this boot. */
+void ble_keyboard_disable(void);
 void ble_keyboard_set_callback(kb_event_callback_t callback);
 void ble_keyboard_set_passkey_callback(ble_passkey_cb_t cb);
 void ble_keyboard_set_connect_callback(ble_connect_cb_t cb);

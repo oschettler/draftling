@@ -498,7 +498,10 @@ static bool s_esc_pending = false;
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
 static lv_timer_t *s_batt_timer     = NULL;
-#define BATT_POLL_MS 30000  /* refresh battery every 30 s */
+#define BATT_POLL_MS 5000  /* refresh battery every 5 s (so charging
+                              * state / plug-in events show up quickly
+                              * on backends that expose it, INA226 on
+                              * the M5Stack Tab5 in particular) */
 #endif
 
 /* ---- WiFi connectivity icon ----
@@ -653,7 +656,18 @@ static void format_batt_str(char *buf, size_t len)
         snprintf(buf, len, "----");
         return;
     }
-    snprintf(buf, len, "%d%%", pct);
+    /* Prepend a "+" charge indicator when the battery is actively
+     * being charged from an external supply (USB-C / DC jack). The
+     * ASCII '+' is used in place of a U+26A1 lightning bolt because
+     * the bundled Greybeard fonts do not cover that codepoint (see
+     * update_wifi_icons() for the same reasoning). Backends that
+     * cannot detect charge state return -1 and the glyph stays off. */
+    int chg = battery_read_charging();
+    if (chg == 1) {
+        snprintf(buf, len, "+%d%%", pct);
+    } else {
+        snprintf(buf, len, "%d%%", pct);
+    }
 }
 
 static void batt_timer_cb(lv_timer_t *timer)
@@ -1887,7 +1901,17 @@ extern "C" void editor_ui_show_fatal(const char *msg)
     lv_scr_load(scr);
 }
 
-/* ---- Menu system ---- */
+extern "C" void editor_ui_set_ble_prompt_text(const char *text)
+{
+    /* Update the bottom-half label on the boot "BLE prompt" screen.
+     * editor_ui_init() loads this screen with a generic "Initializing..."
+     * caption because at that point we do not yet know whether a
+     * USB keyboard will enumerate; main.cpp calls this function once
+     * it has decided to bring up BLE, so the "Searching for BLE
+     * keyboard..." message only appears on the no-USB path. */
+    if (!s_ble_prompt_lbl || !text) return;
+    lv_label_set_text(s_ble_prompt_lbl, text);
+}
 
 /* Apply the "selected" styling to item `sel` and the "unselected"
  * styling to every other item.  Used after a full list rebuild. */
@@ -4142,8 +4166,7 @@ static void build_screens(void)
     lv_obj_set_style_text_font(s_ble_prompt_lbl, FONT_14, 0);
     lv_obj_set_style_text_color(s_ble_prompt_lbl, theme_fg(), 0);
     lv_obj_set_style_text_align(s_ble_prompt_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_ble_prompt_lbl,
-        "Searching for BLE keyboard...\nPlease turn on your keyboard");
+    lv_label_set_text(s_ble_prompt_lbl, "Initializing...");
     lv_obj_set_pos(s_ble_prompt_lbl, 10, SCR_H / 2 + 10);
 
     /* Register BLE status callbacks */

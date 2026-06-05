@@ -4,7 +4,10 @@
 #include <esp_log.h>
 #include <nvs_flash.h>
 #include <driver/spi_common.h>
+#include <driver/spi_master.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
+#include <esp_sleep.h>
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
 #include <driver/i2c_master.h>
 #endif
@@ -54,7 +57,6 @@ static void pre_sleep_autosave(void)
      * itself is unmodified, so reopening the file resumes at the
      * last position. No-op if no file is currently open. */
     editor_save_meta();
-
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* E-paper retains its image without power. Wipe the panel to a
      * clean white frame so the user does not see the editor frozen on
@@ -84,6 +86,139 @@ static void pre_sleep_autosave(void)
     }
 #endif
 }
+
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+/* LilyGO T5 E-Paper S3 Pro / Pro Lite: deep-sleep current budget.
+ *
+ * Without this hook the board pulls ~30 mA in deep sleep (a 1500 mAh
+ * NP-F battery dies in ~2 days). Target after this hook is < 100 µA,
+ * giving > 2 weeks idle. Each step plugs one peripheral:
+ *
+ *   Peripheral             Sleep state we drive it to            Source
+ *   --------------------   ----------------------------------    ----------
+ *   GT911 touch ctrlr      cmd 0x05 -> "sleep" (~8 µA)           GT911 DS §6
+ *   SX1262 LoRa (Pro)      SetSleep(0x00) (~600 nA cold)         SX126x DS §13.1.7
+ *   SD card (SPI)          SPI3 bus freed; card to standby        sd_card_deinit()
+ *   EPDIY (TPS65185+exp)   epd_poweroff() -> WAKEUP low (<1 µA)   epdiy README
+ *   Front-light LED (G11)  driven LOW + RTC IO hold                display_deep_sleep_prepare()
+ *   ESP32-S3 RTC_PERIPH    powered down                            esp_sleep_pd_config()
+ *
+ * The display + touch deinit must happen with the I2C bus still
+ * alive, so the sequence is:
+ *   touchscreen_sleep()              (uses I2C)
+ *   display_deep_sleep_prepare()     (uses I2C, then tears it down)
+ *   sd_card_deinit()                 (releases SPI3)
+ *   SX1262 SetSleep over SPI3        (must run BEFORE spi_bus_free,
+ *                                     but sd_card_deinit closes the
+ *                                     bus, so we do LoRa first)
+ *   esp_sleep_pd_config(RTC_PERIPH)  (final hint to PMU)
+ *   gpio_deep_sleep_hold_en()        (latch all gpio_hold_en pads)
+ *
+ * `standby_enter_sleep()` does the actual `esp_deep_sleep_start()`
+ * after this callback returns.
+ */
+
+/* SX1262 SetSleep opcode (sx126x datasheet §13.1.7). We issue a
+ * cold-start sleep (no register retention -- we don't have any
+ * persistent radio state to keep). 1-byte opcode + 1-byte param. */
+static void t5_lora_sleep(void)
+{
+#if defined(BOARD_LORA_CS_PIN) && (BOARD_LORA_CS_PIN >= 0)
+    /* The SX1262 sits on SPI3 (shared with the SD card). Talk to it
+     * directly via spi_bus_add_device using the LoRa CS, then remove
+     * the device when done. Failure is non-fatal -- the radio chip
+     * is depopulated on the Lite variant, so a NACK / no-response is
+     * the expected outcome there. */
+    spi_device_handle_t lora = NULL;
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = 1 * 1000 * 1000;  /* 1 MHz is safe for SetSleep */
+    devcfg.mode           = 0;
+    devcfg.spics_io_num   = BOARD_LORA_CS_PIN;
+    devcfg.queue_size     = 1;
+    esp_err_t err = spi_bus_add_device(SPI3_HOST, &devcfg, &lora);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "SX1262 spi_bus_add_device failed: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+    uint8_t tx[2] = { 0x84 /* SetSleep */, 0x00 /* cold start */ };
+    spi_transaction_t t = {};
+    t.length    = sizeof(tx) * 8;
+    t.tx_buffer = tx;
+    err = spi_device_polling_transmit(lora, &t);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "SX1262 entered sleep mode");
+    } else {
+        ESP_LOGD(TAG, "SX1262 SetSleep transmit failed: %s",
+                 esp_err_to_name(err));
+    }
+    spi_bus_remove_device(lora);
+#endif
+}
+
+/* Sweep a hard-coded list of GPIOs that are not wired to any
+ * peripheral on the T5 (per the LilyGO factory schematic) and
+ * isolate them so they don't leak through floating inputs in deep
+ * sleep. We restrict the list to RTC-capable pins because
+ * rtc_gpio_isolate() is the documented low-power state for those.
+ * Non-RTC pins are released to high-Z via gpio_reset_pin -- the
+ * pad's analog input is already off in deep sleep, so a high-Z
+ * output is the lowest-leakage state available. */
+static void t5_isolate_unused_gpios(void)
+{
+    /* ESP32-S3 RTC-IO range is GPIO0..GPIO21. Skip pins that are
+     * actively used in deep sleep:
+     *   GPIO0  -- BOOT button, EXT0 wake (handled by standby.cpp)
+     *   GPIO11 -- front-light, held LOW (display_deep_sleep_prepare)
+     *   GPIO13 -- SD MOSI / shared SPI3 (released by sd_card_deinit)
+     *   GPIO14 -- SD SCK  / shared SPI3 (released by sd_card_deinit)
+     *   GPIO21 -- SD MISO / shared SPI3 (released by sd_card_deinit)
+     *   GPIO12 -- SD CS (released by sd_card_deinit)
+     */
+    static const int rtc_unused[] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20
+    };
+    for (size_t i = 0; i < sizeof(rtc_unused) / sizeof(rtc_unused[0]); ++i) {
+        gpio_num_t g = (gpio_num_t)rtc_unused[i];
+        if (rtc_gpio_is_valid_gpio(g)) {
+            (void)rtc_gpio_isolate(g);
+        }
+    }
+}
+
+static void pre_sleep_t5_deinit(void)
+{
+    /* Run the editor autosave + EPD wipe first; that path uses the
+     * touch / display / I2C / SD subsystems while they are still up. */
+    pre_sleep_autosave();
+
+    /* GT911 touch controller -> sleep (uses the shared I2C bus). */
+    touchscreen_sleep();
+
+    /* SX1262 LoRa -> sleep (Pro variant only; harmless NACK on Lite). */
+    t5_lora_sleep();
+
+    /* Release the SD card + SPI3 bus so the card itself drops to
+     * standby and the bus pins float free. After this point any SPI3
+     * transaction (including the LoRa one above) is illegal -- which
+     * is why we do LoRa first. */
+    (void)sd_card_deinit();
+
+    /* Isolate every unused RTC-IO pin so floating inputs don't leak. */
+    t5_isolate_unused_gpios();
+
+    /* Power down the RTC peripherals domain. We have no ULP and no
+     * RTC SLOW memory data to retain across wake (the SoC cold-boots
+     * on wake and the editor restores from autosave), so dropping
+     * this domain saves ~40 µA on ESP32-S3 over the default. */
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+
+    /* Latch every pad that called gpio_hold_en() (the front-light,
+     * specifically) so the level stays driven through deep sleep. */
+    gpio_deep_sleep_hold_en();
+}
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE] */
 
 extern "C" void app_main(void)
 {
@@ -173,6 +308,103 @@ extern "C" void app_main(void)
             ESP_LOGE(TAG, "bsp_i2c_init failed: %s", esp_err_to_name(bus_err));
         }
     }
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+    /* M5Stack Tab5: enable battery charging from the USB-C input.
+     *
+     * The Tab5 carries an IP2326 autonomous Li-ion charger gated by
+     * the CHG_EN signal, which is wired to bit 7 of the second
+     * PI4IOE5V6408 I/O expander (I2C address 0x44, OUT_SET register
+     * 0x05). The espressif/m5stack_tab5 BSP does not expose the
+     * charger pin in `bsp_feature_enable()`, and M5Stack's reference
+     * `bsp_io_expander_pi4ioe_init()` deliberately boots with
+     * CHG_EN = 0 (`OUT_SET = 0b00001001`), which is why the battery
+     * never charges when USB is plugged in.
+     *
+     * Set the pin direction to output (bit 7 of IO_DIR / 0x03) and
+     * drive it HIGH so the IP2326 starts charging. The PI4IOE5V6408
+     * latches its output register and retains the value across
+     * ESP32-P4 deep sleep (same as WLAN_PWR_EN on bit 0 of the same
+     * expander -- see docs/tab5-esp-hosted.md), so charging continues
+     * while the MCU sleeps.
+     *
+     * IMPORTANT: the PI4IOE5V6408 also has an "Output High-Impedance"
+     * register (`OUT_H_IM` = 0x07). When a bit is 1 the corresponding
+     * pin is in high-impedance regardless of the IO_DIR / OUT_SET
+     * setting. On power-up *and* after the
+     * `espressif/esp_io_expander_pi4ioe5v6408` driver's reset()
+     * (called from `bsp_io_expander1_init()`, which `bsp_feature_enable`
+     * triggers for `BSP_FEATURE_WIFI`), OUT_H_IM defaults to 0xFF —
+     * i.e. all pins, including P7 (CHG_EN), boot in high-Z. Setting
+     * IO_DIR + OUT_SET alone is therefore not enough to drive the
+     * charger enable line; we also have to clear bit 7 of OUT_H_IM
+     * so the pin is push-pull driven. Without this the IP2326 never
+     * sees CHG_EN go high and the battery does not charge.
+     *
+     * Reference: m5stack/M5Tab5-UserDemo
+     *   platforms/tab5/components/m5stack_tab5/m5stack_tab5.c
+     *   (functions `bsp_set_charge_en` and `bsp_io_expander_pi4ioe_init`,
+     *   which writes OUT_H_IM = 0b00000110 to drop the high-Z mask
+     *   on every pin actually used on the second expander).
+     */
+    {
+        i2c_master_bus_handle_t sys_bus = bsp_i2c_get_handle();
+        if (sys_bus == NULL) {
+            ESP_LOGW(TAG, "Tab5 CHG_EN: I2C bus handle is NULL");
+        } else {
+            i2c_master_dev_handle_t pi4 = NULL;
+            i2c_device_config_t pi4_cfg = {};
+            pi4_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+            pi4_cfg.device_address  = 0x44;
+            pi4_cfg.scl_speed_hz    = 400000;
+            esp_err_t err = i2c_master_bus_add_device(sys_bus, &pi4_cfg, &pi4);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Tab5 CHG_EN: bus_add_device failed: %s",
+                         esp_err_to_name(err));
+            } else {
+                /* Read-modify-write IO_DIR (0x03): set bit 7 = output. */
+                uint8_t rd_reg = 0x03;
+                uint8_t dir = 0;
+                err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &dir, 1, 100);
+                if (err == ESP_OK) {
+                    uint8_t wr[2] = { 0x03, (uint8_t)(dir | (1u << 7)) };
+                    err = i2c_master_transmit(pi4, wr, 2, 100);
+                }
+                /* Read-modify-write OUT_H_IM (0x07): clear bit 7 so P7
+                 * is push-pull driven instead of high-impedance. We
+                 * preserve every other bit so the BSP-managed pins
+                 * (WLAN_PWR_EN on P0, USB_EN on P3) keep their
+                 * current drive mode. */
+                if (err == ESP_OK) {
+                    rd_reg = 0x07;
+                    uint8_t hiz = 0;
+                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &hiz, 1, 100);
+                    if (err == ESP_OK) {
+                        uint8_t wr[2] = { 0x07, (uint8_t)(hiz & ~(1u << 7)) };
+                        err = i2c_master_transmit(pi4, wr, 2, 100);
+                    }
+                }
+                /* Read-modify-write OUT_SET (0x05): set bit 7 = 1 (CHG_EN). */
+                if (err == ESP_OK) {
+                    rd_reg = 0x05;
+                    uint8_t out = 0;
+                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &out, 1, 100);
+                    if (err == ESP_OK) {
+                        uint8_t wr[2] = { 0x05, (uint8_t)(out | (1u << 7)) };
+                        err = i2c_master_transmit(pi4, wr, 2, 100);
+                    }
+                }
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (second PI4IOE5V6408 P7 = 1, drive enabled)");
+                } else {
+                    ESP_LOGW(TAG, "Tab5 CHG_EN write failed: %s",
+                             esp_err_to_name(err));
+                }
+                i2c_master_bus_rm_device(pi4);
+            }
+        }
+    }
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_TAB5 */
 #endif
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
@@ -516,6 +748,17 @@ extern "C" void app_main(void)
         }
     } else {
         ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
+        /* Now that we know we are going down the BLE path, replace
+         * the neutral "Initializing..." caption editor_ui_init()
+         * put on the boot screen with the actual "Searching for BLE
+         * keyboard..." prompt. Doing it here (rather than in
+         * editor_ui_init) keeps that message off the screen on the
+         * USB-keyboard path. */
+        if (draftling_lvgl_port_lock(-1)) {
+            editor_ui_set_ble_prompt_text(
+                "Searching for BLE keyboard...\nPlease turn on your keyboard");
+            draftling_lvgl_port_unlock();
+        }
         ble_keyboard_init();
     }
 
@@ -584,7 +827,12 @@ extern "C" void app_main(void)
     /* Initialize standby manager (deep sleep on inactivity) */
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+    standby_set_pre_sleep_cb(pre_sleep_t5_deinit);
+#else
     standby_set_pre_sleep_cb(pre_sleep_autosave);
+#endif
 
 #if defined(CONFIG_DRAFTLING_HAS_POWER_LATCH)
     /* On PWR long-press, run the full shutdown sequence via the

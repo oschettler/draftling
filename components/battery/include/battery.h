@@ -104,6 +104,29 @@ int battery_read_mv(void);
  */
 int battery_read_percent(void);
 
+/*
+ * Report whether the battery is currently being charged from an
+ * external source (USB-C / DC jack).
+ *
+ * Returns:
+ *    1 -- charging (current flowing into the cell)
+ *    0 -- discharging or idle (running on battery only / full)
+ *   -1 -- unknown (backend cannot detect charge state, or not initialized)
+ *
+ * Backend support matrix:
+ *   - INA226   (M5Stack Tab5): reads the signed shunt-voltage register
+ *               and reports the polarity. Sign convention is positive =
+ *               into the cell on this board.
+ *   - BQ27220  (LilyGO T5 Pro / Pro Lite): reads the Flags register
+ *               (0x06); the DSG bit (bit 0) is 0 while charging or
+ *               full, 1 while discharging.
+ *   - ADC backend / no backend: always returns -1.
+ *
+ * Callers (e.g. the editor status bar) should hide the charging
+ * indicator when this function returns -1.
+ */
+int battery_read_charging(void);
+
 #ifdef __cplusplus
 }
 #endif

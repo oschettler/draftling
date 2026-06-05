@@ -32,6 +32,8 @@
 #include "usb/hid_host.h"
 #include "usb/hid_usage_keyboard.h"
 
+#include "ble_keyboard.h"
+
 static const char *TAG = "USBKbd";
 
 /* Public callback (mirrors ble_keyboard's s_callback) */
@@ -247,6 +249,14 @@ static void hid_event_task(void *arg)
         }
         ESP_LOGI(TAG, "USB HID keyboard ready");
         s_kbd_connected = true;
+
+        /* A wired keyboard now owns input. If BLE was brought up
+         * earlier this boot (BLE keyboard was already paired and
+         * the user just plugged in a USB keyboard), tear it down
+         * so the device stops scanning, stops emitting BLE status
+         * messages, and stops dispatching duplicate key events.
+         * No-op if BLE was never initialised. */
+        ble_keyboard_disable();
     }
 }
 

@@ -66,6 +66,7 @@
 #include "epd_init_config.h"
 #include <driver/i2c_master.h>
 #include <driver/ledc.h>
+#include <driver/gpio.h>
 
 #include "display.h"
 
@@ -545,6 +546,23 @@ extern "C" void display_deep_sleep_prepare(void)
         ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0);
         ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
     }
+    /* Setting LEDC duty to 0 stops switching, but the LEDC peripheral
+     * is powered down by the digital domain in deep sleep, which
+     * releases the pad. On an active-HIGH LED driver (the LilyGO T5
+     * Pro front-light is wired this way) the pin floats and the
+     * LED can dimly glow on leakage current. Reclaim the pin as a
+     * plain GPIO driven LOW and latch the level with gpio_hold_en()
+     * so the bond pad stays at 0 V across deep sleep. The caller
+     * (T5 pre-sleep hook) is responsible for calling
+     * gpio_deep_sleep_hold_en() once before esp_deep_sleep_start()
+     * so the hold actually survives into sleep. */
+    if (EPDIY_BL_PIN >= 0) {
+        gpio_hold_dis((gpio_num_t)EPDIY_BL_PIN);
+        gpio_reset_pin((gpio_num_t)EPDIY_BL_PIN);
+        gpio_set_direction((gpio_num_t)EPDIY_BL_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)EPDIY_BL_PIN, 0);
+        gpio_hold_en((gpio_num_t)EPDIY_BL_PIN);
+    }
 #endif
     if (!s_initialized) return;
     /* epdiy README + issue #14: epd_poweroff() alone leaks battery
@@ -552,7 +570,9 @@ extern "C" void display_deep_sleep_prepare(void)
      * also be released via epd_deinit() before esp_deep_sleep_start.
      * The wake from deep sleep is a hard reset that re-runs
      * display_init() from scratch, so it is safe to fully release
-     * here. */
+     * here. epd_poweroff() drives the TPS65185 WAKEUP line LOW via
+     * the PCA9535 expander, dropping the EPD power IC into its
+     * <1 µA standby. */
     epd_poweroff();
     epd_deinit();
     s_initialized = false;

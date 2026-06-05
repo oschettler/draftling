@@ -59,17 +59,38 @@ static int                       s_divider = 3;
 /* ---- BQ27220 backend state ---- */
 #define BQ27220_I2C_ADDR        0x55
 #define BQ27220_REG_VOLTAGE     0x08    /* u16 LE, mV */
+#define BQ27220_REG_FLAGS       0x06    /* u16 LE, bit 0 = DSG */
+#define BQ27220_FLAGS_DSG       0x0001  /* 0 = charging or full */
 #define BQ27220_REG_SOC         0x2C    /* u16 LE, 0-100 % */
 static i2c_master_dev_handle_t   s_bq_dev = NULL;
 
 /* ---- INA226 backend state ----
- * Only the bus-voltage register is used. INA226_REG_BUSVOLTAGE is a
- * 16-bit unsigned value with an LSB of 1.25 mV (datasheet section
- * 7.6.3.3); reading 0x0CCC -> 4.095 V at the BUS pin. The Tab5
- * routes the raw battery pack rail (NP-F550, 2S Li-ion, ~6.0-8.4 V)
- * to the BUS input, so the per-cell voltage is bus_mv / cells. */
+ * Only the bus-voltage and shunt-voltage registers are used.
+ * INA226_REG_BUSVOLTAGE is a 16-bit unsigned value with an LSB of
+ * 1.25 mV (datasheet section 7.6.3.3); reading 0x0CCC -> 4.095 V at
+ * the BUS pin. The Tab5 routes the raw battery pack rail (NP-F550,
+ * 2S Li-ion, ~6.0-8.4 V) to the BUS input, so the per-cell voltage
+ * is bus_mv / cells.
+ *
+ * INA226_REG_SHUNTVOLTAGE is a signed 16-bit register with a 2.5 µV
+ * LSB. Its sign indicates the direction of current flow across the
+ * shunt and is therefore enough to detect "charging vs discharging"
+ * without writing the calibration register (which would require the
+ * exact shunt-resistor value from the schematic to convert the raw
+ * value to amperes). On the Tab5 the IP2326 charger sits between
+ * the USB-C input and the cell, the INA226 shunt is on the cell-
+ * side rail, and current flowing into the cell yields a positive
+ * shunt voltage -- so positive shunt voltage => charging. A small
+ * noise threshold filters out the few-microvolt offset reading the
+ * INA226 returns when no current is flowing. */
+#define INA226_REG_SHUNTVOLTAGE  0x01
 #define INA226_REG_BUSVOLTAGE    0x02
 #define INA226_BUSVOLTAGE_LSB_UV 1250    /* microvolts per LSB */
+/* Noise threshold for charge detection, in raw LSB units of the
+ * shunt-voltage register (2.5 µV/LSB). 8 LSB == 20 µV across the
+ * shunt; with the typical 10 mΩ Tab5 shunt that is ~2 mA, well
+ * below idle MCU draw and well above the INA226 zero-offset. */
+#define INA226_SHUNT_CHARGE_THRESHOLD 8
 static i2c_master_dev_handle_t   s_ina226_dev = NULL;
 static int                       s_ina226_cells = 1;
 
@@ -423,4 +444,30 @@ extern "C" int battery_read_percent(void)
 
     int mv = battery_read_mv();
     return mv_to_percent(mv);
+}
+
+extern "C" int battery_read_charging(void)
+{
+    if (s_backend == BATT_BACKEND_BQ27220) {
+        /* Flags register, bit 0 (DSG): 0 -> charging or full, 1 -> discharging.
+         * BQ27220 datasheet, table 12-7. */
+        uint16_t flags = 0;
+        if (bq27220_read_u16(BQ27220_REG_FLAGS, &flags) != 0) return -1;
+        return (flags & BQ27220_FLAGS_DSG) ? 0 : 1;
+    }
+    if (s_backend == BATT_BACKEND_INA226) {
+        if (!s_ina226_dev) return -1;
+        uint8_t wr[1] = { INA226_REG_SHUNTVOLTAGE };
+        uint8_t rd[2] = { 0, 0 };
+        if (i2c_master_transmit_receive(s_ina226_dev, wr, 1, rd, 2,
+                                        100 /* ms */) != ESP_OK) {
+            return -1;
+        }
+        /* Big-endian on the wire; the register is signed two's complement. */
+        int16_t raw = (int16_t)(((uint16_t)rd[0] << 8) | (uint16_t)rd[1]);
+        if (raw >= INA226_SHUNT_CHARGE_THRESHOLD) return 1;
+        return 0;
+    }
+    /* ADC backend and "no backend" cannot tell. */
+    return -1;
 }
