@@ -4,172 +4,44 @@ A distraction-free Markdown text editor for ESP32-S3- and ESP32-P4-based
 development boards with reflective LCD, e-paper or color LCD displays.
 
 
-## Supported hardware
-
-Draftling currently runs on seven development boards (six ESP32-S3 and
-one ESP32-P4). All of them share the same firmware image; the target
-board is picked at build time with `idf.py menuconfig` -> **DRAFTLING
-Configuration > Hardware Model**. Display resolution, driver, pin map,
-touch controller and the deep-sleep wake source are derived
-automatically from that choice.
-
-- **[Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2)** --
-  4.2" reflective LCD (400x300, SPI). No touch. Battery monitored on
-  GPIO4 (3:1 divider). GPIO18 button wakes from deep sleep. On-board
-  MicroSD on the SDMMC 1-bit peripheral.
-- **[LilyGO T5 E-Paper S3 Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
-  4.7" e-paper ED047TC1 (960x540) driven over a parallel bus by
-  `vroland/epdiy` (`epd_board_v7`). GT911 capacitive touch on I2C.
-  BQ27220 fuel gauge on I2C (0x55). BOOT (GPIO0) wakes from deep
-  sleep. On-board MicroSD on SPI3 (shared with the SX1262 LoRa CS).
-- **[LilyGO T5 E-Paper S3 Pro Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
-  Same as the Pro variant minus the SX1262 LoRa radio and MIA-M10Q
-  GPS; on-board MicroSD lives alone on SPI3.
-- **[M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3)** --
-  4.7" e-paper ED047TC1 (540x960) driven over a parallel I80 bus by
-  `m5stack/M5GFX`. GT911 touch on I2C. Battery on GPIO3 ADC (1:2).
-  BOOT (GPIO0) wakes from deep sleep (optionally any touch with
-  `CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`). On-board MicroSD on
-  SPI3. **This board is officially discontinued by M5Stack.**
-- **[Waveshare ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49)** --
-  3.49" IPS color LCD (640x172, AXS15231B over QSPI). AXS5106-family
-  capacitive touch on I2C (0x3B). BOOT (GPIO0) wakes from deep
-  sleep. External SD on a separate SPI bus.
-- **Guition JC3248W535** --
-  3.5" IPS color LCD (480x320, AXS15231B over QSPI). AXS5106L
-  capacitive touch on I2C. No user buttons -- the touch INT line is
-  the deep-sleep wake source. External SD on a separate SPI bus.
-- **[M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5)** --
-  ESP32-P4 tablet with a 5" 1280x720 IPS color LCD (ILI9881C or
-  ST7123, MIPI-DSI 2-lane, auto-detected by the upstream
-  `espressif/m5stack_tab5` BSP). GT911 capacitive touch on I2C
-  (backup address 0x14). Li-ion battery + PMIC + USB-C charging.
-  Wi-Fi / Bluetooth are routed through an on-board ESP32-C6
-  co-processor via ESP-Hosted-MCU over SDIO; both `wifi_manager`
-  (Git sync) and `ble_keyboard` (BLE HID host) work the same as
-  on the ESP32-S3 boards. The C6 must be flashed once with the
-  matching ESP-Hosted slave firmware -- see
-  `docs/tab5-esp-hosted.md` for the procedure. Touch and the
-  on-board MicroSD slot work; this board has been added without
-  on-hardware testing and will likely need bring-up tweaks.
-
-All ESP32-S3 boards use at least 8 MB of PSRAM and 16 MB of flash, BLE
-for the HID keyboard and 802.11 b/g/n Wi-Fi for Git sync. The Tab5
-board uses 32 MB HEX-mode PSRAM on the ESP32-P4 and reaches the same
-BLE / Wi-Fi functionality through its on-board ESP32-C6 co-processor
-via ESP-Hosted-MCU (see above and `docs/tab5-esp-hosted.md`).
-
-A few [demo videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_) are available on my YouTube channel.
-
-### Choosing a board
-
-The **Waveshare ESP32-S3-RLCD-4.2** provides the smoothest and most
-responsive user interaction. But the screen is very fragile, and the
-device needs a proper enclosure, preferably with a protective glass.
-The contrast is very low, so it needs good lighting for comfortable
-work. (The screen broke during my tests.)
-
-The **LilyGO T5 E-Paper S3 Pro** and **Pro Lite** are so far the
-most usable option: they pair the same high-contrast 4.7" ED047TC1
-e-paper panel as the M5Stack PaperS3 with a robust, in-production
-board that also carries a controllable white front-light, an
-on-board BQ27220 fuel gauge, GT911 capacitive touch and a MicroSD
-slot. They are driven through the open-source
-[`vroland/epdiy`](https://github.com/vroland/epdiy) library
-(`epd_board_v7` configuration with a TPS65185 PMIC). The Pro
-variant adds a SX1262 LoRa radio, an L76K GPS, an IR LED, a
-vibration motor and an external 18650 holder; from Draftling's
-perspective the Lite is functionally a Pro with those modules
-depopulated. Touch is enabled by default on both SKUs (the on-board
-I2C bus is shared between epdiy and the touchscreen component via
-the pinned post-2.0.0 epdiy commit's `epd_init_with_config()` entry
-point). Battery state of charge comes from the on-board BQ27220
-fuel gauge over I2C (the `components/battery/`
-`battery_init_bq27220()` backend, gated on
-`CONFIG_DRAFTLING_BATTERY_BQ27220`); the editor status bar shows
-the percentage. The on-board MicroSD slot shares its SPI bus with
-the LoRa radio on the Pro; Draftling drives the LoRa chip-select
-HIGH at boot so it does not interfere with SD traffic.
-
-The **M5Stack PaperS3** is compact, packed in a good enclosure with
-magnets on the back, and offers the same high-contrast 4.7" e-paper
-panel as the LilyGO T5 boards. Reaction is significantly slower than
-with RLCD, but still acceptable. The M5GFX driver uses the
-single-pulse `epd_fast` waveform for partial refreshes (one visible
-flash, ~80-150 ms per update); a full refresh (3-5 s) is performed
-every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (default 30)
-to clear residual ghosting. Draftling feeds the panel 1-bpp
-black-and-white content, but M5GFX keeps a 4-bpp grayscale
-framebuffer internally and dithers automatically, so future
-grayscale rendering is a software-only change. **Note:** the PaperS3
-has been officially discontinued by M5Stack, so it is no longer
-recommended for new builds -- prefer one of the LilyGO T5 E-Paper
-S3 Pro variants for a similar e-paper experience on a board that
-is still in production.
-
-The **Guition JC3248W535** is a color-LCD board with no user buttons,
-so touch is the only local input besides the BLE keyboard: deep-sleep
-wake is armed on the touch INT line and any tap wakes the device.
-Touch also drives the editor and the menu lists; see
-[Touch Operations](#touch-operations) below.
-
-The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
-AXS15231B color LCD (natively 172x640 portrait, software-rotated to
-landscape) and an AXS5106-family capacitive touch controller at I2C
-address 0x3B. The BOOT button on GPIO0 is the deep-sleep wake source.
-The on-board PWR / home button on GPIO16 is reserved for the power
-latch (short press to power on, long press to power off via the
-TCA9554 IO6 latch) and is not used to wake the MCU from deep sleep.
-
-UC8179-based e-paper displays (such as those used by the Seeed Studio
-reTerminal E1001 and the Waveshare E-Paper Driver HAT) were previously
-supported but proved too slow for an interactive Markdown editor: even
-with fast partial updates, the panel cannot keep up with typing and
-quickly accumulates ghosting artefacts. Support for UC8179 has
-therefore been removed from the codebase.
-
-On color LCD boards (Touch-LCD-3.49, JC3248W535) the
-editor offers a runtime-selectable color theme (F1 -> Settings ->
-Color theme): light green on black (default), dark green on black,
-amber/orange on black, or white on black. You can also adjust the
-**Display rotation angle** in the same `idf.py menuconfig` menu.
-
-The user connects a Bluetooth keyboard and edits Markdown files stored on the
-SD card. The reflective LCD needs no backlight and works well in daylight.
-On request the device connects to WiFi and synchronizes files with a remote
-Git repository via the GitHub REST API.
-
 ## Features
 
 - **WYSIWYG Markdown editing** on reflective LCD, e-paper or
   small color LCD displays
-- **Bluetooth keyboard** input with auto-discovery and pairing
+
+- **Bluetooth Low Energy (BLE) keyboard** input with auto-discovery and pairing
+
 - **File browser** to open and manage `.md` files on the SD card
   (entries sorted alphabetically, directories first)
+
 - **Markdown rendering**: headings (H1-H4), bullet and numbered lists,
   blockquotes, code fences, horizontal rules, inline bold / italic /
   code / strikethrough
+
 - **Gap buffer** text engine for efficient editing. The document size
   limit is sized at boot from the PSRAM that is free when the editor
   starts (with a minimum of 64 KB and an upper bound queried from the
   Git sync client, so the editor cannot produce a document larger than
-  what Git can push) and surfaced read-only
-  in F1 -> Settings. Typical limits range from a few hundred KB to a
-  few MB depending on the board.
-- **WiFi** station mode with credentials from NVS or `/sdcard/wifi.cfg`
+  what Git can push) and surfaced read-only in F1 -> Settings. Typical
+  limits range from a few hundred KB to a few MB depending on the
+  board.
+
+- **WiFi** client mode with credentials from `/sdcard/wifi.cfg`
+
 - **Git sync** via GitHub REST API (pull and push `.md` files,
   including deletion / rename propagation in both directions; the
   last-synced per-file blob SHAs are kept in a hidden `.git_state`
   file on the SD card so the next sync can do a proper 3-way merge)
+
 - **Per-file metadata sidecars**: when a `.md` file is closed (or
-  before the device enters deep sleep), the editor records the
-  current cursor position and scroll line in a hidden sidecar file
-  named `.<basename>.meta` next to the document (for example
-  `notes.md` -> `.notes.md.meta`). The next time the file is
-  opened, the cursor is restored to its previous position and the
-  view scrolls so the cursor is visible. The `.meta` files are
-  hidden from the file browser (they start with a dot) and are
-  ignored by Git sync (which only handles `*.md`).
+  before the device enters deep sleep), the editor records the current
+  cursor position and scroll line in a hidden sidecar file named
+  `.<basename>.meta` next to the document (for example `notes.md` ->
+  `.notes.md.meta`). The next time the file is opened, the cursor is
+  restored to its previous position and the view scrolls so the cursor
+  is visible. The `.meta` files are hidden from the file browser (they
+  start with a dot) and are ignored by Git sync (which only handles
+  `*.md`).
 
 ## Keyboard Shortcuts
 
@@ -197,12 +69,9 @@ Git repository via the GitHub REST API.
 
 ## Touch Operations
 
-On boards with a touchscreen (currently the Guition JC3248W535 with
-its on-board AXS5106L controller, the M5Stack PaperS3 with its
-on-board GT911 controller, and the LilyGO T5 E-Paper S3 Pro -- also
-GT911), touch input works alongside the Bluetooth
-keyboard -- you can use either, or both. All gestures are summarized
-below.
+On boards with a touchscreen, touch input works alongside the
+Bluetooth keyboard -- you can use either, or both. All gestures are
+summarized below.
 
 ### In the editor
 
@@ -231,6 +100,151 @@ than on the color-LCD JC3248W535.
 This two-step "highlight then activate" flow mirrors the keyboard
 "arrows + Enter" interaction and avoids accidental activations on
 imprecise taps.
+
+
+## Supported hardware
+
+Draftling currently runs on seven development boards (six ESP32-S3 and
+one ESP32-P4). All of them share the same firmware image; the target
+board is picked at build time with `idf.py menuconfig` -> **DRAFTLING
+Configuration > Hardware Model**. Display resolution, driver, pin map,
+touch controller and the deep-sleep wake source are derived
+automatically from that choice.
+
+- **[Waveshare
+  ESP32-S3-RLCD-4.2](https://www.waveshare.com/wiki/ESP32-S3-RLCD-4.2)**
+  -- 4.2" reflective LCD (400x300, SPI). No touch. Battery monitored
+  on GPIO4 (3:1 divider). GPIO18 button wakes from deep
+  sleep. On-board MicroSD on the SDMMC 1-bit peripheral.
+
+- **[LilyGO T5 E-Paper S3
+  Pro](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
+  4.7" e-paper ED047TC1 (960x540) driven over a parallel bus by
+  `vroland/epdiy` (`epd_board_v7`). GT911 capacitive touch on I2C.
+  BQ27220 fuel gauge on I2C (0x55). BOOT (GPIO0) wakes from deep
+  sleep. On-board MicroSD on SPI3 (shared with the SX1262 LoRa CS).
+
+- **[LilyGO T5 E-Paper S3 Pro
+  Lite](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
+  Same as the Pro variant minus the SX1262 LoRa radio and MIA-M10Q
+  GPS; on-board MicroSD lives alone on SPI3.
+
+- **[M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3)** --
+  4.7" e-paper ED047TC1 (540x960) driven over a parallel I80 bus by
+  `m5stack/M5GFX`. GT911 touch on I2C. Battery on GPIO3 ADC (1:2).
+  BOOT (GPIO0) wakes from deep sleep (optionally any touch with
+  `CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`). On-board MicroSD on
+  SPI3. **This board is officially discontinued by M5Stack.**
+
+- **[Waveshare
+  ESP32-S3-Touch-LCD-3.49](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-3.49)**
+  -- 3.49" IPS color LCD (640x172, AXS15231B over
+  QSPI). AXS5106-family capacitive touch on I2C (0x3B). BOOT (GPIO0)
+  wakes from deep sleep. External SD on a separate SPI bus.
+
+- **[M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5)** --
+  ESP32-P4 tablet with a 5" 1280x720 IPS color LCD (ILI9881C or
+  ST7123, MIPI-DSI 2-lane, auto-detected by the upstream
+  `espressif/m5stack_tab5` BSP). GT911 capacitive touch on I2C (backup
+  address 0x14). Li-ion battery + PMIC + USB-C charging.  Wi-Fi /
+  Bluetooth are routed through an on-board ESP32-C6 co-processor via
+  ESP-Hosted-MCU over SDIO; both `wifi_manager` (Git sync) and
+  `ble_keyboard` (BLE HID host) work the same as on the ESP32-S3
+  boards. The C6 must be flashed once with the matching ESP-Hosted
+  slave firmware -- see
+  [docs/tab5-esp-hosted.md](docs/tab5-esp-hosted.md)` for the
+  procedure. Touch and the on-board MicroSD slot work; this board has
+  been added without on-hardware testing and will likely need bring-up
+  tweaks.
+
+- **Guition JC3248W535** --
+  3.5" IPS color LCD (480x320, AXS15231B over QSPI). AXS5106L
+  capacitive touch on I2C. No user buttons -- the touch INT line is
+  the deep-sleep wake source. External SD on a separate SPI bus.
+
+All ESP32-S3 boards use at least 8 MB of PSRAM and 16 MB of flash, BLE
+for the HID keyboard and 802.11 b/g/n Wi-Fi for Git sync. The Tab5
+board uses 32 MB HEX-mode PSRAM on the ESP32-P4 and reaches the same
+BLE / Wi-Fi functionality through its on-board ESP32-C6 co-processor
+via ESP-Hosted-MCU (see above and `docs/tab5-esp-hosted.md`).
+
+A few [demo
+videos](https://youtube.com/playlist?list=PLbRMZQ9npKJRDrk0BhtI4gXMBIHM0c_v_)
+are available on my YouTube channel.
+
+### Choosing a board
+
+The **Waveshare ESP32-S3-RLCD-4.2** provides a pretty smooth and
+responsive user interaction. But the screen is very fragile, and the
+device needs a proper enclosure, preferably with a protective glass.
+The contrast is very low, so it needs good lighting for comfortable
+work. (The screen broke during my tests.)
+
+The **LilyGO T5 E-Paper S3 Pro** and **Pro Lite** are so far the most
+usable option: they come with a high-contrast 4.7" ED047TC1 e-paper
+panel with controllable white front-light, GT911 capacitive touch and
+a MicroSD slot. Reaction is significantly slower than with RLCD, but
+still acceptable. They are driven through the open-source
+[`vroland/epdiy`](https://github.com/vroland/epdiy) library
+(`epd_board_v7` configuration with a TPS65185 PMIC). The Pro variant
+adds a SX1262 LoRa radio, an L76K GPS, an IR LED, a vibration motor
+and an external 18650 holder; from Draftling's perspective the Lite is
+functionally a Pro with those modules depopulated. Touch is enabled by
+default on both SKUs (the on-board I2C bus is shared between epdiy and
+the touchscreen component via the pinned post-2.0.0 epdiy commit's
+`epd_init_with_config()` entry point). Battery state of charge comes
+from the on-board BQ27220 fuel gauge over I2C (the
+`components/battery/` `battery_init_bq27220()` backend, gated on
+`CONFIG_DRAFTLING_BATTERY_BQ27220`); the editor status bar shows the
+percentage. The on-board MicroSD slot shares its SPI bus with the LoRa
+radio on the Pro; Draftling drives the LoRa chip-select HIGH at boot
+so it does not interfere with SD traffic.
+
+The **M5Stack PaperS3** is compact, packed in a good enclosure with
+magnets on the back, and offers the same high-contrast 4.7" e-paper
+panel as the LilyGO T5 boards. The M5GFX driver uses the single-pulse
+`epd_fast` waveform for partial refreshes (one visible flash, ~80-150
+ms per update); a full refresh (3-5 s) is performed every
+`DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (default 30) to clear
+residual ghosting. **Note:** the PaperS3 has been officially
+discontinued by M5Stack, so it is no longer recommended for new builds
+-- prefer one of the LilyGO T5 E-Paper S3 Pro variants for a similar
+e-paper experience on a board that is still in production.
+
+The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
+AXS15231B color LCD (natively 172x640 portrait, software-rotated to
+landscape) and an AXS5106-family capacitive touch controller at I2C
+address 0x3B. The BOOT button on GPIO0 is the deep-sleep wake source.
+The on-board PWR / home button on GPIO16 is reserved for the power
+latch (short press to power on, long press to power off via the
+TCA9554 IO6 latch) and is not used to wake the MCU from deep sleep.
+
+The **M5Stack Tab5** is a much faster device than those using
+ESP32-S3, and it has a detachable battery. You can buy compatible
+batteries with a built-in fast USB charger. The device supports a USB
+keyboard as an alternative too BLE. Also, M5 produces a specialized
+keyboard ayttachment for Tab5, which will be supported by FDraftling
+in future releases.
+
+The **Guition JC3248W535** is a color-LCD board with no user buttons,
+so touch is the only local input besides the BLE keyboard: deep-sleep
+wake is armed on the touch INT line and any tap wakes the device.
+Touch also drives the editor and the menu lists; see
+[Touch Operations](#touch-operations) below.
+
+UC8179-based e-paper displays (such as those used by the Seeed Studio
+reTerminal E1001 and the Waveshare E-Paper Driver HAT) were previously
+supported but proved too slow for an interactive Markdown editor: even
+with fast partial updates, the panel cannot keep up with typing and
+quickly accumulates ghosting artefacts. Support for UC8179 has
+therefore been removed from the codebase.
+
+On color LCD boards (Touch-LCD-3.49, JC3248W535) the
+editor offers a runtime-selectable color theme (F1 -> Settings ->
+Color theme): light green on black (default), dark green on black,
+amber/orange on black, or white on black.
+
+
 
 ### Wake from sleep
 

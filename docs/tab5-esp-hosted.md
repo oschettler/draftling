@@ -78,16 +78,15 @@ host pulses `Slave_Reset`.
 
 ## One-time C6 slave firmware flashing
 
-The C6 needs the ESP-Hosted slave firmware. The host side is
-pinned to `espressif/esp_hosted >= 2.12` in
-`main/idf_component.yml`, so the slave image must come from the
-**2.x** branch of esp-hosted-mcu. The M5Stack prebuilt image that
-ships with M5Tab5-UserDemo
+The C6 needs the ESP-Hosted slave firmware. The host side is pinned to
+`espressif/esp_hosted >= 2.12` in `main/idf_component.yml`, so the
+slave image must be flashed with esp-hosted-mcu firmware of version
+**2.x**. The M5Stack prebuilt image that ships with M5Tab5-UserDemo
 (`ESP32C6-WiFi-SDIO-Interface-V1.4.1-96bea3a_0x0.bin`) was built
-against an older 1.x slave and its RPC interface is **not**
-compatible with `esp_hosted >= 2.x` — using it will look exactly
-like "C6 not responding" (the SDIO bus comes up but the INIT
-event never arrives). Build a matching 2.x slave from upstream.
+against an older 1.x slave and its RPC interface is **not** compatible
+with `esp_hosted >= 2.x` — using it will look exactly like "C6 not
+responding" (the SDIO bus comes up but the INIT event never
+arrives). Build a matching 2.x slave from upstream.
 
 ### 1. Build the slave firmware
 
@@ -98,24 +97,6 @@ idf.py set-target esp32c6
 idf.py menuconfig   # see knobs below
 idf.py build
 ```
-
-The defaults in `slave/sdkconfig.defaults.esp32c6` already select
-SDIO transport, which matches the Tab5 wiring. Under
-`Example Configuration → Bus Config → SDIO Configuration`:
-
-- **Bus width** must be `4-bit` (matches
-  `CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y` on the host).
-- **Clock frequency** `40 MHz` (matches
-  `CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000`).
-- The slave-side `RX optimisation` should be left in **packet
-  mode**; Draftling deliberately disables streaming mode on the
-  host (see `# CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE
-  is not set` in `sdkconfig.defaults.esp32p4`).
-
-Under `Example Configuration → Bluetooth Support` enable
-`Bluedroid VHCI over Hosted` so that the host-side
-`CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y` has a matching peer; the
-BLE keyboard path relies on this.
 
 ### 2. Put the C6 into download mode
 
@@ -128,7 +109,7 @@ the secondary header next to the C6 module. Procedure:
 
 1. Power the Tab5 with the P4 firmware halted (or simply
    keep the device unplugged until step 3).
-2. Solder-bridge / short **C6 G9 to GND** with a jumper wire.
+2. Short **C6 G9 to GND** with a jumper wire.
 3. Power the Tab5 on (or press the P4 RESET button). The C6
    boots and immediately enters its UART/USB-Serial-JTAG
    download stub instead of running the previously-flashed
@@ -145,21 +126,12 @@ is sampled at the instant CHIP_PU goes high.
 
 ### 3. Flash and clean up
 
-```bash
-esptool.py --chip esp32c6 \
-           -b 460800 \
-           --before default_reset --after hard_reset \
-           write_flash --flash_mode dio --flash_size detect \
-           0x0     build/bootloader/bootloader.bin \
-           0x8000  build/partition_table/partition-table.bin \
-           0xf000  build/ota_data_initial.bin \
-           0x20000 build/network_adapter.bin
-```
+Here `/dev/ttyUSB0` corresponds to the USB UART adapter, so the name
+could be different (such as /dev/ttyACM0).
 
-(Offsets come from the slave's generated `flash_args` /
-`flash_project_args`; running `idf.py -p PORT flash` from the
-`slave/` directory does the same thing if your adapter is
-hooked up through the normal IDF flow.)
+```bash
+idf.py -p /dev/ttyUSB0 flash
+```
 
 Once flashing is done, **remove the G9-to-GND short** and reset
 the C6 (cycling Tab5 power is the easiest way). On the next P4
