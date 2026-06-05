@@ -653,7 +653,18 @@ static void format_batt_str(char *buf, size_t len)
         snprintf(buf, len, "----");
         return;
     }
-    snprintf(buf, len, "%d%%", pct);
+    /* Prepend a "+" charge indicator when the battery is actively
+     * being charged from an external supply (USB-C / DC jack). The
+     * ASCII '+' is used in place of a U+26A1 lightning bolt because
+     * the bundled Greybeard fonts do not cover that codepoint (see
+     * update_wifi_icons() for the same reasoning). Backends that
+     * cannot detect charge state return -1 and the glyph stays off. */
+    int chg = battery_read_charging();
+    if (chg == 1) {
+        snprintf(buf, len, "+%d%%", pct);
+    } else {
+        snprintf(buf, len, "%d%%", pct);
+    }
 }
 
 static void batt_timer_cb(lv_timer_t *timer)

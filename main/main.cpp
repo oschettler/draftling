@@ -173,6 +173,74 @@ extern "C" void app_main(void)
             ESP_LOGE(TAG, "bsp_i2c_init failed: %s", esp_err_to_name(bus_err));
         }
     }
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+    /* M5Stack Tab5: enable battery charging from the USB-C input.
+     *
+     * The Tab5 carries an IP2326 autonomous Li-ion charger gated by
+     * the CHG_EN signal, which is wired to bit 7 of the second
+     * PI4IOE5V6408 I/O expander (I2C address 0x44, OUT_SET register
+     * 0x05). The espressif/m5stack_tab5 BSP does not expose the
+     * charger pin in `bsp_feature_enable()`, and M5Stack's reference
+     * `bsp_io_expander_pi4ioe_init()` deliberately boots with
+     * CHG_EN = 0 (`OUT_SET = 0b00001001`), which is why the battery
+     * never charges when USB is plugged in.
+     *
+     * Set the pin direction to output (bit 7 of IO_DIR / 0x03) and
+     * drive it HIGH so the IP2326 starts charging. The PI4IOE5V6408
+     * latches its output register and retains the value across
+     * ESP32-P4 deep sleep (same as WLAN_PWR_EN on bit 0 of the same
+     * expander -- see docs/tab5-esp-hosted.md), so charging continues
+     * while the MCU sleeps.
+     *
+     * Reference: m5stack/M5Tab5-UserDemo
+     *   platforms/tab5/components/m5stack_tab5/m5stack_tab5.c
+     *   (functions `bsp_set_charge_en` and `bsp_io_expander_pi4ioe_init`).
+     */
+    {
+        i2c_master_bus_handle_t sys_bus = bsp_i2c_get_handle();
+        if (sys_bus == NULL) {
+            ESP_LOGW(TAG, "Tab5 CHG_EN: I2C bus handle is NULL");
+        } else {
+            i2c_master_dev_handle_t pi4 = NULL;
+            i2c_device_config_t pi4_cfg = {};
+            pi4_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+            pi4_cfg.device_address  = 0x44;
+            pi4_cfg.scl_speed_hz    = 400000;
+            esp_err_t err = i2c_master_bus_add_device(sys_bus, &pi4_cfg, &pi4);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Tab5 CHG_EN: bus_add_device failed: %s",
+                         esp_err_to_name(err));
+            } else {
+                /* Read-modify-write IO_DIR (0x03): set bit 7 = output. */
+                uint8_t rd_reg = 0x03;
+                uint8_t dir = 0;
+                err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &dir, 1, 100);
+                if (err == ESP_OK) {
+                    uint8_t wr[2] = { 0x03, (uint8_t)(dir | (1u << 7)) };
+                    err = i2c_master_transmit(pi4, wr, 2, 100);
+                }
+                /* Read-modify-write OUT_SET (0x05): set bit 7 = 1 (CHG_EN). */
+                if (err == ESP_OK) {
+                    rd_reg = 0x05;
+                    uint8_t out = 0;
+                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &out, 1, 100);
+                    if (err == ESP_OK) {
+                        uint8_t wr[2] = { 0x05, (uint8_t)(out | (1u << 7)) };
+                        err = i2c_master_transmit(pi4, wr, 2, 100);
+                    }
+                }
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (PI4IOE2 P7 = 1)");
+                } else {
+                    ESP_LOGW(TAG, "Tab5 CHG_EN write failed: %s",
+                             esp_err_to_name(err));
+                }
+                i2c_master_bus_rm_device(pi4);
+            }
+        }
+    }
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_TAB5 */
 #endif
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
