@@ -4172,6 +4172,13 @@ static void build_screens(void)
     /* Register BLE status callbacks */
     ble_keyboard_set_connect_callback(ble_connect_status_cb);
     ble_keyboard_set_status_text_callback(ble_status_text_cb);
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+    /* USB keyboard hot-plug shares the same connect-state plumbing
+     * so a USB hot-plug arriving after a BLE disconnect dismisses
+     * the "Keyboard disconnected / Reconnecting..." prompt screen
+     * and restores the editor or file browser. */
+    usb_kbd_set_connect_callback(ble_connect_status_cb);
+#endif
 
     /* ---- Menu screen ---- */
     s_scr_menu = lv_obj_create(NULL);

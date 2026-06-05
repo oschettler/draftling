@@ -38,6 +38,7 @@ static const char *TAG = "USBKbd";
 
 /* Public callback (mirrors ble_keyboard's s_callback) */
 static kb_event_callback_t s_callback = NULL;
+static usb_kbd_connect_cb_t s_connect_cb = NULL;
 
 /* Set true while at least one HID keyboard interface is open */
 static volatile bool s_kbd_connected = false;
@@ -169,6 +170,7 @@ static void hid_iface_cb(hid_host_device_handle_t hid_dev_handle,
         }
         memset(s_prev_keys, 0, sizeof(s_prev_keys));
         s_prev_mod = 0;
+        if (s_connect_cb) s_connect_cb(false);
         /* The wired keyboard is gone. Hand input back to the BLE
          * keyboard subsystem (if BLE was initialised at boot) so
          * the device starts scanning for a Bluetooth keyboard
@@ -262,6 +264,15 @@ static void hid_event_task(void *arg)
          * messages, and stops dispatching duplicate key events.
          * No-op if BLE was never initialised. */
         ble_keyboard_disable();
+
+        /* Notify after ble_keyboard_disable(): that call fires the
+         * BLE connect callback with `false` to tell the UI the BLE
+         * link is gone. Firing our own "USB connected" notification
+         * afterwards ensures the editor's pending-connect state
+         * lands on `true` and the UI returns to the editor / file
+         * browser rather than getting stuck on the "Keyboard
+         * disconnected" prompt screen. */
+        if (s_connect_cb) s_connect_cb(true);
     }
 }
 
@@ -317,4 +328,9 @@ extern "C" bool usb_kbd_is_connected(void)
 extern "C" void usb_kbd_set_callback(kb_event_callback_t cb)
 {
     s_callback = cb;
+}
+
+extern "C" void usb_kbd_set_connect_callback(usb_kbd_connect_cb_t cb)
+{
+    s_connect_cb = cb;
 }
