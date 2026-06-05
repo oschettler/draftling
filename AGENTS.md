@@ -31,7 +31,7 @@
 
 Draftling is a distraction-free Markdown text editor for ESP32-S3-based
 development boards with reflective LCD displays. It is built with the
-ESP-IDF framework (v5.3+) and uses LVGL v9 for the graphical interface.
+ESP-IDF framework (v6.0+) and uses LVGL v9 for the graphical interface.
 
 The user connects a Bluetooth keyboard and edits Markdown files stored on
 a MicroSD card. The reflective LCD needs no backlight and works well in
@@ -402,7 +402,7 @@ latch has no effect and the chip just deep-sleeps.
 The TCA9554 is reached over a dedicated I2C bus (SDA/SCL pins +
 address + latch bit all carried by `power_config_t` so this
 component stays board-agnostic). The bus is opened with the
-ESP-IDF v5.x `i2c_master_*` API; we issue only two register writes
+ESP-IDF `i2c_master_*` API; we issue only two register writes
 (Output and Configuration) so this component does not pull in a
 heavy `esp_io_expander_tca9554` dependency.
 
@@ -613,7 +613,7 @@ only the enabled layout tables.
 
 ## Building
 
-Requires ESP-IDF v5.3 or later (v5.3 - v5.5 confirmed working).
+Requires ESP-IDF v6.0 or later.
 
 PSRAM is required on every supported board. The editor gap buffer
 (sized dynamically at startup from the PSRAM that is free when

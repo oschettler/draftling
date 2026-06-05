@@ -361,7 +361,7 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         gpio_config(&g);
     }
 
-    /* I2C master bus + device handle (ESP-IDF v5.x i2c_master API).
+    /* I2C master bus + device handle (ESP-IDF i2c_master API).
      *
      * If the caller passed an existing driver-NG bus handle via
      * s_cfg.i2c_bus we adopt it instead of creating our own. This

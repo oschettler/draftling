@@ -4,7 +4,7 @@
 ## is the only USB host port across the supported devices.
 dependencies:
   idf:
-    version: ">=5.5"
+    version: ">=6.0"
   espressif/usb_host_hid:
     version: "^1.0.1"
     rules:

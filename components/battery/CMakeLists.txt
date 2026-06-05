@@ -6,7 +6,6 @@ idf_component_register(
     ## 6.0 peripherals migration guide). battery.cpp includes
     ## `driver/gpio.h` and `driver/i2c_master.h`, so the matching
     ## `esp_driver_gpio` and `esp_driver_i2c` components must be
-    ## listed explicitly. They also exist on IDF 5.3+, so the same
-    ## list works on older IDFs.
+    ## listed explicitly.
     PRIV_REQUIRES esp_adc driver esp_driver_gpio esp_driver_i2c
 )

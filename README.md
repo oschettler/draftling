@@ -285,7 +285,7 @@ can be independently enabled or disabled. By default **US-English** and
 ## Building
 
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/)
-v5.3 or later (v5.3 - v5.5 confirmed working).
+v6.0 or later.
 
 Keep in mind that M5Stack Tab5 uses a different MCU, so the tatget
 should be set to 'esp32s4'.
