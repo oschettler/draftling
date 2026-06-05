@@ -121,6 +121,10 @@ Two backends:
 
 When no backend has been initialized, `battery_read_percent()`
 returns -1 and the editor UI hides the battery indicator.
+The INA226 backend also returns -1 when the per-cell BUS voltage
+drops below ~2.8 V, which is interpreted as "no battery attached"
+(otherwise the floating cell rail would be misread as ~14-18 % via
+the Li-ion discharge curve).
 Similarly `battery_read_charging()` returns -1 on backends that
 cannot detect charge state (the GPIO-ADC backend), so the UI auto-
 hides the `+` charging glyph on those boards.

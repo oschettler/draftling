@@ -91,8 +91,41 @@ static i2c_master_dev_handle_t   s_bq_dev = NULL;
  * shunt; with the typical 10 mΩ Tab5 shunt that is ~2 mA, well
  * below idle MCU draw and well above the INA226 zero-offset. */
 #define INA226_SHUNT_CHARGE_THRESHOLD 8
+/* Per-cell voltage threshold below which the INA226 backend treats
+ * the pack as "no battery attached". A real Li-ion cell is fully
+ * discharged at ~3.0 V and the protection circuit cuts off well
+ * before that, so anything below ~2.8 V/cell on the BUS rail means
+ * the pack is missing (the rail then floats / leaks to a noisy few
+ * volts -- on a 2S Tab5 we observed ~4-5 V total, which the
+ * Li-ion discharge curve would otherwise misread as ~14-18 %). */
+#define INA226_BATTERY_MIN_MV_PER_CELL 2800
 static i2c_master_dev_handle_t   s_ina226_dev = NULL;
 static int                       s_ina226_cells = 1;
+
+/* Read the INA226 BUS voltage and return the per-cell value in mV,
+ * or -1 if the device is not initialized or the I2C read fails. */
+static int ina226_read_cell_mv(void)
+{
+    if (!s_ina226_dev) return -1;
+    uint8_t wr[1] = { INA226_REG_BUSVOLTAGE };
+    uint8_t rd[2] = { 0, 0 };
+    if (i2c_master_transmit_receive(s_ina226_dev, wr, 1, rd, 2,
+                                    100 /* ms */) != ESP_OK) {
+        return -1;
+    }
+    /* Big-endian on the wire. Convert raw LSBs to mV per cell. */
+    uint16_t raw = ((uint16_t)rd[0] << 8) | (uint16_t)rd[1];
+    uint32_t bus_uv = (uint32_t)raw * INA226_BUSVOLTAGE_LSB_UV;
+    int bus_mv = (int)(bus_uv / 1000U);
+    int cells = (s_ina226_cells > 0) ? s_ina226_cells : 1;
+    return bus_mv / cells;
+}
+
+/* True when the INA226 BUS rail looks like no pack is attached. */
+static bool ina226_battery_absent(int cell_mv)
+{
+    return cell_mv < INA226_BATTERY_MIN_MV_PER_CELL;
+}
 
 /* Exponential moving average state (ADC backend only -- the BQ27220
  * does its own smoothing internally). */
@@ -375,11 +408,19 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
     s_ina226_cells = cells;
     s_backend = BATT_BACKEND_INA226;
 
-    int cell_mv = battery_read_mv();
-    int pct = mv_to_percent(cell_mv);
-    ESP_LOGI(TAG, "INA226 power monitor initialized at 0x%02X "
-             "(%dS pack, initial %d mV/cell, %d%%)", i2c_addr, cells,
-             cell_mv, pct);
+    int cell_mv = ina226_read_cell_mv();
+    if (cell_mv < 0) {
+        ESP_LOGW(TAG, "INA226 initialized at 0x%02X but BUS read failed",
+                 i2c_addr);
+    } else if (ina226_battery_absent(cell_mv)) {
+        ESP_LOGI(TAG, "INA226 power monitor initialized at 0x%02X "
+                 "(%dS pack, %d mV/cell -- no battery attached)",
+                 i2c_addr, cells, cell_mv);
+    } else {
+        ESP_LOGI(TAG, "INA226 power monitor initialized at 0x%02X "
+                 "(%dS pack, initial %d mV/cell, %d%%)", i2c_addr, cells,
+                 cell_mv, mv_to_percent(cell_mv));
+    }
     return 0;
 }
 
@@ -391,19 +432,13 @@ extern "C" int battery_read_mv(void)
         return (int)mv;
     }
     if (s_backend == BATT_BACKEND_INA226) {
-        if (!s_ina226_dev) return 0;
-        uint8_t wr[1] = { INA226_REG_BUSVOLTAGE };
-        uint8_t rd[2] = { 0, 0 };
-        if (i2c_master_transmit_receive(s_ina226_dev, wr, 1, rd, 2,
-                                        100 /* ms */) != ESP_OK) {
-            return 0;
-        }
-        /* Big-endian on the wire. Convert raw LSBs to mV per cell. */
-        uint16_t raw = ((uint16_t)rd[0] << 8) | (uint16_t)rd[1];
-        uint32_t bus_uv = (uint32_t)raw * INA226_BUSVOLTAGE_LSB_UV;
-        int bus_mv = (int)(bus_uv / 1000U);
-        int cells = (s_ina226_cells > 0) ? s_ina226_cells : 1;
-        return bus_mv / cells;
+        int cell_mv = ina226_read_cell_mv();
+        if (cell_mv < 0) return 0;
+        /* Report 0 mV when the pack is missing so callers that only
+         * look at voltage cannot infer a bogus "low battery" reading
+         * from the floating BUS rail. */
+        if (ina226_battery_absent(cell_mv)) return 0;
+        return cell_mv;
     }
     if (s_backend != BATT_BACKEND_ADC) return 0;
 
@@ -436,9 +471,12 @@ extern "C" int battery_read_percent(void)
         return (int)soc;
     }
     if (s_backend == BATT_BACKEND_INA226) {
-        int mv = battery_read_mv();
-        if (mv <= 0) return -1;
-        return mv_to_percent(mv);
+        int cell_mv = ina226_read_cell_mv();
+        if (cell_mv < 0) return -1;
+        /* No battery attached -> let the status bar hide the value
+         * instead of rendering ~14-18 % from the floating rail. */
+        if (ina226_battery_absent(cell_mv)) return -1;
+        return mv_to_percent(cell_mv);
     }
     if (s_backend != BATT_BACKEND_ADC) return -1;
 
@@ -457,6 +495,9 @@ extern "C" int battery_read_charging(void)
     }
     if (s_backend == BATT_BACKEND_INA226) {
         if (!s_ina226_dev) return -1;
+        /* If no battery is attached, charge state is meaningless. */
+        int cell_mv = ina226_read_cell_mv();
+        if (cell_mv < 0 || ina226_battery_absent(cell_mv)) return -1;
         uint8_t wr[1] = { INA226_REG_SHUNTVOLTAGE };
         uint8_t rd[2] = { 0, 0 };
         if (i2c_master_transmit_receive(s_ina226_dev, wr, 1, rd, 2,
