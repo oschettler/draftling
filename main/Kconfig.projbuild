@@ -2,7 +2,7 @@ menu "DRAFTLING Configuration"
 
 choice DRAFTLING_HARDWARE_MODEL
     prompt "Hardware Model"
-    default DRAFTLING_MODEL_M5STACK_PAPERS3
+    default DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     help
         Select the target hardware platform for Draftling.
 
@@ -14,7 +14,7 @@ config DRAFTLING_MODEL_WAVESHARE_RLCD42
         and GPIO18 deep-sleep wakeup button.
 
 config DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    bool "LilyGO T5 E-Paper S3 Pro"
+    bool "LilyGO T5 E-Paper S3 Pro / Pro Lite"
     depends on IDF_TARGET_ESP32S3
     help
         LilyGO T5 E-Paper S3 Pro (H752-01) board with a 4.7" 540x960
@@ -23,21 +23,13 @@ config DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
         configuration, TPS65185 + PCA9535 power management). Has a
         GT911 capacitive touch controller, BQ27220 fuel gauge,
         PCF8563 RTC, on-board MicroSD slot (SPI shared with the SX1262
-        LoRa radio), and a BOOT button on GPIO 0 as the deep-sleep
-        wake source. The "Pro" variant also carries SX1262 LoRa and
-        MIA-M10Q GPS; Draftling does not use either, so the firmware
-        image is otherwise identical to the Lite variant.
+        LoRa radio when present), and a BOOT button on GPIO 0 as the
+        deep-sleep wake source.
 
-config DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
-    bool "LilyGO T5 E-Paper S3 Pro Lite"
-    depends on IDF_TARGET_ESP32S3
-    help
-        LilyGO T5 E-Paper S3 Pro Lite (H752-01) board. Identical to
-        the Pro variant from Draftling's point of view (same 4.7"
-        ED047TC1 e-paper panel via epdiy / epd_board_v7, same GT911
-        touch, same SD slot on the SPI bus, same BOOT-button wake);
-        only the SX1262 LoRa radio and the MIA-M10Q GPS receiver are
-        depopulated. Use this option if your board is the Lite SKU.
+        Also covers the "Pro Lite" SKU, which is the same H752-01
+        board with the SX1262 LoRa radio and the MIA-M10Q GPS
+        receiver depopulated. Draftling does not touch either part,
+        so a single firmware image runs on both variants.
 
 config DRAFTLING_MODEL_M5STACK_PAPERS3
     bool "M5Stack PaperS3"
@@ -137,7 +129,6 @@ config DRAFTLING_DISPLAY_EPD
     bool
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
 # DRAFTLING_DISPLAY_EPDIY is set automatically when the selected
@@ -153,7 +144,6 @@ config DRAFTLING_DISPLAY_EPD
 config DRAFTLING_DISPLAY_EPDIY
     bool
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default n
 
@@ -181,7 +171,6 @@ config DRAFTLING_DISPLAY_HAS_BACKLIGHT
     # the standard LEDC PWM block, so the editor Settings menu and
     # Ctrl+B shortcut work on these boards too.
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
 # Minimum backlight percentage offered by the Settings menu. The
@@ -201,7 +190,6 @@ config DRAFTLING_BACKLIGHT_MIN_PCT
     # E-paper boards remain readable without the front-light, so let
     # the user dial brightness all the way down to 0 %.
     default 0 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 0 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 10
 
 # DRAFTLING_BL_DUTY_FLOOR_PCT shifts the bottom of the PWM duty
@@ -250,7 +238,6 @@ config DRAFTLING_HAS_BATTERY
     # gated on DRAFTLING_BATTERY_BQ27220 below). The shared I2C
     # bus owned by main.cpp is passed to battery_init_bq27220().
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     # M5Stack Tab5: 2S NP-F550 Li-ion pack is monitored by an INA226
     # power monitor on the system I2C bus at 0x41 (see
     # DRAFTLING_BATTERY_INA226 below). main.cpp calls
@@ -266,7 +253,6 @@ config DRAFTLING_HAS_BATTERY
 config DRAFTLING_BATTERY_BQ27220
     bool
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
 # Selects the TI INA226 bus-voltage backend in components/battery/.
@@ -341,7 +327,6 @@ config DRAFTLING_WAKEUP_GPIO
     default 0  if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 0  if DRAFTLING_MODEL_JC3248W535
     default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 0  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     # M5Stack Tab5 (ESP32-P4): no BOOT button is wired to an LP_IO
     # (the only LP_IO range on the P4 is GPIO0-15), so there is no
     # GPIO wake source available. On Tab5 standby enters real deep
@@ -384,7 +369,6 @@ config DRAFTLING_TOUCHSCREEN
     # H752-01 schematic and the per-board comment in app_config.h),
     # so default touch on for both SKUs.
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
     help
         Enable I2C touch-controller support and an LVGL pointer
@@ -415,7 +399,6 @@ config DRAFTLING_TOUCH_GT911
     depends on DRAFTLING_TOUCHSCREEN
     default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
     help
@@ -440,7 +423,6 @@ config DRAFTLING_TOUCH_INT_GPIO
     default 3  if DRAFTLING_MODEL_JC3248W535
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     # M5Stack Tab5: GT911 INT on GPIO23. Held LOW at startup by the
     # BSP so the GT911 powers up at its backup I2C address (0x14)
     # instead of the primary 0x5D -- a hardware pull-up resistor on
@@ -466,7 +448,6 @@ config DRAFTLING_TOUCH_RST_GPIO
     depends on DRAFTLING_TOUCHSCREEN
     range -1 54
     default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default -1
 
 # ---- Standby behavior ----
@@ -526,7 +507,6 @@ config DRAFTLING_DISPLAY_WIDTH
     default 400 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 960 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 960 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 960 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 640 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 480 if DRAFTLING_MODEL_JC3248W535
     default 720 if DRAFTLING_MODEL_M5STACK_TAB5
@@ -540,7 +520,6 @@ config DRAFTLING_DISPLAY_HEIGHT
     default 300 if DRAFTLING_MODEL_WAVESHARE_RLCD42
     default 540 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 540 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 540 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default 172 if DRAFTLING_MODEL_WAVESHARE_TOUCH_LCD_349
     default 320 if DRAFTLING_MODEL_JC3248W535
     default 1280 if DRAFTLING_MODEL_M5STACK_TAB5
@@ -600,7 +579,6 @@ config DRAFTLING_DISPLAY_SCALE
     range 1 8
     default 2 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 2 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    default 2 if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     # M5Stack Tab5 1280x720 panel is dense (5", ~293 DPI); a 2x
     # scale brings the editor canvas down to 640x360 logical
     # pixels, comfortable for Greybeard-sized text.

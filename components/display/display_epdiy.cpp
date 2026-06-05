@@ -107,8 +107,7 @@ static const char *TAG = "DisplayEPDIY";
  * Other epdiy board variants (none today) that lack a controllable
  * front-light leave EPDIY_BL_PIN unset and the whole LEDC block
  * compiles out; display_set_backlight() becomes a no-op. */
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 #define EPDIY_BL_PIN        11
 #endif
 

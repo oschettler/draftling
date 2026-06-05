@@ -85,8 +85,7 @@ static void pre_sleep_autosave(void)
 #endif
 }
 
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 /* LilyGO T5 E-Paper S3 Pro / Pro Lite: deep-sleep current budget.
  *
  * Without this hook the board pulls ~30 mA in deep sleep (a 1500 mAh
@@ -216,7 +215,7 @@ static void pre_sleep_t5_deinit(void)
      * specifically) so the level stays driven through deep sleep. */
     gpio_deep_sleep_hold_en();
 }
-#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE] */
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO */
 
 extern "C" void app_main(void)
 {
@@ -802,8 +801,7 @@ extern "C" void app_main(void)
     /* Initialize standby manager (deep sleep on inactivity) */
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
     standby_set_pre_sleep_cb(pre_sleep_t5_deinit);
 #else
     standby_set_pre_sleep_cb(pre_sleep_autosave);

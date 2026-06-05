@@ -48,8 +48,7 @@
 /* Deep-sleep wakeup on GPIO18 (EXT0, active-low) */
 #define WAKEUP_GPIO_NUM 18
 
-#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-      defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 /* ----- LilyGO T5 E-Paper S3 Pro / Pro Lite -----
  *
  * 4.7" ED047TC1 e-paper panel, 960 x 540 landscape, driven by the
@@ -64,8 +63,8 @@
  * The "Pro" and "Pro Lite" SKUs share the same H752-01 schematic.
  * The only difference is that the Lite variant depopulates the
  * SX1262 LoRa radio (CS = GPIO 46) and the MIA-M10Q GPS receiver;
- * neither is used by Draftling, so the pin map below is identical
- * between the two variants.
+ * neither is used by Draftling, so a single Kconfig entry and a
+ * single firmware image cover both variants.
  *
  * References:
  *   https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO
@@ -74,13 +73,7 @@
  *     src/board/epd_board_v7.c, README.md "LilyGo Boards" table
  *     (LilyGo T5 S3 E-Paper Pro -> ED047TC1 -> epd_board_v7).
  */
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
-#define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro"
-#elif defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
-#define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro Lite"
-#else
-#error "Unhandled LilyGO T5 model variant in BOARD_NAME selection"
-#endif
+#define BOARD_NAME      "LilyGO T5 E-Paper S3 Pro / Pro Lite"
 
 /* On-board MicroSD card on a dedicated SPI bus.
  *
@@ -175,7 +168,7 @@
  * examples/factory/main/ui_port.cpp). Pin is active HIGH and the
  * actual LEDC PWM init lives inside the EPDIY display backend
  * (components/display/display_epdiy.cpp, gated on
- * CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE]), so no pin
+ * CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO), so no pin
  * macro needs to be exported here. Unlike the colour-LCD boards,
  * the e-paper panel itself is readable without any front-light, so
  * the editor Settings cycle includes a 0 % step (see

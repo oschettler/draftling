@@ -261,8 +261,7 @@ static const int BACKLIGHT_OPTIONS[] = {
     0,
 #endif
 #if (CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 5) && \
-    (defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-     defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE))
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
     /* Extra-dim step for the LilyGO T5 E-Paper S3 Pro / Pro Lite
      * front-light: 10 % is already usable in a dark room but some
      * users want an even lower setting for night reading. The
