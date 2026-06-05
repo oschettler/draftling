@@ -140,29 +140,31 @@ config DRAFTLING_DISPLAY_EPD
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
     default n
 
-# DRAFTLING_DISPLAY_EDS3 is set automatically when the selected
-# e-paper board is driven by the m5stack/M5GFX library (currently
-# only the M5Stack PaperS3, which has a custom board id baked into
-# M5GFX's auto-detect logic). The EDS3 display backend
-# (components/display/display_eds3.cpp) is compiled in only when
-# this symbol is set, keeping the M5GFX managed component dependency
-# out of builds for other boards.
-config DRAFTLING_DISPLAY_EDS3
-    bool
-    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
-    default n
-
 # DRAFTLING_DISPLAY_EPDIY is set automatically when the selected
-# e-paper board is driven by the vroland/epdiy library (currently
-# both LilyGO T5 E-Paper S3 Pro variants, which share the
-# epd_board_v7 configuration: 8-bit parallel data bus + TPS65185
-# high-voltage supply controlled via a PCA9535 I2C IO expander).
-# The EPDIY display backend (components/display/display_epdiy.cpp)
-# is compiled in only when this symbol is set.
+# e-paper board is driven by the vroland/epdiy library. The set
+# currently includes both LilyGO T5 E-Paper S3 Pro variants (driven
+# by epdiy's built-in epd_board_v7: 8-bit parallel data bus + TPS65185
+# high-voltage supply controlled via a PCA9535 I2C IO expander) and
+# the M5Stack PaperS3 (driven by the in-tree epd_board_papers3.c:
+# same 8-bit bus topology but with direct-GPIO power gates, no
+# TPS65185 and no I/O expander). The EPDIY display backend
+# (components/display/display_epdiy.cpp) is compiled in only when
+# this symbol is set.
 config DRAFTLING_DISPLAY_EPDIY
     bool
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE
+    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
+    default n
+
+# DRAFTLING_EPDIY_BOARD_PAPERS3 selects the in-tree PaperS3 board
+# definition (components/display/epd_board_papers3.c) instead of
+# epdiy's built-in epd_board_v7. The PaperS3 has no TPS65185 and no
+# I/O expander; its EPD power rail is gated by two direct GPIO pins
+# (EPD_EN on GPIO45, BST_EN on GPIO46).
+config DRAFTLING_EPDIY_BOARD_PAPERS3
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_PAPERS3
     default n
 
 # DRAFTLING_DISPLAY_HAS_BACKLIGHT is set automatically on boards

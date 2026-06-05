@@ -189,24 +189,24 @@
 #elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)
 /* ----- M5Stack PaperS3 -----
  *
- * The PaperS3 drives an ED047TC1 e-paper panel (panel_width=960,
- * panel_height=540 in M5GFX, with offset_rotation=3) via the
- * ESP32-S3 LCD/I80 parallel peripheral. The display driver calls
- * setRotation(1) so the user-visible dimensions are 960x540
- * landscape ("horizontal"). The panel data bus, control lines and
- * power-rail enable are configured by the m5stack/M5GFX library
- * internally (board id "M5PaperS3"); we do not redefine those GPIOs
- * here. See the M5Stack hardware reference for the full pin list:
- * https://docs.m5stack.com/en/core/papers3
+ * The PaperS3 drives an ED047TC1 e-paper panel (960 x 540 native
+ * landscape) via the ESP32-S3 LCD/I80 parallel peripheral, fed by
+ * the vroland/epdiy library through the in-tree
+ * components/display/epd_board_papers3.c board definition.
  *
- * Pins listed below are the ones Draftling itself touches outside of
- * the display driver (SD card, wakeup, optional I2C).
+ * That board definition owns GPIOs 6-18 (8-bit data bus + CKH, CKV,
+ * STH, SPV, XLE) and GPIO 45/46 (EPD_EN and BST_EN power-rail gates).
+ * Pins below are the ones Draftling itself touches outside of the
+ * display driver (SD card, wakeup, I2C touch / RTC / IMU, battery
+ * monitor). See the M5Stack hardware reference for the full pin
+ * list: https://docs.m5stack.com/en/core/papers3
  */
 #define BOARD_NAME      "M5Stack PaperS3"
 
-/* Onboard MicroSD on a dedicated SPI host (SPI3 - the EPD parallel bus
- * driven by M5GFX claims GPIO 6-18 plus 45/46 for its data/control
- * lines, so the SD slot must use a separate set of pins).
+/* Onboard MicroSD on a dedicated SPI host (SPI3 - the EPD parallel
+ * bus owned by epdiy claims GPIO 6-18 plus 45/46 for its data /
+ * control / power lines, so the SD slot must use a separate set of
+ * pins).
  *
  * Pin assignments verified against the M5Stack PaperS3 hardware
  * reference and the FastEPD/Arduino "papers3_screenshot" example:
@@ -224,28 +224,20 @@
 
 /* GT911 capacitive touch controller.
  *
- * Pin assignments match the M5GFX board definition for M5PaperS3
- * (Touch_GT911 config: pin_int=GPIO48, pin_sda=GPIO41,
- * pin_scl=GPIO42, no RST GPIO). The GT911 reset line is not wired
- * to any ESP32-S3 pin on this board -- it is released by the
- * power-rail RC, so the touchscreen driver cannot perform the
- * INT-driven address-select reset sequence and instead probes
- * both possible I2C addresses (0x5D primary, 0x14 backup).
+ * Pin assignments match the M5Stack PaperS3 hardware reference
+ * (pin_int=GPIO48, pin_sda=GPIO41, pin_scl=GPIO42, no RST GPIO).
+ * The GT911 reset line is not wired to any ESP32-S3 pin on this
+ * board -- it is released by the power-rail RC, so the touchscreen
+ * driver cannot perform the INT-driven address-select reset
+ * sequence and instead probes both possible I2C addresses (0x5D
+ * primary, 0x14 backup).
  *
  * Native panel coordinate range as reported by the GT911 is
- * 540 wide x 960 tall (portrait). The display driver calls M5GFX
- * setRotation(1) to present a 960x540 landscape framebuffer.
- *
- * Mirrors in native_to_logical() are applied to the raw native
- * axes *before* swap_xy, so with swap_xy=1:
- *   - mirror_x flips native_x, which (after the swap) flips
- *     logical_y (the screen's vertical axis);
- *   - mirror_y flips native_y, which (after the swap) flips
- *     logical_x (the screen's horizontal axis).
- * Verified on hardware (PaperS3 in landscape, USB-C on the right,
- * the orientation M5GFX setRotation(1) produces): only the
- * vertical screen axis needs to be inverted, which after the swap
- * corresponds to flipping native_x -- so mirror_x=1, mirror_y=0. */
+ * 540 wide x 960 tall (portrait). The epdiy backend rotates the
+ * framebuffer to a 960x540 landscape orientation
+ * (EPD_ROT_LANDSCAPE), so the touch axes need swapping and the
+ * vertical axis needs inverting -- swap_xy=1, mirror_x=1,
+ * mirror_y=0. */
 #define TOUCH_I2C_ADDR  0x5D
 #define TOUCH_INT_PIN   CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN   CONFIG_DRAFTLING_TOUCH_RST_GPIO
@@ -277,10 +269,9 @@
  *
  * Earlier revisions tried GPIO21 (wrong -- that's the on-board
  * buzzer/speaker pin) and GPIO48 (the GT911 touch-panel INT line).
- * GPIO48 also failed: M5GFX initializes only the e-paper panel, not
- * the touch controller, so the GT911 is left uninitialized and holds
- * its INT line low (the line doubles as I2C-address selection during
- * reset). The standby manager would then see GPIO48 stuck low and
+ * GPIO48 also failed because the GT911 holds its INT line low while
+ * uninitialised (the line doubles as I2C-address selection during
+ * reset), so the standby manager would see GPIO48 stuck low and
  * fire the GPIO_INTR_LOW_LEVEL wake immediately.
  *
  * GPIO0 is the only digital input button on the PaperS3 besides the

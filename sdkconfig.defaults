@@ -25,7 +25,7 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 # buffers and Bluedroid. The custom hooks live in
 # components/display/lv_mem_psram.c and forward to
 # heap_caps_*(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT). Required to fit
-# WiFi + BLE keyboard + M5GFX framebuffer on the M5Stack PaperS3.
+# WiFi + BLE keyboard + epdiy framebuffer on the M5Stack PaperS3.
 CONFIG_LV_USE_CUSTOM_MALLOC=y
 
 # Compiler

@@ -14,11 +14,15 @@ extern "C" {
  *  Waveshare RLCD (display_rlcd.cpp):
  *      mosi, sck, dc, cs, rst, busy=-1, width, height
  *
- *  M5Stack PaperS3 (display_eds3.cpp):
- *      all pin parameters are ignored - the m5stack/M5GFX library
+ *  M5Stack PaperS3 (display_epdiy.cpp + epd_board_papers3.c):
+ *      all pin parameters are ignored - the vroland/epdiy library
  *      configures the parallel-bus and control GPIOs internally
- *      based on the M5PaperS3 board id. Width/height must still
- *      match the panel (540 x 960).
+ *      from the in-tree PaperS3 board definition. Width/height
+ *      must still match the panel (960 x 540 landscape).
+ *
+ *  LilyGO T5 E-Paper S3 Pro / Pro Lite (display_epdiy.cpp):
+ *      all pin parameters are ignored - epdiy's built-in
+ *      epd_board_v7 owns the GPIOs. Width/height must match.
  */
 void display_init(int pin_a, int pin_b, int pin_c, int pin_d,
                   int pin_e, int pin_f, int width, int height);
@@ -29,7 +33,7 @@ void display_set_pixel(uint16_t x, uint16_t y, uint8_t color);
 /*
  * Push the framebuffer to the panel.
  *
- * On the M5Stack PaperS3 backend this performs an automatic frame
+ * On the e-paper backends this performs an automatic frame
  * diff against the last displayed frame and uses a partial refresh
  * when only a small region changed, falling back to a full refresh
  * once every N partials to clear residual ghosting (the threshold
@@ -57,10 +61,10 @@ int display_get_buffer_size(void);
  * panel refresh), or false to fall back to the legacy per-pixel
  * path.
  *
- * Implemented by the M5GFX-based PaperS3 backend, which can convert
- * RGB565 -> grayscale internally far more efficiently than our
- * RGB565 -> 1-bit -> 8-bit grayscale round-trip. Other backends
- * return false.
+ * Implemented by the epdiy and colour LCD backends, which can
+ * convert RGB565 -> grayscale (or push RGB565 directly) far more
+ * efficiently than our RGB565 -> 1-bit -> 8-bit grayscale round-trip.
+ * Other backends return false.
  */
 bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
 
@@ -81,8 +85,9 @@ bool display_push_rgb565(int x, int y, int w, int h, const void *color_map);
  *
  * Pass w <= 0 or h <= 0 to clear any pending clip.
  *
- * Implemented by the M5Stack PaperS3 backend (display_eds3.cpp). On
- * other backends this is a no-op (the full dirty bbox is refreshed).
+ * Implemented by the epdiy e-paper backend (display_epdiy.cpp).
+ * On other backends this is a no-op (the full dirty bbox is
+ * refreshed).
  */
 void display_set_partial_clip(int x, int y, int w, int h);
 
@@ -274,9 +279,10 @@ void display_axs15231b_init(const display_axs15231b_config_t *cfg);
  * back to `i2c_master_bus_handle_t` internally. The bus is created
  * and owned by the caller; the display backend never destroys it.
  *
- * No-op on backends that do not use I2C (RLCD, EDS3) or
- * whose I2C does not need to be shared with another component
- * (AXS15231B's optional touch sits on a separate bus today).
+ * No-op on backends that do not use I2C (RLCD, MIPI-DSI, PaperS3
+ * epdiy board) or whose I2C does not need to be shared with another
+ * component (AXS15231B's optional touch sits on a separate bus
+ * today).
  */
 void display_set_shared_i2c_bus(void *bus_handle);
 

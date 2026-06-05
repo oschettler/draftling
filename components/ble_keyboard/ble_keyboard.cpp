@@ -1221,7 +1221,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
  * and Bluedroid init/enable) are now performed synchronously from
  * ble_keyboard_init() instead of from this task.  Doing them
  * synchronously is important on memory-constrained boards (notably
- * the M5Stack PaperS3, where M5GFX/LovyanGFX statics leave only
+ * the M5Stack PaperS3, where the epdiy framebuffers leave only
  * ~191 KB of internal heap on boot): if Bluedroid bring-up races
  * with esp_wifi_init() in main(), WiFi can grab enough internal RAM
  * that BTU_StartUp later fails to allocate its workqueue and the

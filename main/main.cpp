@@ -65,8 +65,7 @@ static void pre_sleep_autosave(void)
      * indefinitely is worse for the e-paper than a white one.
      *
      * Take the LVGL mutex first so this does not race with the LVGL
-     * task's flush_cb (the PaperS3 backend in particular requires
-     * exclusive access to its M5GFX instance). */
+     * task's flush_cb. */
     /* Take the LVGL mutex if we can so the wipe does not race with
      * the LVGL task's flush_cb. The mutex is recursive
      * (draftling_lvgl_port_init), so this also works when pre_sleep_autosave
@@ -321,18 +320,11 @@ extern "C" void app_main(void)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, -1,
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_DISPLAY_EDS3)
-    /* The PaperS3 driver is a thin shim over M5GFX which configures
-     * all panel GPIOs internally based on the M5PaperS3 board id. We
-     * still call display_init for API parity; pin parameters are
-     * ignored by the M5GFX backend. */
-    display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
-    /* The LilyGO T5 E-Paper S3 Pro / Pro Lite display backend is a
-     * thin shim over vroland/epdiy which owns all panel GPIOs via
-     * its `epd_board_v7` configuration (8-bit parallel data bus on
-     * direct GPIOs plus TPS65185 power management via a PCA9535 IO
-     * expander on I2C). Pin parameters are ignored. */
+    /* vroland/epdiy backend. Owns all panel GPIOs via its board
+     * definition (epdiy's built-in epd_board_v7 on the LilyGO T5
+     * E-Paper S3 Pro / Pro Lite, the in-tree epd_board_papers3 on
+     * the M5Stack PaperS3). Pin parameters are ignored. */
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
     /* M5Stack Tab5 MIPI-DSI panel. All panel GPIOs, the MIPI-DSI
@@ -797,10 +789,10 @@ extern "C" void app_main(void)
 #endif
 
     /* WiFi is lazy-initialized on first wifi_manager_connect() call.
-     * On boards with a tight internal heap (e.g. M5Stack PaperS3, ~138 KB
-     * free after M5GFX statics) eagerly calling esp_wifi_init() here
-     * fails with ESP_ERR_NO_MEM because the WiFi static RX/TX buffers
-     * (DMA-capable, must live in internal RAM) cannot fit alongside the
+     * On boards with a tight internal heap (e.g. M5Stack PaperS3,
+     * ~138 KB free) eagerly calling esp_wifi_init() here fails with
+     * ESP_ERR_NO_MEM because the WiFi static RX/TX buffers (DMA-
+     * capable, must live in internal RAM) cannot fit alongside the
      * Bluedroid stack that ble_keyboard_init() just brought up. */
 
     /* Initialize Git sync */

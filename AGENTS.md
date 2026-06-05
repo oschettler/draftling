@@ -86,8 +86,8 @@ block defining SPI pins (MOSI, SCK, DC, CS, RST, TE), SD card pins
 (CLK, CMD, D0 for SDMMC, or MOSI/MISO/SCK/CS for SPI), I2C pins, the
 battery ADC pin, and the deep-sleep wakeup GPIO. The M5Stack PaperS3
 block omits the panel data-bus and control-line pins because the
-`m5stack/M5GFX` library configures them internally based on the board
-id.
+`vroland/epdiy` driver configures them internally from the in-tree
+PaperS3 board definition (`components/display/epd_board_papers3.c`).
 
 ### components/battery/
 
@@ -146,42 +146,41 @@ Per-board display backends behind a single C API:
 
 - **display_rlcd.cpp** -- Waveshare ESP32-S3-RLCD-4.2 reflective LCD
   over SPI.
-- **display_eds3.cpp** -- M5Stack PaperS3 ED047TC1 panel via the
-  `m5stack/M5GFX` managed component. Unlike the other backends this
-  one does not maintain its own 1-bpp framebuffer; M5GFX already
-  keeps a 4-bpp grayscale framebuffer internally, and the LVGL port
-  pushes RGB565 pixels straight into it through the optional
-  `display_push_rgb565()` fast path. The backend accumulates a
-  dirty bounding box across pushes and, on `display_flush()`, calls
-  `M5GFX::display(x,y,w,h)` over that rect using the single-pulse
-  `epd_fast` waveform (one visible flash, ~80-150 ms);
-  every `CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (or
-  whenever the dirty area covers most of the screen, or after
-  `display_clear()` / `display_full_refresh()`) the next refresh is
-  promoted to a full-screen `epd_quality` pass to clear ghosting.
-  Two extras keep typing snappy: a 120 ms flush debounce coalesces
-  bursts of keystrokes into a single panel refresh (deferred via
-  `esp_timer`, taking `lvgl_port_lock()` for thread safety), and the
-  optional one-shot `display_set_partial_clip(x,y,w,h)` API lets the
-  editor narrow the next refresh to the area around the typed
-  character (cursor + edited columns) when it knows the rest of the
-  LVGL-pushed line pixels are unchanged. The backend also honours
-  `CONFIG_DRAFTLING_DISPLAY_SCALE` (default 2 on PaperS3): every
-  logical LVGL pixel is rendered as SCALE x SCALE physical panel
-  pixels via nearest-neighbor expansion in `display_push_rgb565()`,
-  and the dirty-bbox / partial-clip math is converted to panel
-  coordinates internally. Grayscale UI is still TODO.
+- **display_epdiy.cpp** -- E-paper backend for the M5Stack PaperS3
+  ED047TC1 panel and the LilyGO T5 E-Paper S3 Pro / Pro Lite
+  ED047TC2 panel, both driven by the `vroland/epdiy` managed
+  component. epdiy keeps a 4-bpp grayscale framebuffer (one
+  nibble per panel pixel, ~253 KB at 960x540) in PSRAM; the LVGL
+  port pushes RGB565 pixels straight into it through the optional
+  `display_push_rgb565()` fast path, with each LVGL pixel scaled
+  into a SCALE x SCALE block of panel pixels
+  (`CONFIG_DRAFTLING_DISPLAY_SCALE`, default 2). The backend
+  accumulates a dirty bounding box across pushes and, on
+  `display_flush()`, powers on the EPD rail and runs an
+  `epd_hl_update_area()` partial refresh over the bbox using the
+  single-pulse `EPD_MODE_FAST` waveform (one visible flash,
+  ~80-150 ms); every `CONFIG_DRAFTLING_EPD_FULL_REFRESH_INTERVAL`
+  partials (or whenever the dirty area covers most of the screen,
+  or after `display_clear()` / `display_full_refresh()`) the next
+  refresh is promoted to a full-screen `MODE_GC16` flashing
+  update to clear ghosting. The LilyGO T5 path selects epdiy's
+  built-in `epd_board_v7`; the PaperS3 path selects the in-tree
+  `epd_board_papers3` defined in `epd_board_papers3.c`, which
+  drives EPD_EN (GPIO 45) and BST_EN (GPIO 46) directly (no
+  TPS65185 / PCA9555 expander) and uses the LCD peripheral for
+  STH/CKH/STV/CKV/XLE/D0-D7. Grayscale UI is still TODO.
 - **lvgl_port.cpp** -- creates the LVGL display object, sets up a
   flush callback that first tries `display_push_rgb565()` (used by
-  the PaperS3 backend) and otherwise converts LVGL's RGB565 output
-  to the backend's 1-bpp pixel format via `display_set_pixel()`, and
-  runs the LVGL tick/task timer. Thread safety is provided by a
-  mutex exposed as `lvgl_port_lock()` / `lvgl_port_unlock()`.
+  the epdiy and AXS15231B backends) and otherwise converts LVGL's
+  RGB565 output to the backend's 1-bpp pixel format via
+  `display_set_pixel()`, and runs the LVGL tick/task timer. Thread
+  safety is provided by a mutex exposed as `lvgl_port_lock()` /
+  `lvgl_port_unlock()`.
 
-The component's `idf_component.yml` declares the `m5stack/m5gfx`
-dependency required by the PaperS3 backend. (It is downloaded for
-every build; the source itself is gated by `#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_PAPERS3)`
-so non-PaperS3 builds do not link it into the final image.)
+The component's `idf_component.yml` declares the `vroland/epdiy`
+dependency required by both e-paper backends; the source files
+themselves are gated by `CONFIG_DRAFTLING_DISPLAY_EPDIY` so
+non-e-paper builds do not link epdiy into the final image.
 
 Public API: `display_init()`, `display_clear()`, `display_set_pixel()`,
 `display_flush()`, `display_full_refresh()`, `display_push_rgb565()`,
@@ -319,8 +318,8 @@ GPIO21 (the on-board buzzer pin -- floated low under some
 speaker-driver states and woke the device instantly) and GPIO48
 (the GT911 touch INT) with a light-sleep + `esp_restart()`
 workaround; both woke the device immediately, the latter because
-M5GFX initializes only the e-paper panel (not the touch
-controller), so the GT911 is left uninitialized and holds INT low.
+the e-paper backend initialises only the panel (not the touch
+controller), so the GT911 is left uninitialised and holds INT low.
 
 On targets that have no EXT0 support (the ESP32-P4 / M5Stack Tab5,
 where `SOC_PM_SUPPORT_EXT0_WAKEUP` is undefined), the EXT0 arming
@@ -502,8 +501,9 @@ ESP32-S3-only (`depends on IDF_TARGET_ESP32S3`):
   with a 400x300 reflective LCD and GPIO18 deep-sleep wakeup button.
   *Requires ESP32-S3.*
 - **DRAFTLING_MODEL_M5STACK_PAPERS3** -- M5Stack PaperS3 with a
-  4.7" 540x960 ED047TC1 e-paper driven by the `m5stack/M5GFX`
-  library, on-board MicroSD on SPI3, BOOT button on GPIO0 used as
+  4.7" 540x960 ED047TC1 e-paper driven by the `vroland/epdiy`
+  library (with the in-tree `epd_board_papers3` board definition),
+  on-board MicroSD on SPI3, BOOT button on GPIO0 used as
   the EXT0 deep-sleep wake source (the only RTC-capable user-input
   GPIO on the board). *Requires ESP32-S3.*
 
@@ -534,7 +534,9 @@ in C / C++ code:
 | Symbol | Purpose | Set by |
 |--------|---------|--------|
 | DRAFTLING_DISPLAY_RLCD            | Selects `display_rlcd.cpp`        | RLCD-4.2 |
-| DRAFTLING_DISPLAY_EPD             | Selects `display_eds3.cpp`; gates EPD-only options (BLACK_BACKGROUND, full-refresh interval) and the editor's no-blink cursor / 120 ms flush debounce | PaperS3 |
+| DRAFTLING_DISPLAY_EPD             | Gates EPD-only options (BLACK_BACKGROUND, full-refresh interval) and the editor's no-blink cursor / 120 ms flush debounce | PaperS3, LilyGO T5 E-Paper S3 Pro / Pro Lite |
+| DRAFTLING_DISPLAY_EPDIY           | Selects `display_epdiy.cpp` (with `epd_board_v7` for LilyGO T5 or the in-tree `epd_board_papers3` for PaperS3) and pulls in the `vroland/epdiy` managed component | PaperS3, LilyGO T5 E-Paper S3 Pro / Pro Lite |
+| DRAFTLING_EPDIY_BOARD_PAPERS3     | Switches `display_epdiy.cpp` to the PaperS3 board definition (no VCOM, no shared I2C) | PaperS3 |
 | DRAFTLING_DISPLAY_AXS15231B       | Selects `display_axs15231b.cpp`   | Touch-LCD-3.49, JC3248W535 |
 | DRAFTLING_DISPLAY_MIPI_DSI        | Selects `display_mipi_dsi.cpp` (delegates to `espressif/m5stack_tab5` BSP) | M5Stack Tab5 |
 | DRAFTLING_DISPLAY_COLOR           | Enables the color-theme picker; PARTIAL render mode in `lvgl_port.cpp` | AXS15231B boards, Tab5 |
@@ -573,9 +575,9 @@ default re-applies automatically whenever `DRAFTLING_HARDWARE_MODEL`
 changes -- no need to delete `sdkconfig`. To override, set the value
 in `sdkconfig.defaults`.
 
-Currently the `display_eds3` (PaperS3 e-paper), `display_axs15231b`
-(Touch-LCD-3.49 / JC3248W535) and `display_mipi_dsi` (M5Stack Tab5)
-backends implement the up-scaling;
+Currently the `display_epdiy` (PaperS3 + LilyGO T5 e-paper),
+`display_axs15231b` (Touch-LCD-3.49 / JC3248W535) and
+`display_mipi_dsi` (M5Stack Tab5) backends implement the up-scaling;
 on the RLCD backend a value > 1
 has no visible effect because the LVGL framebuffer already matches
 the panel size.
@@ -599,10 +601,7 @@ only the enabled layout tables.
 
 ## Building
 
-Requires ESP-IDF v5.3 or later. ESP-IDF 6.0 and newer are not supported
-yet because the `m5stack/M5GFX` managed component is not compatible
-with ESP-IDF 6.x; the top-level `CMakeLists.txt` enforces this with a
-`FATAL_ERROR` on IDF major version >= 6.
+Requires ESP-IDF v5.3 or later (v5.3 - v5.5 confirmed working).
 
 PSRAM is required on every supported board. The editor gap buffer
 (sized dynamically at startup from the PSRAM that is free when

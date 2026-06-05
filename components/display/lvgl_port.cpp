@@ -151,9 +151,9 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_m
 
     /* Fast path: if the backend supports it, push the LVGL RGB565
      * framebuffer directly to the panel without going through our
-     * per-pixel 1-bpp conversion. The PaperS3 (M5GFX) backend uses
-     * this; the RLCD backend returns false and we fall back to the
-     * legacy per-pixel path below. */
+     * per-pixel 1-bpp conversion. The epdiy and color LCD backends
+     * use this; the RLCD backend returns false and we fall back to
+     * the legacy per-pixel path below. */
     if (display_push_rgb565(phys_x, phys_y, phys_w, phys_h, push_buf)) {
         /* LVGL may slice a single dirty region into multiple
          * draw-buffer-sized chunks (in PARTIAL render mode) or invalidate
@@ -248,12 +248,10 @@ extern "C" void draftling_lvgl_port_init(int width, int height, int rotate_deg)
 
     lv_display_t *disp = lv_display_create(width, height);
     /* LVGL v9 defaults to LV_COLOR_FORMAT_RGB888 (4 bytes per pixel).
-     * Our flush path (and the PaperS3 fast path that hands the
-     * framebuffer to M5GFX as rgb565_t*) expect RGB565, and
-     * BYTES_PER_PIXEL below is sized for RGB565. Declare it
-     * explicitly before allocating buffers; otherwise LVGL writes
-     * 4-byte pixels into a half-sized buffer and the panel renders
-     * mangled, ~4x-shrunk content. */
+     * Our flush path expects RGB565, and BYTES_PER_PIXEL below is
+     * sized for RGB565. Declare it explicitly before allocating
+     * buffers; otherwise LVGL writes 4-byte pixels into a half-sized
+     * buffer and the panel renders mangled, ~4x-shrunk content. */
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(disp, flush_cb);
 
@@ -269,7 +267,7 @@ extern "C" void draftling_lvgl_port_init(int width, int height, int rotate_deg)
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD) || \
     defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
-    /* PaperS3 / M5GFX path: use PARTIAL render mode so flush_cb is
+    /* E-paper / colour LCD path: use PARTIAL render mode so flush_cb is
      * called once per invalidated rectangle with a tightly-packed
      * pixel buffer. This lets the display backend issue a partial
      * e-paper refresh of just the changed region (typically the
