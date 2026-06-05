@@ -53,6 +53,9 @@
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
 #include "touchscreen.h"
 #endif
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+#include "usb_kbd.h"
+#endif
 
 static const char *TAG = "Standby";
 
@@ -101,9 +104,15 @@ static void kb_wait_cb(void *arg)
 {
     (void)arg;
     if (ble_keyboard_is_connected()) {
-        ESP_LOGI(TAG, "No-keyboard timer fired but a keyboard is connected -- staying awake");
+        ESP_LOGI(TAG, "No-keyboard timer fired but a BLE keyboard is connected -- staying awake");
         return;
     }
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+    if (usb_kbd_is_connected()) {
+        ESP_LOGI(TAG, "No-keyboard timer fired but a USB keyboard is connected -- staying awake");
+        return;
+    }
+#endif
     ESP_LOGI(TAG, "No keyboard connected within %d s -- entering deep sleep",
              CONFIG_DRAFTLING_NO_KEYBOARD_SLEEP_SEC);
     standby_enter_sleep();

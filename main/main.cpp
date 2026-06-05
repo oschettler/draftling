@@ -12,7 +12,6 @@
 #include <driver/i2c_master.h>
 #endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
-#include <driver/i2c_master.h>
 #include "bsp/m5stack_tab5.h"
 #endif
 #include "sdkconfig.h"
@@ -66,8 +65,7 @@ static void pre_sleep_autosave(void)
      * indefinitely is worse for the e-paper than a white one.
      *
      * Take the LVGL mutex first so this does not race with the LVGL
-     * task's flush_cb (the PaperS3 backend in particular requires
-     * exclusive access to its M5GFX instance). */
+     * task's flush_cb. */
     /* Take the LVGL mutex if we can so the wipe does not race with
      * the LVGL task's flush_cb. The mutex is recursive
      * (draftling_lvgl_port_init), so this also works when pre_sleep_autosave
@@ -87,8 +85,7 @@ static void pre_sleep_autosave(void)
 #endif
 }
 
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 /* LilyGO T5 E-Paper S3 Pro / Pro Lite: deep-sleep current budget.
  *
  * Without this hook the board pulls ~30 mA in deep sleep (a 1500 mAh
@@ -218,7 +215,7 @@ static void pre_sleep_t5_deinit(void)
      * specifically) so the level stays driven through deep sleep. */
     gpio_deep_sleep_hold_en();
 }
-#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE] */
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO */
 
 extern "C" void app_main(void)
 {
@@ -309,120 +306,24 @@ extern "C" void app_main(void)
         }
     }
 
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
-    /* M5Stack Tab5: enable battery charging from the USB-C input.
-     *
-     * The Tab5 carries an IP2326 autonomous Li-ion charger gated by
-     * the CHG_EN signal, which is wired to bit 7 of the second
-     * PI4IOE5V6408 I/O expander (I2C address 0x44, OUT_SET register
-     * 0x05). The espressif/m5stack_tab5 BSP does not expose the
-     * charger pin in `bsp_feature_enable()`, and M5Stack's reference
-     * `bsp_io_expander_pi4ioe_init()` deliberately boots with
-     * CHG_EN = 0 (`OUT_SET = 0b00001001`), which is why the battery
-     * never charges when USB is plugged in.
-     *
-     * Set the pin direction to output (bit 7 of IO_DIR / 0x03) and
-     * drive it HIGH so the IP2326 starts charging. The PI4IOE5V6408
-     * latches its output register and retains the value across
-     * ESP32-P4 deep sleep (same as WLAN_PWR_EN on bit 0 of the same
-     * expander -- see docs/tab5-esp-hosted.md), so charging continues
-     * while the MCU sleeps.
-     *
-     * IMPORTANT: the PI4IOE5V6408 also has an "Output High-Impedance"
-     * register (`OUT_H_IM` = 0x07). When a bit is 1 the corresponding
-     * pin is in high-impedance regardless of the IO_DIR / OUT_SET
-     * setting. On power-up *and* after the
-     * `espressif/esp_io_expander_pi4ioe5v6408` driver's reset()
-     * (called from `bsp_io_expander1_init()`, which `bsp_feature_enable`
-     * triggers for `BSP_FEATURE_WIFI`), OUT_H_IM defaults to 0xFF —
-     * i.e. all pins, including P7 (CHG_EN), boot in high-Z. Setting
-     * IO_DIR + OUT_SET alone is therefore not enough to drive the
-     * charger enable line; we also have to clear bit 7 of OUT_H_IM
-     * so the pin is push-pull driven. Without this the IP2326 never
-     * sees CHG_EN go high and the battery does not charge.
-     *
-     * Reference: m5stack/M5Tab5-UserDemo
-     *   platforms/tab5/components/m5stack_tab5/m5stack_tab5.c
-     *   (functions `bsp_set_charge_en` and `bsp_io_expander_pi4ioe_init`,
-     *   which writes OUT_H_IM = 0b00000110 to drop the high-Z mask
-     *   on every pin actually used on the second expander).
-     */
-    {
-        i2c_master_bus_handle_t sys_bus = bsp_i2c_get_handle();
-        if (sys_bus == NULL) {
-            ESP_LOGW(TAG, "Tab5 CHG_EN: I2C bus handle is NULL");
-        } else {
-            i2c_master_dev_handle_t pi4 = NULL;
-            i2c_device_config_t pi4_cfg = {};
-            pi4_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-            pi4_cfg.device_address  = 0x44;
-            pi4_cfg.scl_speed_hz    = 400000;
-            esp_err_t err = i2c_master_bus_add_device(sys_bus, &pi4_cfg, &pi4);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Tab5 CHG_EN: bus_add_device failed: %s",
-                         esp_err_to_name(err));
-            } else {
-                /* Read-modify-write IO_DIR (0x03): set bit 7 = output. */
-                uint8_t rd_reg = 0x03;
-                uint8_t dir = 0;
-                err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &dir, 1, 100);
-                if (err == ESP_OK) {
-                    uint8_t wr[2] = { 0x03, (uint8_t)(dir | (1u << 7)) };
-                    err = i2c_master_transmit(pi4, wr, 2, 100);
-                }
-                /* Read-modify-write OUT_H_IM (0x07): clear bit 7 so P7
-                 * is push-pull driven instead of high-impedance. We
-                 * preserve every other bit so the BSP-managed pins
-                 * (WLAN_PWR_EN on P0, USB_EN on P3) keep their
-                 * current drive mode. */
-                if (err == ESP_OK) {
-                    rd_reg = 0x07;
-                    uint8_t hiz = 0;
-                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &hiz, 1, 100);
-                    if (err == ESP_OK) {
-                        uint8_t wr[2] = { 0x07, (uint8_t)(hiz & ~(1u << 7)) };
-                        err = i2c_master_transmit(pi4, wr, 2, 100);
-                    }
-                }
-                /* Read-modify-write OUT_SET (0x05): set bit 7 = 1 (CHG_EN). */
-                if (err == ESP_OK) {
-                    rd_reg = 0x05;
-                    uint8_t out = 0;
-                    err = i2c_master_transmit_receive(pi4, &rd_reg, 1, &out, 1, 100);
-                    if (err == ESP_OK) {
-                        uint8_t wr[2] = { 0x05, (uint8_t)(out | (1u << 7)) };
-                        err = i2c_master_transmit(pi4, wr, 2, 100);
-                    }
-                }
-                if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (second PI4IOE5V6408 P7 = 1, drive enabled)");
-                } else {
-                    ESP_LOGW(TAG, "Tab5 CHG_EN write failed: %s",
-                             esp_err_to_name(err));
-                }
-                i2c_master_bus_rm_device(pi4);
-            }
-        }
-    }
-#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_TAB5 */
+    /* M5Stack Tab5 battery charger enable (CHG_EN, P7 on the second
+     * PI4IOE5V6408) is asserted later, AFTER `bsp_feature_enable()`
+     * has had a chance to bring up the second I/O expander (its
+     * driver's reset() routine wipes the output register and forces
+     * every pin into high-impedance, which would clobber any CHG_EN
+     * setting we did here). See the dedicated block further down,
+     * immediately after the BSP_FEATURE_WIFI bring-up. */
 #endif
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_RLCD)
     display_init(RLCD_MOSI_PIN, RLCD_SCK_PIN, RLCD_DC_PIN,
                  RLCD_CS_PIN, RLCD_RST_PIN, -1,
                  DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#elif defined(CONFIG_DRAFTLING_DISPLAY_EDS3)
-    /* The PaperS3 driver is a thin shim over M5GFX which configures
-     * all panel GPIOs internally based on the M5PaperS3 board id. We
-     * still call display_init for API parity; pin parameters are
-     * ignored by the M5GFX backend. */
-    display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
-    /* The LilyGO T5 E-Paper S3 Pro / Pro Lite display backend is a
-     * thin shim over vroland/epdiy which owns all panel GPIOs via
-     * its `epd_board_v7` configuration (8-bit parallel data bus on
-     * direct GPIOs plus TPS65185 power management via a PCA9535 IO
-     * expander on I2C). Pin parameters are ignored. */
+    /* vroland/epdiy backend. Owns all panel GPIOs via its board
+     * definition (epdiy's built-in epd_board_v7 on the LilyGO T5
+     * E-Paper S3 Pro / Pro Lite, the in-tree epd_board_papers3 on
+     * the M5Stack PaperS3). Pin parameters are ignored. */
     display_init(-1, -1, -1, -1, -1, -1, DISPLAY_WIDTH, DISPLAY_HEIGHT);
 #elif defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
     /* M5Stack Tab5 MIPI-DSI panel. All panel GPIOs, the MIPI-DSI
@@ -622,6 +523,68 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "ESP32-C6 power rail (WLAN_PWR_EN) enabled");
         }
         vTaskDelay(pdMS_TO_TICKS(200));
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+        /* M5Stack Tab5: enable battery charging from the USB-C input.
+         *
+         * The Tab5 carries an IP2326 autonomous Li-ion charger gated
+         * by the CHG_EN signal, which is wired to P7 of the second
+         * PI4IOE5V6408 I/O expander (I2C address 0x44). The
+         * espressif/m5stack_tab5 BSP does not expose the charger pin
+         * in `bsp_feature_enable()`, and M5Stack's reference
+         * `bsp_io_expander_pi4ioe_init()` deliberately boots with
+         * CHG_EN = 0, which is why the battery never charges when
+         * USB is plugged in.
+         *
+         * This block must run AFTER `bsp_feature_enable(BSP_FEATURE_WIFI)`
+         * above. That call goes through `bsp_io_expander1_init()`,
+         * which constructs the espressif/esp_io_expander_pi4ioe5v6408
+         * driver; that driver's reset() routine issues a chip-reset
+         * and then re-writes the default register values
+         * (OUT_SET = 0x00, OUT_H_IM = 0xFF, IO_DIR = 0xFF), which
+         * would clobber any direct I2C write we did before the BSP
+         * initialised the expander.
+         *
+         * We deliberately use the BSP-managed `esp_io_expander_handle_t`
+         * (rather than raw I2C writes) so the driver's cached shadow
+         * registers stay in sync with the chip. Otherwise a later
+         * BSP `esp_io_expander_set_level()` call on any OTHER pin
+         * (the BSP performs read-modify-write on its own shadow,
+         * never reading back the chip) would overwrite CHG_EN
+         * because the shadow still believes P7 is 0.
+         *
+         * Switching the pin to PUSH_PULL is required: the
+         * PI4IOE5V6408 powers up with every pin in high-impedance
+         * (OUT_H_IM = 0xFF), and the driver's reset() restores that
+         * default. Even with IO_DIR = output and OUT_SET = 1 the
+         * pin would otherwise stay floating and the IP2326 would
+         * never see CHG_EN go high.
+         */
+        {
+            esp_io_expander_handle_t pi4 = bsp_io_expander1_init();
+            if (pi4 == NULL) {
+                ESP_LOGW(TAG, "Tab5 CHG_EN: bsp_io_expander1_init returned NULL");
+            } else {
+                esp_err_t err = esp_io_expander_set_dir(
+                    pi4, IO_EXPANDER_PIN_NUM_7, IO_EXPANDER_OUTPUT);
+                if (err == ESP_OK) {
+                    err = esp_io_expander_set_output_mode(
+                        pi4, IO_EXPANDER_PIN_NUM_7,
+                        IO_EXPANDER_OUTPUT_MODE_PUSH_PULL);
+                }
+                if (err == ESP_OK) {
+                    err = esp_io_expander_set_level(
+                        pi4, IO_EXPANDER_PIN_NUM_7, 1);
+                }
+                if (err == ESP_OK) {
+                    ESP_LOGI(TAG, "Tab5 CHG_EN asserted (PI4IOE5V6408 #2 P7 = 1)");
+                } else {
+                    ESP_LOGW(TAG, "Tab5 CHG_EN setup failed: %s",
+                             esp_err_to_name(err));
+                }
+            }
+        }
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_TAB5 */
 #endif
         ESP_LOGI(TAG, "Initializing ESP-Hosted link to ESP32-C6...");
 
@@ -707,10 +670,11 @@ extern "C" void app_main(void)
 
     /* Bring up USB Host + HID keyboard driver (Tab5: USB-A port).
      * If a USB keyboard is enumerated within the probe window we
-     * skip BLE bring-up entirely -- BLE pairing eats power and CPU
-     * on the C6 and a wired keyboard is unambiguously the user's
-     * preference. Note: the check is one-shot at boot; hot-plugging
-     * a USB keyboard later will not switch off BLE (and vice versa).
+     * disable BLE so the wired keyboard is the sole input source;
+     * if the user later unplugs the USB keyboard, the disconnect
+     * handler in usb_kbd.cpp calls ble_keyboard_enable() and BLE
+     * resumes scanning. BLE is brought up unconditionally below
+     * so this hand-off works in both directions.
      */
     bool usb_kbd_present = false;
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
@@ -733,19 +697,29 @@ extern "C" void app_main(void)
     }
 #endif
 
-    /* Initialize Bluetooth keyboard */
+    /* Initialize Bluetooth keyboard.
+     *
+     * We always bring BLE up so it can take over as soon as the
+     * user unplugs the USB keyboard (the USB disconnect handler in
+     * usb_kbd.cpp calls ble_keyboard_enable() which restarts
+     * scanning). When a USB keyboard is already present at boot
+     * we initialise BLE and immediately disable it; the BT
+     * controller stays up but the host stops scanning and stops
+     * dispatching key events / status text. */
     if (usb_kbd_present) {
-        ESP_LOGI(TAG, "USB keyboard detected; skipping BLE keyboard");
+        ESP_LOGI(TAG, "USB keyboard detected; BLE will stay idle "
+                      "until the USB keyboard is unplugged");
         /* editor_ui_init() left the "Searching for BLE keyboard..."
          * prompt screen active because at that point we did not yet
-         * know whether a USB keyboard would enumerate. Now that the
-         * USB keyboard is up there is no BLE connect callback that
-         * will ever transition the UI, so jump straight to the file
-         * browser. */
+         * know whether a USB keyboard would enumerate. Jump straight
+         * to the file browser; the BLE connect callback will not
+         * fire while BLE is disabled. */
         if (draftling_lvgl_port_lock(-1)) {
             editor_ui_show_file_browser();
             draftling_lvgl_port_unlock();
         }
+        ble_keyboard_init();
+        ble_keyboard_disable();
     } else {
         ESP_LOGI(TAG, "Initializing Bluetooth keyboard...");
         /* Now that we know we are going down the BLE path, replace
@@ -814,10 +788,10 @@ extern "C" void app_main(void)
 #endif
 
     /* WiFi is lazy-initialized on first wifi_manager_connect() call.
-     * On boards with a tight internal heap (e.g. M5Stack PaperS3, ~138 KB
-     * free after M5GFX statics) eagerly calling esp_wifi_init() here
-     * fails with ESP_ERR_NO_MEM because the WiFi static RX/TX buffers
-     * (DMA-capable, must live in internal RAM) cannot fit alongside the
+     * On boards with a tight internal heap (e.g. M5Stack PaperS3,
+     * ~138 KB free) eagerly calling esp_wifi_init() here fails with
+     * ESP_ERR_NO_MEM because the WiFi static RX/TX buffers (DMA-
+     * capable, must live in internal RAM) cannot fit alongside the
      * Bluedroid stack that ble_keyboard_init() just brought up. */
 
     /* Initialize Git sync */
@@ -827,8 +801,7 @@ extern "C" void app_main(void)
     /* Initialize standby manager (deep sleep on inactivity) */
     ESP_LOGI(TAG, "Initializing standby manager...");
     standby_init();
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
     standby_set_pre_sleep_cb(pre_sleep_t5_deinit);
 #else
     standby_set_pre_sleep_cb(pre_sleep_autosave);

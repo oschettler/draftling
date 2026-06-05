@@ -131,7 +131,9 @@ automatically from that choice.
 
 - **[M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3)** --
   4.7" e-paper ED047TC1 (540x960) driven over a parallel I80 bus by
-  `m5stack/M5GFX`. GT911 touch on I2C. Battery on GPIO3 ADC (1:2).
+  the `vroland/epdiy` managed component with a PaperS3-specific
+  board definition (`components/display/epd_board_papers3.c`).
+  GT911 touch on I2C. Battery on GPIO3 ADC (1:2).
   BOOT (GPIO0) wakes from deep sleep (optionally any touch with
   `CONFIG_DRAFTLING_STANDBY_WAKE_ON_TOUCH`). On-board MicroSD on
   SPI3. **This board is officially discontinued by M5Stack.**
@@ -202,14 +204,15 @@ so it does not interfere with SD traffic.
 
 The **M5Stack PaperS3** is compact, packed in a good enclosure with
 magnets on the back, and offers the same high-contrast 4.7" e-paper
-panel as the LilyGO T5 boards. The M5GFX driver uses the single-pulse
-`epd_fast` waveform for partial refreshes (one visible flash, ~80-150
-ms per update); a full refresh (3-5 s) is performed every
-`DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials (default 30) to clear
-residual ghosting. **Note:** the PaperS3 has been officially
-discontinued by M5Stack, so it is no longer recommended for new builds
--- prefer one of the LilyGO T5 E-Paper S3 Pro variants for a similar
-e-paper experience on a board that is still in production.
+panel as the LilyGO T5 boards. The epdiy backend uses the
+single-pulse `EPD_MODE_FAST` waveform for partial refreshes (one
+visible flash, ~80-150 ms per update); a full refresh (3-5 s) is
+performed every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
+(default 30) to clear residual ghosting. **Note:** the PaperS3 has
+been officially discontinued by M5Stack, so it is no longer
+recommended for new builds -- prefer one of the LilyGO T5 E-Paper
+S3 Pro variants for a similar e-paper experience on a board that
+is still in production.
 
 The **Waveshare ESP32-S3-Touch-LCD-3.49** drives a 640x172 landscape
 AXS15231B color LCD (natively 172x640 portrait, software-rotated to
@@ -282,10 +285,7 @@ can be independently enabled or disabled. By default **US-English** and
 ## Building
 
 Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/)
-v5.3 or later. ESP-IDF 6.0 and newer are **not** supported yet because
-the `m5stack/M5GFX` managed component (used by the M5Stack PaperS3
-display backend) is not compatible with ESP-IDF 6.x. Use any ESP-IDF
-v5.x release (v5.3 - v5.5 confirmed working).
+v5.3 or later (v5.3 - v5.5 confirmed working).
 
 Keep in mind that M5Stack Tab5 uses a different MCU, so the tatget
 should be set to 'esp32s4'.
@@ -338,9 +338,10 @@ Found at the top-level **DRAFTLING Configuration** menu.
 > readable without any illumination, the cycle on these boards also
 > includes a 0 % step that fully turns the front-light off.
 
-> **Note about the M5Stack PaperS3:** the M5GFX-based driver uses the
-> single-pulse `epd_fast` waveform for partial refreshes (one visible
-> flash, ~80-150 ms per update). A full refresh (3-5 s) is performed
+> **Note about e-paper boards (M5Stack PaperS3, LilyGO T5 E-Paper S3
+> Pro / Pro Lite):** the epdiy-based driver uses the single-pulse
+> `EPD_MODE_FAST` waveform for partial refreshes (one visible flash,
+> ~80-150 ms per update). A full refresh (3-5 s) is performed
 > automatically every `DRAFTLING_EPD_FULL_REFRESH_INTERVAL` partials
 > (default 30) to clear residual ghosting; tune the interval in
 > `idf.py menuconfig`.
@@ -389,9 +390,9 @@ components/
   battery/           Battery monitor: ADC + smoothing, or BQ27220
                      fuel gauge over I2C (T5 E-Paper S3 Pro / Lite)
   ble_keyboard/      BLE HID keyboard host (Bluedroid)
-  display/           Display backends (RLCD SPI, EDS3 e-paper via
-                     M5GFX, AXS15231B QSPI) and
-                     LVGL v9 port
+  display/           Display backends (RLCD SPI, epdiy e-paper for
+                     PaperS3 + LilyGO T5, AXS15231B QSPI,
+                     MIPI-DSI for Tab5) and LVGL v9 port
   editor/            Gap-buffer editor, Markdown parser, LVGL UI, menu
   fonts/             Custom LVGL fonts (Latin, Latin-1 Supplement, Cyrillic)
   git_sync/          GitHub REST API file synchronization

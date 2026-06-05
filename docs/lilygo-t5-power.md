@@ -15,7 +15,8 @@ their drivers left them.
 
 The fix is `pre_sleep_t5_deinit()` in `main/main.cpp`, registered
 as the standby pre-sleep callback under
-`CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO[_LITE]`. It walks the
+`CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO` (which covers both the
+Pro and the Pro Lite SKUs). It walks the
 following list of peripherals immediately before
 `esp_deep_sleep_start()` runs:
 

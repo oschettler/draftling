@@ -22,7 +22,7 @@
  *
  * Why this matters
  * ----------------
- * On the M5Stack PaperS3 (8 MB PSRAM) the M5GFX framebuffer (~253 KB),
+ * On the M5Stack PaperS3 (8 MB PSRAM) the epdiy framebuffers,
  * Bluedroid host, WiFi static RX buffers, and LVGL all compete for
  * ~190 KB of internal DRAM. Before this change LVGL kept its own 64 KB
  * TLSF pool as a static array in .bss (DRAM); after this change that

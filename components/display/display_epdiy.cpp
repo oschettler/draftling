@@ -20,11 +20,11 @@
  * epdiy's high-level API (`epd_hl_*`) keeps a 4-bpp grayscale
  * framebuffer (one nibble per panel pixel, ~253 KB at 960x540) in
  * PSRAM. We expose the optional display_push_rgb565() fast path that
- * lvgl_port.cpp uses on color/M5GFX backends and convert the LVGL
- * RGB565 chunks straight into that grayscale framebuffer, scaling
- * each logical LVGL pixel into a SCALE x SCALE block of panel
- * pixels (CONFIG_DRAFTLING_DISPLAY_SCALE = 2 by default on this
- * board, matching the M5Stack PaperS3 backend). Pushes are batched
+ * lvgl_port.cpp uses on colour and e-paper backends and convert the
+ * LVGL RGB565 chunks straight into that grayscale framebuffer,
+ * scaling each logical LVGL pixel into a SCALE x SCALE block of
+ * panel pixels (CONFIG_DRAFTLING_DISPLAY_SCALE = 2 by default on
+ * this board). Pushes are batched
  * into a dirty bounding box; display_flush() turns on the panel
  * power rail, runs an `epd_hl_update_area` partial update over the
  * bbox, then powers the rail back off. Every
@@ -64,11 +64,28 @@
 
 #include "epdiy.h"
 #include "epd_init_config.h"
+#include "epd_board.h"
 #include <driver/i2c_master.h>
 #include <driver/ledc.h>
 #include <driver/gpio.h>
 
 #include "display.h"
+
+#if defined(CONFIG_DRAFTLING_EPDIY_BOARD_PAPERS3)
+extern "C" const EpdBoardDefinition epd_board_papers3;
+#define EPDIY_BOARD       (&epd_board_papers3)
+/* Boards without a TPS65185 / VCOM register skip the per-board
+ * VCOM calibration write. */
+#define EPDIY_HAS_VCOM    0
+/* PaperS3 has no I2C-attached EPD peripherals, so the shared-bus
+ * plumbing main.cpp publishes for the LilyGO T5 (PCA9535 + TPS65185
+ * on the same bus as GT911) is unused here. */
+#define EPDIY_USES_I2C    0
+#else
+#define EPDIY_BOARD       (&epd_board_v7)
+#define EPDIY_HAS_VCOM    1
+#define EPDIY_USES_I2C    1
+#endif
 
 static const char *TAG = "DisplayEPDIY";
 
@@ -90,8 +107,7 @@ static const char *TAG = "DisplayEPDIY";
  * Other epdiy board variants (none today) that lack a controllable
  * front-light leave EPDIY_BL_PIN unset and the whole LEDC block
  * compiles out; display_set_backlight() becomes a no-op. */
-#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE)
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 #define EPDIY_BL_PIN        11
 #endif
 
@@ -257,8 +273,7 @@ static void fill_panel_rect(int x, int y, int w, int h, uint8_t gray4)
  * black-on-white (or white-on-black) UI so a binary threshold on
  * luminance is adequate; intermediate gray values produced by LVGL's
  * font antialiasing collapse to the nearest of pure black / pure
- * white, matching the M5GFX backend's effective behaviour after its
- * own dithering passes. */
+ * white, which keeps the editor's body text crisp. */
 static inline uint8_t rgb565_to_gray4(uint16_t v)
 {
     /* Quick luma approximation: take the green channel as a proxy.
@@ -309,21 +324,23 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
      * `epd_init_with_config` supersedes `epd_init` and is called
      * INSTEAD of it; we only reach this branch when a shared bus
      * was published before display_init(). */
-    if (s_shared_i2c_bus) {
+    if (s_shared_i2c_bus && EPDIY_USES_I2C) {
         EpdI2cConfig  i2c_cfg = {};
         i2c_cfg.bus_handle    = s_shared_i2c_bus;
         EpdInitConfig cfg     = {};
         cfg.i2c               = &i2c_cfg;
-        epd_init_with_config(&epd_board_v7, &ED047TC1, EPD_LUT_1K, &cfg);
+        epd_init_with_config(EPDIY_BOARD, &ED047TC1, EPD_LUT_1K, &cfg);
     } else {
-        epd_init(&epd_board_v7, &ED047TC1, EPD_LUT_1K);
+        epd_init(EPDIY_BOARD, &ED047TC1, EPD_LUT_1K);
     }
 
+#if EPDIY_HAS_VCOM
     /* Per-panel VCOM calibration would ideally come from NVS. 1600
      * mV is the epdiy default and the value baked into
      * lilygo_board_s3.c; symptoms of wrong VCOM are fading partials
      * and uneven grays. */
     epd_set_vcom(1600);
+#endif
 
     /* Allocate front+back 4-bpp grayscale framebuffers in PSRAM. */
     s_hl = epd_hl_init(EPD_BUILTIN_WAVEFORM);
@@ -363,7 +380,7 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     backlight_pwm_init(EPDIY_BL_PIN);
 #endif
 
-    ESP_LOGI(TAG, "T5 E-Paper S3 Pro display initialized via epdiy "
+    ESP_LOGI(TAG, "epdiy display initialized "
                   "(%dx%d panel, scale=%d -> %dx%d logical), full refresh "
                   "every %d partials",
              s_width, s_height, EPDIY_SCALE,
@@ -493,8 +510,7 @@ extern "C" void display_set_partial_clip(int /*x*/, int /*y*/,
                                          int /*w*/, int /*h*/)
 {
     /* No-op on this backend; the dirty bbox already drives the
-     * refresh region. The clip hint is an optimisation specific to
-     * the M5GFX backend's debounce machinery. */
+     * refresh region. */
 }
 
 extern "C" uint8_t *display_get_buffer(void)

@@ -53,6 +53,20 @@ bool usb_kbd_is_connected(void);
  */
 void usb_kbd_set_callback(kb_event_callback_t cb);
 
+/*
+ * Callback fired when a USB HID keyboard is connected (true) or
+ * disconnected (false). Mirrors ble_keyboard_set_connect_callback()
+ * so the editor UI can react to a late USB hot-plug (e.g. dismiss
+ * the "Keyboard disconnected" prompt screen left behind by a
+ * preceding BLE disconnect) without having to poll
+ * usb_kbd_is_connected().
+ *
+ * Runs in the USB HID host event task -- do NOT block in the
+ * callback.
+ */
+typedef void (*usb_kbd_connect_cb_t)(bool connected);
+void usb_kbd_set_connect_callback(usb_kbd_connect_cb_t cb);
+
 #ifdef __cplusplus
 }
 #endif

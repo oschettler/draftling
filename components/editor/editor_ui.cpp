@@ -261,8 +261,7 @@ static const int BACKLIGHT_OPTIONS[] = {
     0,
 #endif
 #if (CONFIG_DRAFTLING_BACKLIGHT_MIN_PCT <= 5) && \
-    (defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
-     defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_LITE))
+    defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
     /* Extra-dim step for the LilyGO T5 E-Paper S3 Pro / Pro Lite
      * front-light: 10 % is already usable in a dark room but some
      * users want an even lower setting for night reading. The
@@ -557,8 +556,8 @@ static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
  * Each lv_label_set_text / lv_obj_remove_style_all / lv_obj_set_pos
  * invalidates the corresponding LVGL area, so the union of dirty
  * rectangles ended up covering nearly the whole editor area.  On the
- * M5Stack PaperS3 backend that crosses the >75% "huge area" threshold
- * in display_eds3.cpp and triggers a slow full-screen e-paper refresh
+ * e-paper backends that crosses the >75% "huge area" threshold in
+ * the display driver and triggers a slow full-screen e-paper refresh
  * on every keystroke (and on every menu navigation step, which used a
  * similar full-rebuild pattern).
  *
@@ -566,8 +565,8 @@ static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
  * skip the LVGL mutations whenever the visible content is unchanged.
  * The fast-path covers the common case of typing or moving the cursor
  * with no active selection: only the slot whose text actually changed
- * (and the cursor bar / title bar) gets invalidated, so M5GFX can run
- * a fast partial-region waveform instead of a full refresh. */
+ * (and the cursor bar / title bar) gets invalidated, so the panel can
+ * run a fast partial-region waveform instead of a full refresh. */
 static char s_prev_line_text[MAX_LINE_LABELS][256];
 static int  s_prev_line_type[MAX_LINE_LABELS];     /* md_line_type_t, -1 if cache empty */
 static int  s_prev_line_y[MAX_LINE_LABELS];        /* y_pos last used for this slot, -1 if cache empty */
@@ -729,7 +728,7 @@ static void update_title_bar(void)
      * which on e-paper backends dirties the entire title-bar strip
      * on every keystroke.  Combined with the dirty region from the
      * edited line that spans the top and bottom of the screen and
-     * triggers a full-screen refresh in display_eds3.cpp's ">75%"
+     * triggers a full-screen refresh in the e-paper driver's ">75%"
      * huge-area path.  Compare against the last text we pushed and
      * skip the call when unchanged. */
     static char s_prev_title[128] = { 0 };
@@ -4172,6 +4171,13 @@ static void build_screens(void)
     /* Register BLE status callbacks */
     ble_keyboard_set_connect_callback(ble_connect_status_cb);
     ble_keyboard_set_status_text_callback(ble_status_text_cb);
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+    /* USB keyboard hot-plug shares the same connect-state plumbing
+     * so a USB hot-plug arriving after a BLE disconnect dismisses
+     * the "Keyboard disconnected / Reconnecting..." prompt screen
+     * and restores the editor or file browser. */
+    usb_kbd_set_connect_callback(ble_connect_status_cb);
+#endif
 
     /* ---- Menu screen ---- */
     s_scr_menu = lv_obj_create(NULL);

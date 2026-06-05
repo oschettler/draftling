@@ -2,25 +2,16 @@
 ##
 ## The lvgl_port and the RLCD driver depend only on stock ESP-IDF and
 ## on the lvgl/lvgl component declared by the application. The
-## PaperS3 driver shim (display_eds3.cpp) additionally depends on the
-## m5stack/M5GFX managed component, which is pulled in only when the
-## M5Stack PaperS3 hardware model is selected so that builds for the
-## other boards remain free of that dependency. The LilyGO T5
-## E-Paper S3 Pro (and Pro Lite) backend (display_epdiy.cpp)
-## depends on the vroland/epdiy managed component, gated the same
-## way on the corresponding hardware-model symbols.
+## epdiy-based backends (LilyGO T5 E-Paper S3 Pro / Pro Lite via
+## the built-in epd_board_v7, M5Stack PaperS3 via the in-tree
+## epd_board_papers3.c) depend on the vroland/epdiy managed
+## component, gated on `target != esp32p4` because epdiy ships
+## Xtensa-only LX6/LX7 board headers.
 ##
 ## See:
-##   https://components.espressif.com/components/m5stack/m5gfx
-##   https://github.com/m5stack/M5GFX
 ##   https://components.espressif.com/components/vroland/epdiy
 ##   https://github.com/vroland/epdiy
 dependencies:
-  m5stack/m5gfx:
-    version: "^0.2.6"
-    rules:
-      - if: "idf_version >=5.3.0"
-    require: public
   ## Pinned to a post-2.0.0 git commit (no tagged release yet) that
   ## carries vroland/epdiy PR #475 ("Migrate epdiy board I2C init to
   ## the new ESP-IDF driver"). That PR migrates epdiy's on-board I2C

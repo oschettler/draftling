@@ -162,7 +162,7 @@ extern "C" esp_err_t wifi_manager_init(void)
     /* Permanent budget guard: WiFi static buffers come from internal
      * DRAM and cannot move to PSRAM, so esp_wifi_init() is the canary
      * for internal-heap exhaustion on PSRAM-heavy boards (e.g. M5Stack
-     * PaperS3 with M5GFX framebuffer + Bluedroid + LVGL). Keep this as
+     * PaperS3 with epdiy framebuffers + Bluedroid + LVGL). Keep this as
      * a single line so it is cheap enough to run on every connect
      * attempt; if INTERNAL free or largest_free_block drop below
      * ~32 KB esp_wifi_init() is likely to fail with ESP_ERR_NO_MEM. */
