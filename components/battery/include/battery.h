@@ -124,7 +124,12 @@ int battery_init_ina226(void *i2c_master_bus, int i2c_addr, int cells);
  *     on-board ILIM resistor on the LilyGO T5 is sized for ~500 mA
  *     and would otherwise clip the 2 A request,
  *   - raising the fast-charge current ICHG to 1024 mA (0.5C for a
- *     ~2 Ah cell), and
+ *     ~2 Ah cell),
+ *   - forcing VINDPM to an absolute 3.9 V (REG0D bit 7 = 1) so the
+ *     chip cannot throttle input current to hold VBUS up when a
+ *     thin USB cable sags -- the relative-VINDPM POR default
+ *     latches at ~4.4 V on a 5 V brick and otherwise crawls in
+ *     at ~0.11 A regardless of IINLIM, and
  *   - disabling the I2C watchdog so the above settings persist.
  *
  * Returns 0 on success, non-zero if the chip is not present or any

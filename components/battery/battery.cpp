@@ -452,6 +452,12 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
  *     [6:0] ICHG            fast-charge current, N * 64 mA
  *   REG07 - Charge Termination / Timer / Watchdog:
  *     [5:4] WATCHDOG        00 = disabled, 01 = 40 s (POR default)
+ *   REG0D - VINDPM Threshold:
+ *     [7]   FORCE_VINDPM    0 = relative VINDPM tracks VBUS sample
+ *                                 (= VBUS_sampled - VINDPM_OS);
+ *                            1 = use the absolute VINDPM bits below
+ *     [6:0] VINDPM          absolute threshold, 2600 mV + N * 100 mV
+ *                            (range 3.9 V .. 15.3 V)
  */
 #define BQ25896_I2C_ADDR        0x6B
 #define BQ25896_REG_ISC         0x00
@@ -459,17 +465,26 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
 #define BQ25896_REG_ICHG        0x04
 #define BQ25896_REG_TIMER       0x07
 #define BQ25896_REG_VBUS_STAT   0x0B
+#define BQ25896_REG_VINDPM      0x0D
 #define BQ25896_REG_IDPM_LIM    0x13
 
 #define BQ25896_IINLIM_BASE_MA  100
 #define BQ25896_IINLIM_STEP_MA  50
 #define BQ25896_ICHG_STEP_MA    64
+#define BQ25896_VINDPM_BASE_MV  2600
+#define BQ25896_VINDPM_STEP_MV  100
 
 /* Defaults that comfortably charge a typical 1500-2500 mAh single-cell
  * LiPo. The external ILIM resistor on the board still caps the input
  * current to whatever the hardware was designed for. */
 #define BQ25896_DEFAULT_IINLIM_MA   2000
 #define BQ25896_DEFAULT_ICHG_MA     1024
+
+/* Absolute VINDPM floor we pin the chip to. The BQ25896's minimum
+ * encodable threshold is 3.9 V; that is well below any healthy
+ * 5 V USB source even with a noticeable cable drop, so the chip
+ * effectively never enters VINDPM regulation on a wall adapter. */
+#define BQ25896_DEFAULT_VINDPM_MV   3900
 
 static i2c_master_dev_handle_t   s_bq25896_dev = NULL;
 
@@ -593,6 +608,29 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to set ICHG");
     }
 
+    /* (5) Pin VINDPM to a low absolute threshold. REG0D power-on
+     * default is FORCE_VINDPM=0 (relative mode) with VINDPM_OS
+     * (REG01[4:0]) = 600 mV. In relative mode the chip latches
+     * VINDPM = (VBUS sampled at plug-in / FORCE_DPDM completion) -
+     * VINDPM_OS, and then throttles input current the moment VBUS
+     * sags below that latched threshold. On a 5 V wall brick with a
+     * thin USB-C cable into the LilyGO T5, sampling at 5.0 V latches
+     * VINDPM to ~4.4 V; the instant we try to pull 2 A and VBUS
+     * droops to ~4.3 V the chip clamps input current to ~100 mA to
+     * hold VBUS up, and the cell crawls in at ~0.11 A even though
+     * we cleared ICO, EN_ILIM and AUTO_DPDM. Forcing VINDPM to the
+     * chip minimum of 3.9 V means VBUS would have to truly collapse
+     * before VINDPM regulation engages, so a normal 5 V supply is
+     * never throttled. */
+    uint8_t vindpm_n = (uint8_t)((BQ25896_DEFAULT_VINDPM_MV -
+                                  BQ25896_VINDPM_BASE_MV) /
+                                 BQ25896_VINDPM_STEP_MV);
+    if (vindpm_n > 0x7F) vindpm_n = 0x7F;
+    uint8_t reg0d = (uint8_t)(0x80 | (vindpm_n & 0x7F)); /* FORCE_VINDPM=1 */
+    if (bq25896_write_u8(BQ25896_REG_VINDPM, reg0d) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to set VINDPM");
+    }
+
     /* Read REG00/REG04 back so the log reflects what the chip actually
      * latched (e.g. if a bus glitch or pending watchdog reset clobbered
      * a write, the numbers below will not match the requested ones).
@@ -602,6 +640,8 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
     int iinlim_actual_ma = BQ25896_DEFAULT_IINLIM_MA;
     int ichg_actual_ma   = BQ25896_DEFAULT_ICHG_MA;
     int idpm_lim_ma      = -1;
+    int vindpm_actual_mv = BQ25896_DEFAULT_VINDPM_MV;
+    bool vindpm_forced   = true;
     uint8_t vbus_stat    = 0xFF;
     uint8_t rb = 0;
     if (bq25896_read_u8(BQ25896_REG_ISC, &rb) == 0) {
@@ -616,13 +656,20 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         idpm_lim_ma = BQ25896_IINLIM_BASE_MA +
                       (int)(rb & 0x3F) * BQ25896_IINLIM_STEP_MA;
     }
+    if (bq25896_read_u8(BQ25896_REG_VINDPM, &rb) == 0) {
+        vindpm_forced    = (rb & 0x80) != 0;
+        vindpm_actual_mv = BQ25896_VINDPM_BASE_MV +
+                           (int)(rb & 0x7F) * BQ25896_VINDPM_STEP_MV;
+    }
     (void)bq25896_read_u8(BQ25896_REG_VBUS_STAT, &vbus_stat);
 
     ESP_LOGI(TAG, "BQ25896 charger initialized at 0x%02X "
              "(IINLIM=%d mA, ICHG=%d mA, IDPM_LIM=%d mA, "
-             "REG0B=0x%02X, ICO=off, EN_ILIM=0, watchdog disabled)",
+             "VINDPM=%d mV %s, REG0B=0x%02X, ICO=off, EN_ILIM=0, "
+             "watchdog disabled)",
              BQ25896_I2C_ADDR, iinlim_actual_ma, ichg_actual_ma,
-             idpm_lim_ma, vbus_stat);
+             idpm_lim_ma, vindpm_actual_mv,
+             vindpm_forced ? "(forced)" : "(relative)", vbus_stat);
     return 0;
 }
 
