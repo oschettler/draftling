@@ -619,7 +619,7 @@ config DRAFTLING_EPD_BLACK_BACKGROUND
 config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
     int "Deep-sleep timeout when no keyboard connects (s)"
     range 0 3600
-    default 180
+    default 60
     help
         If no Bluetooth keyboard connects within this many seconds
         after boot, the device enters deep sleep to conserve battery.
@@ -632,7 +632,7 @@ config DRAFTLING_NO_KEYBOARD_SLEEP_SEC
         (settable from the editor's F1 menu and persisted in NVS)
         takes over.
 
-        Default is 180 seconds (3 minutes).
+        Default is 60 seconds (1 minute).
 
 
 endmenu
