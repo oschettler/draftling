@@ -45,6 +45,7 @@ static const char *TAG = "Draftling";
 /* Called by standby just before entering deep sleep */
 static void pre_sleep_autosave(void)
 {
+    ESP_LOGI(TAG, "Pre-sleep: autosave + EPD wipe (generic path)");
     if (editor_is_modified() && editor_get_file_path()) {
         ESP_LOGI(TAG, "Auto-saving before deep sleep...");
         esp_err_t err = editor_save_file();
@@ -186,6 +187,7 @@ static void t5_isolate_unused_gpios(void)
 
 static void pre_sleep_t5_deinit(void)
 {
+    ESP_LOGI(TAG, "Pre-sleep: LilyGO T5 peripheral teardown");
     /* Run the editor autosave + EPD wipe first; that path uses the
      * touch / display / I2C / SD subsystems while they are still up. */
     pre_sleep_autosave();
@@ -216,6 +218,68 @@ static void pre_sleep_t5_deinit(void)
     gpio_deep_sleep_hold_en();
 }
 #endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO */
+
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+/* M5Stack Tab5 (ESP32-P4): pre-sleep peripheral teardown.
+ *
+ * The Tab5 has no LP_IO-capable user input, so deep sleep can only
+ * exit via the hardware RESET button (the chip cold-boots; editor
+ * state is restored from autosave). With the BSP's default state
+ * left untouched the board still draws far more than it should in
+ * deep sleep because:
+ *
+ *   - the ESP32-C6 co-processor stays fully powered through P4 deep
+ *     sleep (WLAN_PWR_EN = PI4IOE5V6408 #2 P0 is latched HIGH at
+ *     boot and never released; the C6 LDO keeps its CPU, BLE
+ *     controller and SDIO link armed),
+ *   - the MIPI-DSI panel and its backlight stay on,
+ *   - the GT911 touch controller keeps polling at ~3 mA,
+ *   - the RTC peripherals domain is left powered.
+ *
+ * This hook drives each of those into the lowest state we can reach
+ * from software, in the order dictated by their dependencies (the
+ * I/O expander writes must happen while bsp_i2c is still up; the
+ * panel disable is safe at any time because the BSP owns it).
+ *
+ * Wake path is unchanged: the chip cold-boots on RESET and re-runs
+ * app_main(), which re-asserts WLAN_PWR_EN and CHG_EN through the
+ * same BSP / expander code used at first boot. */
+static void pre_sleep_tab5_deinit(void)
+{
+    ESP_LOGI(TAG, "Pre-sleep: M5Stack Tab5 peripheral teardown");
+
+    /* Editor autosave first while every bus is still up. */
+    pre_sleep_autosave();
+
+    /* GT911 -> sleep (uses the BSP-owned I2C bus, which is still up). */
+    touchscreen_sleep();
+
+    /* MIPI-DSI panel + backlight off via the BSP-managed handles. */
+    display_deep_sleep_prepare();
+
+    /* Drop the ESP32-C6 power rail. The PI4IOE5V6408 latches the
+     * pin state across P4 deep sleep, so the rail stays off until
+     * the next cold boot re-runs bsp_feature_enable(BSP_FEATURE_WIFI,
+     * true) in app_main(). Use the BSP API rather than poking the
+     * expander directly so the driver's shadow register stays in
+     * sync with the chip; otherwise a later RMW on any other pin
+     * on the same expander would un-clear our bit. */
+    {
+        esp_err_t err = bsp_feature_enable(BSP_FEATURE_WIFI, false);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Tab5: WLAN_PWR_EN dropped (ESP32-C6 off)");
+        } else {
+            ESP_LOGW(TAG, "Tab5: bsp_feature_enable(WIFI, false) failed: %s",
+                     esp_err_to_name(err));
+        }
+    }
+
+    /* Power down the RTC peripherals domain. Draftling has no ULP
+     * and no RTC SLOW data to retain across wake, so dropping this
+     * domain shaves a few mA on ESP32-P4 over the default. */
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+}
+#endif /* CONFIG_DRAFTLING_MODEL_M5STACK_TAB5 */
 
 extern "C" void app_main(void)
 {
@@ -803,6 +867,8 @@ extern "C" void app_main(void)
     standby_init();
 #if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
     standby_set_pre_sleep_cb(pre_sleep_t5_deinit);
+#elif defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+    standby_set_pre_sleep_cb(pre_sleep_tab5_deinit);
 #else
     standby_set_pre_sleep_cb(pre_sleep_autosave);
 #endif
