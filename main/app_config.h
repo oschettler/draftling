@@ -535,36 +535,40 @@
 #define I2C_SDA_PIN         31
 #define I2C_SCL_PIN         32
 
-/* GT911 touch controller. The GT911 latches its 7-bit I2C address
- * (0x14 backup, 0x5D primary) from the level of its INT line at the
- * rising edge of its internal power-on reset. The Tab5 has a 3V3
- * pull-up on INT (GPIO23) that would otherwise force the GT911 to
- * come up at 0x5D, but the board only routes the backup-address
- * path -- so primary-address mode behaves as if the controller were
- * dead.
+/* M5Stack Tab5 touch controller. Two hardware variants exist:
  *
- * On this board the GT911 RST is *not* wired to any ESP32-P4 GPIO
- * (the BSP exposes `rst_gpio_num = GPIO_NUM_NC` and
- * `BSP_LCD_RST = GPIO_NUM_NC`), so the only way to actually re-run
- * the GT911 internal POR and re-latch the address is to power-cycle
- * the TOUCH_EN rail driven by the first PI4IOE5V6408 I/O expander
- * (pin BSP_TOUCH_EN = IO5). main.cpp does this before display_init()
- * runs: it pre-drives GPIO23 LOW (push-pull output, overriding the
- * 3V3 pull-up) and then toggles BSP_TOUCH_EN low -> high through the
- * PI4IOE5V6408 (covers the warm-reboot case where TOUCH_EN was
- * already high from a previous boot and the GT911 would otherwise
- * have latched 0x5D before we got control). The touchscreen
- * component then probes 0x14 first and skips the 0x5D fallback.
- * RST stays -1 below because no SoC GPIO is wired to GT911 RST.
+ *   - v1: Goodix GT911 capacitive touch at I2C 0x14 (backup
+ *         address). RST is not wired to any ESP32-P4 GPIO, so
+ *         the GT911 internal POR is triggered by power-cycling
+ *         BSP_TOUCH_EN through the first PI4IOE5V6408. main.cpp
+ *         pre-drives GPIO23 LOW (overriding the 3V3 pull-up on
+ *         INT) before that toggle so the GT911 latches its
+ *         backup address rather than the unused 0x5D.
  *
- * GT911 reports panel-native coordinates 720 x 1280 portrait
- * (BSP panel orientation, INT/USB-C edge at the top of the GT911
- * frame). draftling_lvgl_port_init() is called with rotate_deg=90 to render
- * the editor landscape, and the touchscreen component applies the
- * same user_rotate_deg to map GT911 (x,y) -> LVGL (x,y). The
- * BSP-side swap/mirror is identity, so set both to 0 here too;
- * mirror flags can be flipped at hardware bring-up if the panel
- * arrives factory-flashed with a different orientation. */
+ *   - v2: Sitronix ST7123 integrated panel+touch at I2C 0x55.
+ *         No INT-latch dance is needed.
+ *
+ * Rather than re-implement the per-variant bring-up, the
+ * Draftling touchscreen component delegates to the upstream
+ * espressif/m5stack_tab5 BSP's bsp_touch_new() on this board.
+ * The BSP probes 0x55 first (ST7123, board v2) and falls back
+ * to 0x14 backup (GT911, board v1), instantiates the matching
+ * esp_lcd_touch_* driver, and returns a generic
+ * esp_lcd_touch_handle_t. touchscreen.cpp polls through
+ * esp_lcd_touch_read_data + esp_lcd_touch_get_coordinates so
+ * the same source handles both variants transparently. The
+ * pre-display TOUCH_EN power-cycle in main.cpp still runs (it
+ * is the only thing that fixes the v1 GT911 address latch).
+ *
+ * TOUCH_I2C_ADDR / TOUCH_RST_PIN below are kept as nominal
+ * (v1 GT911) values for the legacy touchscreen_config_t struct;
+ * the BSP path ignores them and uses BSP_LCD_TOUCH_INT for INT
+ * and GPIO_NUM_NC for RST. Native panel coordinate range is
+ * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
+ * draftling_lvgl_port_init() is called with rotate_deg=90 to
+ * render the editor landscape, and touchscreen.cpp applies the
+ * same user_rotate_deg when mapping native (x,y) -> LVGL. The
+ * BSP exposes identity swap/mirror so both stay 0 here. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
