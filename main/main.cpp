@@ -461,10 +461,11 @@ extern "C" void app_main(void)
                  * 500 ms inside bsp_get_board_version() covers the
                  * rest. */
                 vTaskDelay(pdMS_TO_TICKS(60));
-                ESP_LOGI(TAG, "Tab5 GT911: TOUCH_EN power-cycled with "
-                              "INT held low (expecting I2C 0x14)");
+                ESP_LOGI(TAG, "Tab5 touch: TOUCH_EN power-cycled with "
+                              "INT held low (selects GT911 0x14 on v1; "
+                              "v2 ST7123 at 0x55 ignores INT)");
             } else {
-                ESP_LOGW(TAG, "Tab5 GT911: TOUCH_EN power-cycle failed: %s",
+                ESP_LOGW(TAG, "Tab5 touch: TOUCH_EN power-cycle failed: %s",
                          esp_err_to_name(err));
             }
         }
