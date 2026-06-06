@@ -440,8 +440,14 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
  *     [6]   EN_ILIM         (0 = ignore ILIM pin, use IINLIM register;
  *                            1 = take min(IINLIM, I_LIM_pin))
  *     [5:0] IINLIM          input current limit, 100 mA + N * 50 mA
- *   REG02 - ADC & D+/D- detection:
- *     [1]   AUTO_DPDM_EN    (0 = do not re-run D+/D- on plug-in)
+ *   REG02 - ADC, ICO and D+/D- detection:
+ *     [4]   ICO_EN          (0 = disable Input Current Optimizer;
+ *                            1 = let the chip dynamically pick
+ *                                IDPM_LIM <= IINLIM based on VBUS sag)
+ *     [3]   HVDCP_EN        (0 = no HVDCP / QC handshake)
+ *     [2]   MAXC_EN         (0 = no MaxCharge handshake)
+ *     [1]   FORCE_DPDM      (write 1 to trigger a one-shot D+/D- detect)
+ *     [0]   AUTO_DPDM_EN    (0 = do not re-run D+/D- on plug-in)
  *   REG04 - Fast Charge Current Control:
  *     [6:0] ICHG            fast-charge current, N * 64 mA
  *   REG07 - Charge Termination / Timer / Watchdog:
@@ -452,6 +458,8 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
 #define BQ25896_REG_ADC         0x02
 #define BQ25896_REG_ICHG        0x04
 #define BQ25896_REG_TIMER       0x07
+#define BQ25896_REG_VBUS_STAT   0x0B
+#define BQ25896_REG_IDPM_LIM    0x13
 
 #define BQ25896_IINLIM_BASE_MA  100
 #define BQ25896_IINLIM_STEP_MA  50
@@ -534,11 +542,31 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to disable I2C watchdog");
     }
 
-    /* (2) Disable AUTO_DPDM so D+/D- detection doesn't keep
-     * snapping IINLIM back to 500 mA (USB SDP) whenever the cable
-     * is replugged or the host re-enumerates. */
-    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x02 /* AUTO_DPDM_EN */, 0x00) != 0) {
-        ESP_LOGW(TAG, "BQ25896: failed to disable AUTO_DPDM");
+    /* (2) Disable the source-detection state machine. REG02 power-on
+     * default is 0x3D (CONV_RATE=0, BOOST_FREQ=1, ICO_EN=1, HVDCP_EN=1,
+     * MAXC_EN=1, FORCE_DPDM=0, AUTO_DPDM_EN=1). We clear:
+     *
+     *   - ICO_EN (bit 4): the Input Current Optimizer dynamically
+     *     reduces the *actual* input current limit (IDPM_LIM, REG13)
+     *     below IINLIM whenever it detects VBUS sag. On a ~500 mA
+     *     wall brick + a thin USB-C cable into the LilyGO T5 it
+     *     converges to ~150 mA, so charging crawls at 0.11-0.15 A
+     *     even though we asked for 2 A. With ICO_EN=0 the IINLIM
+     *     register is the only ceiling and the chip stops pulling
+     *     itself back.
+     *   - HVDCP_EN (bit 3) / MAXC_EN (bit 2): no QC / MaxCharge
+     *     handshake; we are a plain USB device. Leaving these on
+     *     can cause the chip to renegotiate and drop IINLIM on the
+     *     fly.
+     *   - AUTO_DPDM_EN (bit 0): do not re-run D+/D- on plug-in,
+     *     which would otherwise snap IINLIM back to 500 mA (USB SDP)
+     *     whenever the cable is replugged or the host re-enumerates.
+     *     (Note: the bit lives at position 0, not 1 -- bit 1 is
+     *     FORCE_DPDM, a write-1-to-trigger pulse, default 0.)
+     *
+     * Mask 0x1D = ICO_EN | HVDCP_EN | MAXC_EN | AUTO_DPDM_EN. */
+    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x1D, 0x00) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to disable ICO / HVDCP / AUTO_DPDM");
     }
 
     /* (3) Raise IINLIM. Clear EN_ILIM (bit 6) so the IINLIM register
@@ -567,9 +595,14 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
 
     /* Read REG00/REG04 back so the log reflects what the chip actually
      * latched (e.g. if a bus glitch or pending watchdog reset clobbered
-     * a write, the numbers below will not match the requested ones). */
+     * a write, the numbers below will not match the requested ones).
+     * Also surface the post-ICO actual input limit (REG13 IDPM_LIM)
+     * and the VBUS / charge status (REG0B) so a "still charging slowly"
+     * regression is immediately obvious from the boot log. */
     int iinlim_actual_ma = BQ25896_DEFAULT_IINLIM_MA;
     int ichg_actual_ma   = BQ25896_DEFAULT_ICHG_MA;
+    int idpm_lim_ma      = -1;
+    uint8_t vbus_stat    = 0xFF;
     uint8_t rb = 0;
     if (bq25896_read_u8(BQ25896_REG_ISC, &rb) == 0) {
         iinlim_actual_ma = BQ25896_IINLIM_BASE_MA +
@@ -578,10 +611,18 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
     if (bq25896_read_u8(BQ25896_REG_ICHG, &rb) == 0) {
         ichg_actual_ma = (int)(rb & 0x7F) * BQ25896_ICHG_STEP_MA;
     }
+    if (bq25896_read_u8(BQ25896_REG_IDPM_LIM, &rb) == 0) {
+        /* IDPM_LIM uses the same 100 mA + N * 50 mA encoding as IINLIM. */
+        idpm_lim_ma = BQ25896_IINLIM_BASE_MA +
+                      (int)(rb & 0x3F) * BQ25896_IINLIM_STEP_MA;
+    }
+    (void)bq25896_read_u8(BQ25896_REG_VBUS_STAT, &vbus_stat);
 
     ESP_LOGI(TAG, "BQ25896 charger initialized at 0x%02X "
-             "(IINLIM=%d mA, ICHG=%d mA, EN_ILIM=0, watchdog disabled)",
-             BQ25896_I2C_ADDR, iinlim_actual_ma, ichg_actual_ma);
+             "(IINLIM=%d mA, ICHG=%d mA, IDPM_LIM=%d mA, "
+             "REG0B=0x%02X, ICO=off, EN_ILIM=0, watchdog disabled)",
+             BQ25896_I2C_ADDR, iinlim_actual_ma, ichg_actual_ma,
+             idpm_lim_ma, vbus_stat);
     return 0;
 }
 
