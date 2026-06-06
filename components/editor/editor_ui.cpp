@@ -4159,6 +4159,22 @@ static void build_screens(void)
     /* ---- BLE connection prompt screen ---- */
     s_scr_ble_prompt = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_ble_prompt, theme_bg(), 0);
+    /* The default theme on lv_obj_create() puts a few pixels of
+     * padding and a SCROLLABLE flag on the screen. Both interfere
+     * with the absolutely-positioned children below: the padding
+     * shifts every lv_obj_set_pos() by ~12px (so the upper-right
+     * Off button drifts partly off the right edge of the screen
+     * and its visible portion no longer matches its hit area),
+     * and SCROLLABLE turns any small touch jitter into a scroll
+     * gesture that swallows the Off button's CLICKED event. Pin
+     * the screen to a 0-padding, non-scrollable surface so the
+     * children behave the same way they do on the editor /
+     * browser screens, where the same off-the-shelf positions
+     * have always worked. */
+    lv_obj_set_style_pad_all(s_scr_ble_prompt, 0, 0);
+    lv_obj_set_style_border_width(s_scr_ble_prompt, 0, 0);
+    lv_obj_set_scrollbar_mode(s_scr_ble_prompt, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(s_scr_ble_prompt, LV_OBJ_FLAG_SCROLLABLE);
 
     /* "draftling" title centered near the top */
     {
@@ -4220,7 +4236,12 @@ static void build_screens(void)
     {
         lv_obj_t *off_btn = lv_button_create(s_scr_ble_prompt);
         lv_obj_set_size(off_btn, 40, 24);
-        lv_obj_set_pos(off_btn, SCR_W - 44, 4);
+        /* Anchor to the top-right corner with a small inset so the
+         * button stays fully on-screen and its hit area matches the
+         * pixels the user sees, independent of the parent screen's
+         * padding (which the default LVGL theme may bump non-zero
+         * on a future LVGL release). */
+        lv_obj_align(off_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
         lv_obj_set_style_bg_color(off_btn, theme_bg(), 0);
         lv_obj_set_style_bg_opa(off_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(off_btn, theme_fg(), 0);
