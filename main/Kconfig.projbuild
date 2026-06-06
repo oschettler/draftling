@@ -265,6 +265,19 @@ config DRAFTLING_BATTERY_INA226
     default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
 
+# Enables the BQ25896 single-cell Li-ion charger init in
+# components/battery (battery_init_bq25896). The chip lives on the
+# shared I2C bus at 0x6B on the LilyGO T5 E-Paper S3 Pro / Pro Lite
+# and ships with conservative defaults (500 mA IINLIM, 40 s I2C
+# watchdog that reverts host writes, AUTO_DPDM that re-snaps IINLIM
+# back to USB SDP). Without an explicit init the cell only charges
+# at ~500 mA. main.cpp calls battery_init_bq25896(shared_i2c_bus)
+# right after the shared bus is created when this symbol is set.
+config DRAFTLING_CHARGER_BQ25896
+    bool
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default n
+
 # Enables the USB Host stack + USB HID keyboard driver
 # (components/usb_kbd) on boards that wire a host-mode USB-A port.
 # On M5Stack Tab5 the USB-A connector is gated by BSP_FEATURE_USB

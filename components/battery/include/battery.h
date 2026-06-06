@@ -93,6 +93,41 @@ int battery_init_bq27220(void *i2c_master_bus);
 int battery_init_ina226(void *i2c_master_bus, int i2c_addr, int cells);
 
 /*
+ * Initialize the TI BQ25896 single-cell Li-ion charger on an existing
+ * I2C master bus (driver/i2c_master.h). This is a charger, not a
+ * monitor: it does not change what battery_read_mv() /
+ * battery_read_percent() return. Calling it is independent of the
+ * monitor backend selection (the LilyGO T5 E-Paper S3 Pro uses the
+ * BQ27220 fuel gauge for SoC and the BQ25896 for charging on the
+ * same I2C bus).
+ *
+ *   i2c_master_bus -- opaque pointer to an i2c_master_bus_handle_t.
+ *
+ * The default BQ25896 power-on configuration is conservative:
+ * IINLIM defaults to 500 mA (USB SDP), AUTO_DPDM is enabled (so a
+ * fresh D+/D- detection on every plug-in keeps resetting IINLIM
+ * back to 500 mA when no host is present), and the I2C watchdog
+ * times out after 40 s and reverts any host-written settings. The
+ * net effect on boards like the LilyGO T5 E-Paper S3 Pro is that
+ * the cell only ever charges at ~500 mA regardless of what the
+ * adapter can deliver.
+ *
+ * This routine fixes that by:
+ *   - disabling AUTO_DPDM_EN so the chip stops overriding IINLIM
+ *     after D+/D- detection,
+ *   - raising IINLIM to 2000 mA (still gated by the on-board ILIM
+ *     resistor via EN_ILIM=1, so the hardware-defined ceiling is
+ *     preserved),
+ *   - raising the fast-charge current ICHG to 1024 mA (0.5C for a
+ *     ~2 Ah cell), and
+ *   - disabling the I2C watchdog so the above settings persist.
+ *
+ * Returns 0 on success, non-zero if the chip is not present or any
+ * I2C write fails.
+ */
+int battery_init_bq25896(void *i2c_master_bus);
+
+/*
  * Read the current battery voltage in millivolts.
  * Returns 0 if the sensor has not been initialized.
  */

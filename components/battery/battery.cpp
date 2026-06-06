@@ -427,6 +427,148 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
     return 0;
 }
 
+/* ---- BQ25896 charger ----
+ *
+ * The BQ25896 is a single-cell I2C-controlled buck charger at
+ * 7-bit address 0x6B. We only touch four registers, leaving JEITA
+ * thermistor, charge timer, BATFET and OTG configuration at their
+ * power-on defaults. See the public header for the rationale.
+ *
+ * Register map (subset):
+ *   REG00 - Input Source Control:
+ *     [7]   EN_HIZ          (0 = not in HIZ)
+ *     [6]   EN_ILIM         (1 = honor external ILIM resistor)
+ *     [5:0] IINLIM          input current limit, 100 mA + N * 50 mA
+ *   REG02 - ADC & D+/D- detection:
+ *     [1]   AUTO_DPDM_EN    (0 = do not re-run D+/D- on plug-in)
+ *   REG04 - Fast Charge Current Control:
+ *     [6:0] ICHG            fast-charge current, N * 64 mA
+ *   REG07 - Charge Termination / Timer / Watchdog:
+ *     [5:4] WATCHDOG        00 = disabled, 01 = 40 s (POR default)
+ */
+#define BQ25896_I2C_ADDR        0x6B
+#define BQ25896_REG_ISC         0x00
+#define BQ25896_REG_ADC         0x02
+#define BQ25896_REG_ICHG        0x04
+#define BQ25896_REG_TIMER       0x07
+
+#define BQ25896_IINLIM_BASE_MA  100
+#define BQ25896_IINLIM_STEP_MA  50
+#define BQ25896_ICHG_STEP_MA    64
+
+/* Defaults that comfortably charge a typical 1500-2500 mAh single-cell
+ * LiPo. The external ILIM resistor on the board still caps the input
+ * current to whatever the hardware was designed for. */
+#define BQ25896_DEFAULT_IINLIM_MA   2000
+#define BQ25896_DEFAULT_ICHG_MA     1024
+
+static i2c_master_dev_handle_t   s_bq25896_dev = NULL;
+
+static int bq25896_read_u8(uint8_t reg, uint8_t *out)
+{
+    if (!s_bq25896_dev) return -1;
+    uint8_t wr[1] = { reg };
+    if (i2c_master_transmit_receive(s_bq25896_dev, wr, 1, out, 1,
+                                    100 /* ms */) != ESP_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+static int bq25896_write_u8(uint8_t reg, uint8_t val)
+{
+    if (!s_bq25896_dev) return -1;
+    uint8_t wr[2] = { reg, val };
+    if (i2c_master_transmit(s_bq25896_dev, wr, 2, 100 /* ms */) != ESP_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Read-modify-write a single register, leaving bits outside `mask`
+ * untouched. Returns 0 on success. */
+static int bq25896_rmw_u8(uint8_t reg, uint8_t mask, uint8_t val)
+{
+    uint8_t cur = 0;
+    if (bq25896_read_u8(reg, &cur) != 0) return -1;
+    uint8_t next = (uint8_t)((cur & ~mask) | (val & mask));
+    if (next == cur) return 0;
+    return bq25896_write_u8(reg, next);
+}
+
+extern "C" int battery_init_bq25896(void *i2c_master_bus)
+{
+    if (s_bq25896_dev != NULL) return 0;
+    if (i2c_master_bus == NULL) {
+        ESP_LOGW(TAG, "BQ25896 init: NULL I2C bus handle");
+        return -1;
+    }
+
+    i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)i2c_master_bus;
+
+    if (i2c_master_probe(bus, BQ25896_I2C_ADDR, 100 /* ms */) != ESP_OK) {
+        ESP_LOGW(TAG, "BQ25896 not responding at 0x%02X", BQ25896_I2C_ADDR);
+        return -1;
+    }
+
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address  = BQ25896_I2C_ADDR;
+    dev_cfg.scl_speed_hz    = 400000;
+    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &s_bq25896_dev);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BQ25896 bus_add_device failed: %s",
+                 esp_err_to_name(err));
+        s_bq25896_dev = NULL;
+        return -1;
+    }
+
+    /* (1) Disable the I2C watchdog FIRST so the subsequent writes
+     * cannot be silently reverted to defaults 40 s later. REG07
+     * power-on default is 0x9D (EN_TERM=1, WATCHDOG=01 = 40 s,
+     * EN_TIMER=1, CHG_TIMER=01 = 12 h, JEITA_ISET=1). Clearing
+     * bits 5:4 disables the watchdog while leaving termination,
+     * the safety timer and JEITA scaling untouched. */
+    if (bq25896_rmw_u8(BQ25896_REG_TIMER, 0x30 /* WATCHDOG */, 0x00) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to disable I2C watchdog");
+    }
+
+    /* (2) Disable AUTO_DPDM so D+/D- detection doesn't keep
+     * snapping IINLIM back to 500 mA (USB SDP) whenever the cable
+     * is replugged or the host re-enumerates. */
+    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x02 /* AUTO_DPDM_EN */, 0x00) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to disable AUTO_DPDM");
+    }
+
+    /* (3) Raise IINLIM. Keep EN_HIZ=0 and EN_ILIM=1 (bit 6) so the
+     * external ILIM resistor still defines the hardware ceiling and
+     * the register only sets the upper bound the firmware is
+     * willing to draw. */
+    uint8_t iinlim_n = (uint8_t)((BQ25896_DEFAULT_IINLIM_MA -
+                                  BQ25896_IINLIM_BASE_MA) /
+                                 BQ25896_IINLIM_STEP_MA);
+    if (iinlim_n > 0x3F) iinlim_n = 0x3F;
+    uint8_t reg00 = (uint8_t)(0x40 /* EN_ILIM=1 */ | (iinlim_n & 0x3F));
+    if (bq25896_write_u8(BQ25896_REG_ISC, reg00) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to set IINLIM");
+    }
+
+    /* (4) Raise fast-charge current. REG04 bit 7 (EN_PUMPX) stays
+     * at its default 0. */
+    uint8_t ichg_n = (uint8_t)(BQ25896_DEFAULT_ICHG_MA /
+                               BQ25896_ICHG_STEP_MA);
+    if (ichg_n > 0x7F) ichg_n = 0x7F;
+    if (bq25896_write_u8(BQ25896_REG_ICHG, (uint8_t)(ichg_n & 0x7F)) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to set ICHG");
+    }
+
+    ESP_LOGI(TAG, "BQ25896 charger initialized at 0x%02X "
+             "(IINLIM=%d mA, ICHG=%d mA, watchdog disabled)",
+             BQ25896_I2C_ADDR, BQ25896_DEFAULT_IINLIM_MA,
+             BQ25896_DEFAULT_ICHG_MA);
+    return 0;
+}
+
 extern "C" int battery_read_mv(void)
 {
     if (s_backend == BATT_BACKEND_BQ27220) {

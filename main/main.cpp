@@ -489,6 +489,21 @@ extern "C" void app_main(void)
     battery_init(BATT_ADC_PIN, BATT_EN_PIN, BATT_DIVIDER);
 #endif
 
+#if defined(CONFIG_DRAFTLING_CHARGER_BQ25896)
+    /* LilyGO T5 E-Paper S3 Pro / Pro Lite: the on-board BQ25896
+     * charger powers up with USB-SDP-class settings (500 mA IINLIM,
+     * AUTO_DPDM re-detecting on every plug-in, 40 s I2C watchdog
+     * that reverts host writes) and would otherwise charge the cell
+     * at ~500 mA regardless of the wall adapter rating. Lift the
+     * input current limit, raise the fast-charge current and
+     * disable the watchdog so the settings persist. Uses the same
+     * shared I2C bus as the BQ27220 fuel gauge (chip at 0x6B). */
+    if (battery_init_bq25896(shared_i2c_bus) != 0) {
+        ESP_LOGW(TAG, "BQ25896 charger init failed; "
+                      "device will charge at reduced rate");
+    }
+#endif
+
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");
     if (draftling_lvgl_port_lock(-1)) {
