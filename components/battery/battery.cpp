@@ -437,7 +437,8 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
  * Register map (subset):
  *   REG00 - Input Source Control:
  *     [7]   EN_HIZ          (0 = not in HIZ)
- *     [6]   EN_ILIM         (1 = honor external ILIM resistor)
+ *     [6]   EN_ILIM         (0 = ignore ILIM pin, use IINLIM register;
+ *                            1 = take min(IINLIM, I_LIM_pin))
  *     [5:0] IINLIM          input current limit, 100 mA + N * 50 mA
  *   REG02 - ADC & D+/D- detection:
  *     [1]   AUTO_DPDM_EN    (0 = do not re-run D+/D- on plug-in)
@@ -540,15 +541,17 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to disable AUTO_DPDM");
     }
 
-    /* (3) Raise IINLIM. Keep EN_HIZ=0 and EN_ILIM=1 (bit 6) so the
-     * external ILIM resistor still defines the hardware ceiling and
-     * the register only sets the upper bound the firmware is
-     * willing to draw. */
+    /* (3) Raise IINLIM. Clear EN_ILIM (bit 6) so the IINLIM register
+     * is the sole input-current ceiling. With EN_ILIM=1 the chip
+     * uses min(IINLIM, I_LIM_pin), and on boards such as the LilyGO
+     * T5 E-Paper S3 Pro the external ILIM resistor is sized for only
+     * ~500 mA, silently clipping the 2 A we ask for here and making
+     * charging crawl. EN_HIZ stays 0 (not in HIZ). */
     uint8_t iinlim_n = (uint8_t)((BQ25896_DEFAULT_IINLIM_MA -
                                   BQ25896_IINLIM_BASE_MA) /
                                  BQ25896_IINLIM_STEP_MA);
     if (iinlim_n > 0x3F) iinlim_n = 0x3F;
-    uint8_t reg00 = (uint8_t)(0x40 /* EN_ILIM=1 */ | (iinlim_n & 0x3F));
+    uint8_t reg00 = (uint8_t)(iinlim_n & 0x3F); /* EN_HIZ=0, EN_ILIM=0 */
     if (bq25896_write_u8(BQ25896_REG_ISC, reg00) != 0) {
         ESP_LOGW(TAG, "BQ25896: failed to set IINLIM");
     }
@@ -562,10 +565,23 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to set ICHG");
     }
 
+    /* Read REG00/REG04 back so the log reflects what the chip actually
+     * latched (e.g. if a bus glitch or pending watchdog reset clobbered
+     * a write, the numbers below will not match the requested ones). */
+    int iinlim_actual_ma = BQ25896_DEFAULT_IINLIM_MA;
+    int ichg_actual_ma   = BQ25896_DEFAULT_ICHG_MA;
+    uint8_t rb = 0;
+    if (bq25896_read_u8(BQ25896_REG_ISC, &rb) == 0) {
+        iinlim_actual_ma = BQ25896_IINLIM_BASE_MA +
+                           (int)(rb & 0x3F) * BQ25896_IINLIM_STEP_MA;
+    }
+    if (bq25896_read_u8(BQ25896_REG_ICHG, &rb) == 0) {
+        ichg_actual_ma = (int)(rb & 0x7F) * BQ25896_ICHG_STEP_MA;
+    }
+
     ESP_LOGI(TAG, "BQ25896 charger initialized at 0x%02X "
-             "(IINLIM=%d mA, ICHG=%d mA, watchdog disabled)",
-             BQ25896_I2C_ADDR, BQ25896_DEFAULT_IINLIM_MA,
-             BQ25896_DEFAULT_ICHG_MA);
+             "(IINLIM=%d mA, ICHG=%d mA, EN_ILIM=0, watchdog disabled)",
+             BQ25896_I2C_ADDR, iinlim_actual_ma, ichg_actual_ma);
     return 0;
 }
 
