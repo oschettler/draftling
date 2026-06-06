@@ -319,6 +319,12 @@ static bool poll_bsp_touch(int *out_x, int *out_y)
 
     int lx, ly;
     native_to_logical((int)x, (int)y, &lx, &ly);
+    /* Diagnostic log: raw native coordinates from the BSP-managed
+     * esp_lcd_touch driver and the logical coordinates we hand to
+     * LVGL after native_to_logical(). Used to dial in TOUCH_SWAP_XY /
+     * TOUCH_MIRROR_* / user_rotate_deg on the Tab5. */
+    ESP_LOGI(TAG, "bsp touch raw=(%u,%u) cnt=%u -> logical=(%d,%d)",
+             (unsigned)x, (unsigned)y, (unsigned)cnt, lx, ly);
     if (out_x) *out_x = lx;
     if (out_y) *out_y = ly;
     return true;
@@ -417,13 +423,20 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
     }
 
     s_initialized = true;
-    ESP_LOGI(TAG, "Tab5 BSP touch initialized "
-                  "(handle=%p, native=%dx%d, logical=%dx%d, "
-                  "mirror_x=%d mirror_y=%d swap_xy=%d)",
-             (void *)s_bsp_tp,
-             s_cfg.native_width, s_cfg.native_height,
-             s_cfg.logical_width, s_cfg.logical_height,
-             (int)s_cfg.mirror_x, (int)s_cfg.mirror_y, (int)s_cfg.swap_xy);
+    {
+        lv_display_t *d = lv_display_get_default();
+        int32_t dw = d ? lv_display_get_horizontal_resolution(d) : -1;
+        int32_t dh = d ? lv_display_get_vertical_resolution(d) : -1;
+        ESP_LOGI(TAG, "Tab5 BSP touch initialized "
+                      "(handle=%p, native=%dx%d, logical=%dx%d, "
+                      "mirror_x=%d mirror_y=%d swap_xy=%d, "
+                      "user_rotate_deg=%d, lvgl_disp=%ldx%ld)",
+                 (void *)s_bsp_tp,
+                 s_cfg.native_width, s_cfg.native_height,
+                 s_cfg.logical_width, s_cfg.logical_height,
+                 (int)s_cfg.mirror_x, (int)s_cfg.mirror_y, (int)s_cfg.swap_xy,
+                 s_cfg.user_rotate_deg, (long)dw, (long)dh);
+    }
     return;
 #else
 
