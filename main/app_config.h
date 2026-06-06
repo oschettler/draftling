@@ -535,16 +535,18 @@
 #define I2C_SDA_PIN         31
 #define I2C_SCL_PIN         32
 
-/* GT911 touch controller. The BSP forces the alternate (backup)
- * I2C address 0x14 at startup by holding the INT line LOW during
- * GT911 internal reset -- there is a hardware pull-up to 3V3 on
- * INT that would otherwise select the primary 0x5D address but
- * the GT911 stops responding under that condition (Tab5 board
- * quirk documented in bsp/m5stack_tab5/src/bsp_display.c). The
- * touchscreen component probes both addresses with primary first,
- * so we list the backup here to skip the failing primary probe
- * and speed up boot. RST is wired to the PI4IOE5V6408 (not to an
- * ESP32-P4 GPIO), so we leave the dedicated RST at -1.
+/* GT911 touch controller. The GT911 latches its 7-bit I2C address
+ * (0x14 backup, 0x5D primary) from the level of its INT line during
+ * power-on / internal reset. The Tab5 has a hardware pull-up to 3V3
+ * on INT (GPIO23) that would otherwise force the GT911 to come up
+ * at 0x5D, but the board only routes the chip's responses for the
+ * backup-address path -- so primary-address mode behaves as if the
+ * controller were dead. main.cpp pre-drives GPIO23 LOW *before*
+ * display_init() runs (which is what powers TOUCH_EN via the
+ * PI4IOE5V6408 the very first time), making the GT911 latch 0x14.
+ * The touchscreen component then probes 0x14 first and skips the
+ * pointless 0x5D fallback. RST is wired to the PI4IOE5V6408 (not to
+ * an ESP32-P4 GPIO), so we leave the dedicated RST at -1.
  *
  * GT911 reports panel-native coordinates 720 x 1280 portrait
  * (BSP panel orientation, INT/USB-C edge at the top of the GT911

@@ -370,6 +370,45 @@ extern "C" void app_main(void)
         }
     }
 
+    /* M5Stack Tab5 GT911 I2C address selection.
+     *
+     * The GT911 latches its 7-bit I2C address from the level on its
+     * INT pin at the moment it comes out of power-on / reset:
+     *   INT low  during reset -> backup  address 0x14
+     *   INT high during reset -> primary address 0x5D
+     *
+     * On the Tab5 there is a hardware pull-up to 3V3 on INT
+     * (GPIO23). If we leave that pull-up to win, the GT911 latches
+     * 0x5D, but the BSP probes only the backup 0x14 (and our own
+     * TOUCH_I2C_ADDR is 0x14 to match), so touch ends up dead --
+     * we either fail to bind, or bind to 0x5D and read garbage
+     * because the controller is in the wrong mode for this board.
+     *
+     * The m5stack_tab5 BSP works around this in bsp_touch_new()
+     * by driving INT low as an output before bringing TOUCH_EN up.
+     * We do not call bsp_touch_new() (Draftling has its own GT911
+     * driver in components/touchscreen), so replicate the fix here:
+     * drive GPIO23 LOW *before* display_init(), because the BSP's
+     * bsp_display_new_with_handles() -> bsp_get_board_version()
+     * is what powers TOUCH_EN up via bsp_feature_enable() the very
+     * first time. With INT pre-pulled low at that moment the GT911
+     * powers up at 0x14 as expected. touchscreen_init() further
+     * down later reconfigures the pin to INPUT+pull-up for the
+     * normal "data ready" signalling -- by then the GT911 address
+     * is already latched and stable. */
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN) && TOUCH_INT_PIN >= 0
+    {
+        gpio_config_t int_cfg = {};
+        int_cfg.intr_type    = GPIO_INTR_DISABLE;
+        int_cfg.mode         = GPIO_MODE_OUTPUT;
+        int_cfg.pin_bit_mask = (1ULL << TOUCH_INT_PIN);
+        int_cfg.pull_up_en   = GPIO_PULLUP_DISABLE;
+        int_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        gpio_config(&int_cfg);
+        gpio_set_level((gpio_num_t)TOUCH_INT_PIN, 0);
+    }
+#endif
+
     /* M5Stack Tab5 battery charger enable (CHG_EN, P7 on the second
      * PI4IOE5V6408) is asserted later, AFTER `bsp_feature_enable()`
      * has had a chance to bring up the second I/O expander (its

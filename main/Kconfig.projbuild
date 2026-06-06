@@ -436,12 +436,14 @@ config DRAFTLING_TOUCH_INT_GPIO
     default 3  if DRAFTLING_MODEL_JC3248W535
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    # M5Stack Tab5: GT911 INT on GPIO23. Held LOW at startup by the
-    # BSP so the GT911 powers up at its backup I2C address (0x14)
-    # instead of the primary 0x5D -- a hardware pull-up resistor on
-    # this board forces the alternate-address path. ESP32-P4
-    # GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake on
-    # this pin is unavailable: standby on Tab5 therefore enters
+    # M5Stack Tab5: GT911 INT on GPIO23. main.cpp pre-drives this
+    # pin LOW as an output before display_init() so the GT911 powers
+    # up at its backup I2C address 0x14 instead of the primary 0x5D
+    # -- a hardware pull-up resistor on this board would otherwise
+    # force the primary-address path, which the BSP itself does not
+    # probe (it only looks for the GT911 at the backup address).
+    # ESP32-P4 GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake
+    # on this pin is unavailable: standby on Tab5 therefore enters
     # real deep sleep with NO GPIO wake source and the only wake
     # path is the hardware RESET button (cold boot, autosave is
     # restored). DRAFTLING_STANDBY_WAKE_ON_TOUCH must NOT be set
