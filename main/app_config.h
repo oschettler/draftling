@@ -565,18 +565,24 @@
  * the BSP path ignores them and uses BSP_LCD_TOUCH_INT for INT
  * and GPIO_NUM_NC for RST. Native panel coordinate range is
  * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
- * draftling_lvgl_port_init() is called with rotate_deg=90 to
+ * draftling_lvgl_port_init() is called with rotate_deg=270 to
  * render the editor landscape, and touchscreen.cpp applies the
  * same user_rotate_deg when mapping native (x,y) -> LVGL. The
- * BSP exposes identity swap/mirror so both stay 0 here. */
+ * BSP exposes identity swap/mirror, but in the as-mounted
+ * orientation of both the v1 (GT911) and v2 (ST7123) panels the
+ * touch controller's native axes run opposite to the panel's
+ * pixel axes -- left untouched, every reported touch lands at
+ * the 180-degree-rotated point. We compensate by mirroring both
+ * native axes here before native_to_logical() applies the same
+ * 270-degree rotation as the display. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
 #define TOUCH_NATIVE_W      720
 #define TOUCH_NATIVE_H      1280
 #define TOUCH_SWAP_XY       0
-#define TOUCH_MIRROR_X      0
-#define TOUCH_MIRROR_Y      0
+#define TOUCH_MIRROR_X      1
+#define TOUCH_MIRROR_Y      1
 
 /* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
  * pack monitored by an INA226 power monitor at I2C 0x41 (on the
