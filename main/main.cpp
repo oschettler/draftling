@@ -949,25 +949,19 @@ extern "C" void app_main(void)
         tcfg.i2c_hz   = 400000;
         tcfg.native_width   = TOUCH_NATIVE_W;
         tcfg.native_height  = TOUCH_NATIVE_H;
-#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
-        /* M5Stack Tab5 only: the BSP-delegated esp_lcd_touch path
-         * runs against a draftling_lvgl_port display that LVGL
-         * reports in panel-native pixels after lv_display_set_rotation
-         * (1280 x 720 landscape), not in the DISPLAY_SCALE-divided
-         * logical pixels the editor's SCR_W / SCR_H use. Scaling
-         * touch coordinates down to DISPLAY_LOGICAL_* here lands
-         * the cursor at half of the user's finger position on
-         * both axes. Map the touch native range straight to the
-         * full panel resolution so LVGL gets coords in the same
-         * frame it interprets indev points in. Other boards keep
-         * the existing logical mapping, which matches their non-
-         * BSP-delegated touchscreen backends. */
-        tcfg.logical_width  = DISPLAY_WIDTH;
-        tcfg.logical_height = DISPLAY_HEIGHT;
-#else
+        /* All boards (including the Tab5 BSP-delegated path) feed
+         * LVGL indev coordinates in the same logical pixel frame the
+         * editor renders against. draftling_lvgl_port_init() calls
+         * lv_display_create(DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT)
+         * and then lv_display_set_rotation(DISPLAY_ROTATE), so the
+         * display reports its rotated landscape resolution as
+         * (DISPLAY_LOGICAL_HEIGHT, DISPLAY_LOGICAL_WIDTH) logical
+         * pixels. native_to_logical() scales raw touch coords into
+         * (DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT) and then
+         * applies user_rotate_deg=DISPLAY_ROTATE below, producing
+         * coords in that same rotated logical frame. */
         tcfg.logical_width  = DISPLAY_LOGICAL_WIDTH;
         tcfg.logical_height = DISPLAY_LOGICAL_HEIGHT;
-#endif
         tcfg.swap_xy  = TOUCH_SWAP_XY  ? true : false;
         tcfg.mirror_x = TOUCH_MIRROR_X ? true : false;
         tcfg.mirror_y = TOUCH_MIRROR_Y ? true : false;
