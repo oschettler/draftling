@@ -373,31 +373,52 @@ extern "C" void app_main(void)
     /* M5Stack Tab5 GT911 I2C address selection.
      *
      * The GT911 latches its 7-bit I2C address from the level on its
-     * INT pin at the moment it comes out of power-on / reset:
+     * INT pin at the *rising edge* of its internal power-on reset:
      *   INT low  during reset -> backup  address 0x14
      *   INT high during reset -> primary address 0x5D
      *
-     * On the Tab5 there is a hardware pull-up to 3V3 on INT
-     * (GPIO23). If we leave that pull-up to win, the GT911 latches
-     * 0x5D, but the BSP probes only the backup 0x14 (and our own
-     * TOUCH_I2C_ADDR is 0x14 to match), so touch ends up dead --
-     * we either fail to bind, or bind to 0x5D and read garbage
-     * because the controller is in the wrong mode for this board.
+     * The Tab5 has a hardware pull-up to 3V3 on the GT911 INT
+     * (ESP32-P4 GPIO23). If we leave that pull-up to win, the
+     * GT911 latches 0x5D, but the BSP only ever probes the backup
+     * 0x14 (and our own TOUCH_I2C_ADDR is 0x14 to match) so touch
+     * is effectively dead.
      *
-     * The m5stack_tab5 BSP works around this in bsp_touch_new()
-     * by driving INT low as an output before bringing TOUCH_EN up.
-     * We do not call bsp_touch_new() (Draftling has its own GT911
-     * driver in components/touchscreen), so replicate the fix here:
-     * drive GPIO23 LOW *before* display_init(), because the BSP's
-     * bsp_display_new_with_handles() -> bsp_get_board_version()
-     * is what powers TOUCH_EN up via bsp_feature_enable() the very
-     * first time. With INT pre-pulled low at that moment the GT911
-     * powers up at 0x14 as expected. touchscreen_init() further
-     * down later reconfigures the pin to INPUT+pull-up for the
-     * normal "data ready" signalling -- by then the GT911 address
-     * is already latched and stable. */
+     * Crucially, on this board the GT911 has NO dedicated RST line
+     * exposed to the SoC -- the BSP sets `rst_gpio_num = GPIO_NUM_NC`
+     * and `BSP_LCD_RST = GPIO_NUM_NC`. The only way to force the
+     * GT911 to re-run its internal power-on reset (and re-latch
+     * its I2C address) is to power-cycle the TOUCH_EN rail driven
+     * by the first PI4IOE5V6408 I/O expander (I2C 0x43, pin P5 =
+     * BSP_TOUCH_EN). On a cold boot the PI4IOE5V6408 starts with
+     * every pin in high-impedance, so TOUCH_EN is effectively low
+     * and the GT911 is unpowered until `bsp_feature_enable(TOUCH)`
+     * brings it up inside `bsp_get_board_version()`. But on a warm
+     * reboot (esp_restart, panic, watchdog, wake-from-reset) the
+     * PI4IOE5V6408 retains its previous register state -- TOUCH_EN
+     * is already high, the GT911 already latched 0x5D against the
+     * INT pull-up before we ever got control, and any amount of
+     * INT-low driving afterwards has no effect.
+     *
+     * So do both, in this order:
+     *   (a) drive GPIO23 LOW as a push-pull output (override the
+     *       3V3 pull-up at the SoC pin),
+     *   (b) ask the BSP for the first PI4IOE5V6408 handle, switch
+     *       BSP_TOUCH_EN (P5) to push-pull output, then drive it
+     *       low for >=10 ms and high again, holding INT low across
+     *       the whole edge so the GT911 latches 0x14.
+     *
+     * `touchscreen_init()` further down reconfigures GPIO23 to
+     * INPUT + pull-up for the normal "data ready" signalling.
+     * By then the GT911 has already latched its address, so the
+     * 3V3 idle level on INT no longer matters.
+     *
+     * The subsequent `bsp_feature_enable(BSP_FEATURE_TOUCH, true)`
+     * call inside `bsp_get_board_version()` (which is inside
+     * `display_init()` below) is idempotent: it just rewrites P5
+     * to the same `high` we already set here. */
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN) && TOUCH_INT_PIN >= 0
     {
+        /* (a) Hold INT low at the SoC pin. */
         gpio_config_t int_cfg = {};
         int_cfg.intr_type    = GPIO_INTR_DISABLE;
         int_cfg.mode         = GPIO_MODE_OUTPUT;
@@ -406,6 +427,47 @@ extern "C" void app_main(void)
         int_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
         gpio_config(&int_cfg);
         gpio_set_level((gpio_num_t)TOUCH_INT_PIN, 0);
+
+        /* (b) Power-cycle TOUCH_EN through the first PI4IOE5V6408
+         * so the GT911 actually re-runs its internal POR and
+         * latches the INT=low we just established. */
+        esp_io_expander_handle_t pi4 = bsp_io_expander_init();
+        if (pi4 == NULL) {
+            ESP_LOGW(TAG, "Tab5 touch: bsp_io_expander_init returned NULL; "
+                          "skipping GT911 power-cycle (touch may stay at 0x5D)");
+        } else {
+            esp_err_t err = esp_io_expander_set_dir(
+                pi4, BSP_TOUCH_EN, IO_EXPANDER_OUTPUT);
+            if (err == ESP_OK) {
+                err = esp_io_expander_set_output_mode(
+                    pi4, BSP_TOUCH_EN, IO_EXPANDER_OUTPUT_MODE_PUSH_PULL);
+            }
+            if (err == ESP_OK) {
+                err = esp_io_expander_set_level(pi4, BSP_TOUCH_EN, 0);
+            }
+            if (err == ESP_OK) {
+                /* GT911 datasheet: hold reset (here: VDD removed) for
+                 * at least 10 ms to drain rail capacitance and ensure
+                 * the internal POR actually fires on the next rise. */
+                vTaskDelay(pdMS_TO_TICKS(20));
+                err = esp_io_expander_set_level(pi4, BSP_TOUCH_EN, 1);
+            }
+            if (err == ESP_OK) {
+                /* GT911 typical boot time is ~50 ms; the BSP itself
+                 * waits 500 ms before probing 0x14. We just need the
+                 * chip to have latched the address before we release
+                 * the INT line as input later in touchscreen_init(),
+                 * so a short delay here is enough -- the BSP's own
+                 * 500 ms inside bsp_get_board_version() covers the
+                 * rest. */
+                vTaskDelay(pdMS_TO_TICKS(60));
+                ESP_LOGI(TAG, "Tab5 GT911: TOUCH_EN power-cycled with "
+                              "INT held low (expecting I2C 0x14)");
+            } else {
+                ESP_LOGW(TAG, "Tab5 GT911: TOUCH_EN power-cycle failed: %s",
+                         esp_err_to_name(err));
+            }
+        }
     }
 #endif
 

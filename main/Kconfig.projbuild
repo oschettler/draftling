@@ -437,11 +437,15 @@ config DRAFTLING_TOUCH_INT_GPIO
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     # M5Stack Tab5: GT911 INT on GPIO23. main.cpp pre-drives this
-    # pin LOW as an output before display_init() so the GT911 powers
-    # up at its backup I2C address 0x14 instead of the primary 0x5D
-    # -- a hardware pull-up resistor on this board would otherwise
-    # force the primary-address path, which the BSP itself does not
-    # probe (it only looks for the GT911 at the backup address).
+    # pin LOW *and* power-cycles BSP_TOUCH_EN (PI4IOE5V6408 #1, IO5)
+    # before display_init() so the GT911 actually re-runs its
+    # internal POR with INT low and latches its backup I2C address
+    # 0x14 (the BSP only ever probes 0x14; a hardware 3V3 pull-up
+    # on INT would otherwise force the primary 0x5D path which the
+    # board does not route). The power-cycle is what makes this
+    # work across warm reboots, where TOUCH_EN was already high
+    # from the previous boot and the GT911 had already latched
+    # 0x5D before we got control.
     # ESP32-P4 GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake
     # on this pin is unavailable: standby on Tab5 therefore enters
     # real deep sleep with NO GPIO wake source and the only wake

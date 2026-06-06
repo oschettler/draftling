@@ -536,17 +536,26 @@
 #define I2C_SCL_PIN         32
 
 /* GT911 touch controller. The GT911 latches its 7-bit I2C address
- * (0x14 backup, 0x5D primary) from the level of its INT line during
- * power-on / internal reset. The Tab5 has a hardware pull-up to 3V3
- * on INT (GPIO23) that would otherwise force the GT911 to come up
- * at 0x5D, but the board only routes the chip's responses for the
- * backup-address path -- so primary-address mode behaves as if the
- * controller were dead. main.cpp pre-drives GPIO23 LOW *before*
- * display_init() runs (which is what powers TOUCH_EN via the
- * PI4IOE5V6408 the very first time), making the GT911 latch 0x14.
- * The touchscreen component then probes 0x14 first and skips the
- * pointless 0x5D fallback. RST is wired to the PI4IOE5V6408 (not to
- * an ESP32-P4 GPIO), so we leave the dedicated RST at -1.
+ * (0x14 backup, 0x5D primary) from the level of its INT line at the
+ * rising edge of its internal power-on reset. The Tab5 has a 3V3
+ * pull-up on INT (GPIO23) that would otherwise force the GT911 to
+ * come up at 0x5D, but the board only routes the backup-address
+ * path -- so primary-address mode behaves as if the controller were
+ * dead.
+ *
+ * On this board the GT911 RST is *not* wired to any ESP32-P4 GPIO
+ * (the BSP exposes `rst_gpio_num = GPIO_NUM_NC` and
+ * `BSP_LCD_RST = GPIO_NUM_NC`), so the only way to actually re-run
+ * the GT911 internal POR and re-latch the address is to power-cycle
+ * the TOUCH_EN rail driven by the first PI4IOE5V6408 I/O expander
+ * (pin BSP_TOUCH_EN = IO5). main.cpp does this before display_init()
+ * runs: it pre-drives GPIO23 LOW (push-pull output, overriding the
+ * 3V3 pull-up) and then toggles BSP_TOUCH_EN low -> high through the
+ * PI4IOE5V6408 (covers the warm-reboot case where TOUCH_EN was
+ * already high from a previous boot and the GT911 would otherwise
+ * have latched 0x5D before we got control). The touchscreen
+ * component then probes 0x14 first and skips the 0x5D fallback.
+ * RST stays -1 below because no SoC GPIO is wired to GT911 RST.
  *
  * GT911 reports panel-native coordinates 720 x 1280 portrait
  * (BSP panel orientation, INT/USB-C edge at the top of the GT911
