@@ -264,13 +264,21 @@ the editor restores from autosave on the next run.
 
 Implications:
 - Editor state in PSRAM is lost across standby; rely on autosave.
-- The ESP32-C6 co-processor stays powered through P4 deep sleep
-  because its 3V3 rail is gated by WLAN_PWR_EN (PI4IOE5V6408 #2,
-  address 0x44, P0) on the system I2C bus, which retains its
-  register state across P4 reset and sleep transitions. The SDIO
-  link is torn down implicitly when the P4's SDIO peripheral powers
-  off, and `esp_hosted_init()` re-establishes it on the next cold
-  boot. No explicit teardown is needed in `standby_enter_sleep()`.
+- The ESP32-C6 co-processor is dropped before deep sleep by
+  `pre_sleep_tab5_deinit()` in `main/main.cpp`, which calls
+  `bsp_feature_enable(BSP_FEATURE_WIFI, false)` to clear
+  WLAN_PWR_EN (PI4IOE5V6408 #2, address 0x44, P0). The expander
+  latches the level across the P4's deep-sleep / reset
+  transitions, so the C6 stays off until the next cold boot
+  re-runs `bsp_feature_enable(BSP_FEATURE_WIFI, true)` in
+  `app_main()`. The SDIO link to the C6 is torn down implicitly
+  when the P4's SDIO peripheral powers off, and
+  `esp_hosted_init()` re-establishes it on the next cold boot.
+  The same pre-sleep hook also puts the GT911 touch controller
+  to sleep (`touchscreen_sleep()`), blanks the MIPI-DSI panel +
+  backlight (`display_deep_sleep_prepare()`), and powers down
+  the RTC peripherals domain
+  (`esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF)`).
 - `DRAFTLING_STANDBY_WAKE_ON_TOUCH` must NOT be enabled on Tab5:
   GPIO 23 is not LP_IO and the EXT0 API is not available on the
   P4 at all (`SOC_PM_SUPPORT_EXT0_WAKEUP` is undefined).

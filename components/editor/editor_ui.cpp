@@ -2284,10 +2284,11 @@ static void settings_activate_item(int idx)
         refresh_theme_picker_items();
 #endif
     } else if (idx == SETTINGS_IDX_SLEEP) {
-        /* Sleep now -- auto-save first */
-        if (editor_get_mode() == EDITOR_MODE_EDITING && editor_is_modified()) {
-            editor_save_file();
-        }
+        /* Sleep now -- standby_enter_sleep() runs the registered
+         * pre-sleep callback (autosave + per-board peripheral
+         * teardown) before esp_deep_sleep_start(), so the menu
+         * path takes exactly the same teardown sequence as the
+         * inactivity timeout and the no-keyboard timeout. */
         standby_enter_sleep();
     } else if (idx == SETTINGS_IDX_RESET) {
         /* Factory reset -- requires double-press confirmation */
