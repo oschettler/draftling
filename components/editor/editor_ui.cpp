@@ -4221,9 +4221,11 @@ static void build_screens(void)
         lv_obj_t *off_btn = lv_button_create(s_scr_ble_prompt);
         lv_obj_set_size(off_btn, 40, 24);
         lv_obj_set_pos(off_btn, SCR_W - 44, 4);
-        lv_obj_set_style_bg_color(off_btn, theme_fg(), 0);
+        lv_obj_set_style_bg_color(off_btn, theme_bg(), 0);
         lv_obj_set_style_bg_opa(off_btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(off_btn, 0, 0);
+        lv_obj_set_style_border_color(off_btn, theme_fg(), 0);
+        lv_obj_set_style_border_width(off_btn, 1, 0);
+        lv_obj_set_style_border_opa(off_btn, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(off_btn, 4, 0);
         lv_obj_set_style_pad_all(off_btn, 0, 0);
         lv_obj_add_event_cb(off_btn, ble_prompt_off_btn_cb,
@@ -4231,7 +4233,7 @@ static void build_screens(void)
 
         lv_obj_t *off_lbl = lv_label_create(off_btn);
         lv_obj_set_style_text_font(off_lbl, FONT_11, 0);
-        lv_obj_set_style_text_color(off_lbl, theme_bg(), 0);
+        lv_obj_set_style_text_color(off_lbl, theme_fg(), 0);
         lv_label_set_text(off_lbl, "Off");
         lv_obj_center(off_lbl);
     }
