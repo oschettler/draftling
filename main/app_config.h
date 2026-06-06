@@ -570,18 +570,19 @@
  * same user_rotate_deg when mapping native (x,y) -> LVGL. The
  * BSP exposes identity swap/mirror, but in the as-mounted
  * orientation of both the v1 (GT911) and v2 (ST7123) panels the
- * touch controller's native axes run opposite to the panel's
- * pixel axes -- left untouched, every reported touch lands at
- * the 180-degree-rotated point. We compensate by mirroring both
- * native axes here before native_to_logical() applies the same
- * 270-degree rotation as the display. */
+ * touch controller's native axes are rotated 90 degrees relative
+ * to the panel's pixel axes AND its long (native-Y) axis runs
+ * opposite to the panel's long axis. native_to_logical() composes
+ * (mirror_y -> swap_xy -> scale -> rotate 270), so swap_xy=1 and
+ * mirror_y=1 here aligns native (nx, ny) with the rotated
+ * landscape coordinates the editor draws against. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
 #define TOUCH_NATIVE_W      720
 #define TOUCH_NATIVE_H      1280
-#define TOUCH_SWAP_XY       0
-#define TOUCH_MIRROR_X      1
+#define TOUCH_SWAP_XY       1
+#define TOUCH_MIRROR_X      0
 #define TOUCH_MIRROR_Y      1
 
 /* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
