@@ -113,11 +113,16 @@ int battery_init_ina226(void *i2c_master_bus, int i2c_addr, int cells);
  * adapter can deliver.
  *
  * This routine fixes that by:
- *   - disabling AUTO_DPDM_EN so the chip stops overriding IINLIM
- *     after D+/D- detection,
- *   - raising IINLIM to 2000 mA (still gated by the on-board ILIM
- *     resistor via EN_ILIM=1, so the hardware-defined ceiling is
- *     preserved),
+ *   - disabling the source-detection state machine in REG02
+ *     (ICO_EN, HVDCP_EN, MAXC_EN, AUTO_DPDM_EN all cleared) so the
+ *     Input Current Optimizer cannot silently clamp the actual input
+ *     limit (IDPM_LIM) below IINLIM after detecting VBUS sag, no
+ *     QC/MaxCharge handshakes are attempted, and re-plug does not
+ *     snap IINLIM back to the USB-SDP 500 mA default,
+ *   - raising IINLIM to 2000 mA and clearing EN_ILIM (REG00 bit 6)
+ *     so the register value is the sole input-current ceiling -- the
+ *     on-board ILIM resistor on the LilyGO T5 is sized for ~500 mA
+ *     and would otherwise clip the 2 A request,
  *   - raising the fast-charge current ICHG to 1024 mA (0.5C for a
  *     ~2 Ah cell), and
  *   - disabling the I2C watchdog so the above settings persist.
