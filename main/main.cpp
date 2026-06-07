@@ -68,6 +68,12 @@ static const char *TAG = "Draftling";
  */
 static esp_timer_handle_t s_charger_maint_timer = NULL;
 
+/* 30 s cadence for the BQ25896 maintenance / debug timer: short
+ * enough to recover from a 40 s POR I2C watchdog timeout before it
+ * reverts our register writes, long enough that the periodic I2C
+ * traffic is negligible. */
+#define CHARGER_MAINT_PERIOD_US ((uint64_t)30 * 1000 * 1000)
+
 static void charger_maint_cb(void *arg)
 {
     (void)arg;
@@ -95,10 +101,9 @@ static void charger_maint_start(void)
         s_charger_maint_timer = NULL;
         return;
     }
-    /* 30 s cadence: short enough to recover from a watchdog timeout
-     * (40 s POR), long enough that the I2C bus impact is negligible. */
+    /* 30 s cadence: see CHARGER_MAINT_PERIOD_US comment above. */
     if (esp_timer_start_periodic(s_charger_maint_timer,
-                                 (uint64_t)30 * 1000 * 1000) != ESP_OK) {
+                                 CHARGER_MAINT_PERIOD_US) != ESP_OK) {
         ESP_LOGW(TAG, "charger_maint: esp_timer_start_periodic failed");
     }
 }

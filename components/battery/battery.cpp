@@ -492,6 +492,7 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
 #define BQ25896_VBUSV_STEP_MV   100
 
 /* Status / fault bit masks. */
+#define BQ25896_REG00_EN_HIZ           0x80
 #define BQ25896_REG0B_VBUS_STAT_SHIFT  5
 #define BQ25896_REG0B_CHRG_STAT_SHIFT  3
 #define BQ25896_REG0B_PG_STAT          0x04
@@ -835,7 +836,7 @@ extern "C" void battery_bq25896_prepare_sleep(void)
      * we wrote at init. EN_ILIM stays 0. */
     uint8_t reg00 = 0;
     if (bq25896_read_u8(BQ25896_REG_ISC, &reg00) != 0) return;
-    uint8_t target = reg00 | 0x80;
+    uint8_t target = reg00 | BQ25896_REG00_EN_HIZ;
     if (target == reg00) return;  /* already HIZ */
     if (bq25896_write_u8(BQ25896_REG_ISC, target) != 0) {
         ESP_LOGW(TAG, "BQ25896: pre-sleep EN_HIZ write failed");
@@ -897,7 +898,7 @@ extern "C" void battery_bq25896_dump_status(void)
         "VBUS_STAT=%u CHRG_STAT=%u PG=%d VSYS=%d "
         "THERM=%d VDPM=%d IDPM=%d TSPCT=%u%% "
         "FAULT[wd=%d boost=%d chrg=%u bat=%d ntc=%u]",
-        (reg00 >> 7) & 1, iinlim_ma, vbusv_mv,
+        (reg00 & BQ25896_REG00_EN_HIZ) ? 1 : 0, iinlim_ma, vbusv_mv,
         (reg11 & BQ25896_REG11_VBUS_GD) ? 1 : 0,
         batv_mv, sysv_mv, ichgr_ma, idpm_lim_ma,
         vbus_stat, chrg_stat,
