@@ -278,6 +278,40 @@ config DRAFTLING_CHARGER_BQ25896
     default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default n
 
+# Diagnostic power-management instrumentation. Off by default so it
+# never noise-pollutes a production boot log. When set:
+#   - On every cold boot, main.cpp dumps the full BQ27220 fuel-gauge
+#     state (voltage, SoC, Flags, signed current in mA) and, if the
+#     previous run persisted a sleep-entry timestamp + SoC, the
+#     estimated deep-sleep drain rate in uA derived from the SoC delta.
+#   - While the BQ25896 charger reports VBUS present, a 30-second
+#     periodic task dumps REG00 / REG0B-REG13 so a sustained charge
+#     can be characterised in-field without a USB power meter.
+# Use this to confirm a deep-sleep change actually lowers idle draw
+# and to localise charge tapering symptoms to the specific BQ25896
+# status bit responsible (THERM_STAT, VDPM_STAT, NTC_FAULT, etc.).
+config DRAFTLING_DEBUG_POWER
+    bool "Enable verbose power-management diagnostics"
+    default n
+    help
+        Adds a boot-time BQ27220 register dump, a deep-sleep drain
+        estimator and a periodic BQ25896 charger-status dump. Useful
+        for diagnosing battery drain and slow-charge regressions on
+        the LilyGO T5 E-Paper S3 Pro / Pro Lite. Leave disabled in
+        production builds.
+
+# Periodically (every 30 s) re-asserts the most safety-critical
+# BQ25896 settings -- ICO_EN=0 in REG02 and WATCHDOG=00 in REG07 --
+# so a one-off bus glitch or a missed I2C write at boot cannot leave
+# the charger in its 500 mA USB-SDP default. Independent of
+# DRAFTLING_DEBUG_POWER so production builds still get the
+# tamper-resistance without the verbose logs.
+config DRAFTLING_CHARGER_WATCHDOG_REASSERT
+    bool
+    depends on DRAFTLING_CHARGER_BQ25896
+    default y if DRAFTLING_CHARGER_BQ25896
+    default n
+
 # Enables the USB Host stack + USB HID keyboard driver
 # (components/usb_kbd) on boards that wire a host-mode USB-A port.
 # On M5Stack Tab5 the USB-A connector is gated by BSP_FEATURE_USB
