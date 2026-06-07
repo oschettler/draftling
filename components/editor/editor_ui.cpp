@@ -549,13 +549,13 @@ static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
 
 /* Maximum byte length of the rendered text for a single editor line.
  * Must be large enough to hold a full screen-width line in worst-case
- * UTF-8 (3 bytes per Cyrillic-ish glyph is rare; CJK is 3 bytes; emoji
- * 4 bytes). 1024 bytes comfortably covers any soft-wrapped line that
- * LVGL can layout within SCR_W on our supported panels. Sizing this
- * too small previously caused multi-byte text (e.g. Cyrillic past ~127
- * characters) to be silently truncated before reaching the label, so
- * the text became invisible while editor_get_line() still held the
- * full content. */
+ * UTF-8: Cyrillic / Greek / Hebrew use 2 bytes per glyph, CJK uses
+ * 3 bytes, most emoji use 4 bytes. 1024 bytes comfortably covers any
+ * soft-wrapped line that LVGL can layout within SCR_W on our
+ * supported panels. Sizing this too small previously caused
+ * multi-byte text (e.g. Cyrillic past ~127 characters) to be silently
+ * truncated before reaching the label, so the text became invisible
+ * while editor_get_line() still held the full content. */
 #define EDITOR_LINE_BUF_BYTES 1024
 static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
 
