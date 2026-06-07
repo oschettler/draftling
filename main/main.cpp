@@ -431,11 +431,10 @@ static void pre_sleep_t5_deinit(void)
      * RTC SLOW memory data to retain across wake (the SoC cold-boots
      * on wake and the editor restores from autosave), so dropping
      * this domain saves ~40 uA on ESP32-S3 over the default. The
-     * RTC SLOW / FAST memory domains can likewise be powered down --
-     * we keep no retention state across wake. */
+     * ESP32-S3 does not expose separate ESP_PD_DOMAIN_RTC_SLOW_MEM /
+     * RTC_FAST_MEM controls in current ESP-IDF -- those memories
+     * follow the RTC_PERIPH / VDD_SDIO domains automatically. */
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,   ESP_PD_OPTION_OFF);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF);
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF);
 
     /* Latch every pad that called gpio_hold_en() (the front-light,
      * specifically) so the level stays driven through deep sleep. */
