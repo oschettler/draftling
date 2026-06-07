@@ -359,6 +359,22 @@ extern "C" void standby_enter_sleep(void)
     gpio_num_t wake_gpio = resolve_wake_gpio();
 
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
+    /* EXT0's level comparator and the RTC IO pull-up we are about to
+     * enable both live in the RTC_PERIPH power domain. A pre-sleep
+     * callback may have called esp_sleep_pd_config(RTC_PERIPH, OFF)
+     * to shave a few microamps -- on the LilyGO T5 E-Paper S3 Pro
+     * this is set in pre_sleep_t5_deinit(). In theory IDF auto-
+     * promotes the domain back to ON when EXT0 is armed, but on
+     * ESP32-S3 with CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND active we
+     * have observed the chip wake immediately from deep sleep with
+     * wakeup_cause=EXT0 in that configuration even when the wake
+     * pin reads stable HIGH for many ms before arming. The most
+     * plausible explanation is that the pull-up momentarily lifts
+     * during the sleep-entry transition and EXT0 latches a strapping
+     * pin (e.g. BOOT / GPIO0) low. Force the domain ON here to make
+     * the intent explicit and pin the bias rails up across entry. */
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+
     /* Enable the internal RTC pull-up on the wake pin and disable any
      * pull-down so the EXT0 wake-on-low source does not fire
      * immediately. The supported buttons (RLCD-4.2 button on GPIO18
@@ -457,7 +473,8 @@ extern "C" void standby_enter_sleep(void)
                           "device will only wake via RESET",
                      (int)wake_gpio, esp_err_to_name(wake_err));
         } else {
-            ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
+            ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d (final level=%d)...",
+                     (int)wake_gpio, gpio_get_level(wake_gpio));
         }
     } else {
         ESP_LOGI(TAG, "Entering deep sleep (EXT0 skipped, wake via RESET)...");
