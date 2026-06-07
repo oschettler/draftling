@@ -319,12 +319,16 @@ static bool poll_bsp_touch(int *out_x, int *out_y)
 
     int lx, ly;
     native_to_logical((int)x, (int)y, &lx, &ly);
+#if defined(CONFIG_DRAFTLING_TOUCH_DEBUG_LOG)
     /* Diagnostic log: raw native coordinates from the BSP-managed
      * esp_lcd_touch driver and the logical coordinates we hand to
      * LVGL after native_to_logical(). Used to dial in TOUCH_SWAP_XY /
-     * TOUCH_MIRROR_* / user_rotate_deg on the Tab5. */
+     * TOUCH_MIRROR_* on new boards. Gated behind
+     * DRAFTLING_TOUCH_DEBUG_LOG (off by default) so the logs do not
+     * spam the console during normal use. */
     ESP_LOGI(TAG, "bsp touch raw=(%u,%u) cnt=%u -> logical=(%d,%d)",
              (unsigned)x, (unsigned)y, (unsigned)cnt, lx, ly);
+#endif
     if (out_x) *out_x = lx;
     if (out_y) *out_y = ly;
     return true;

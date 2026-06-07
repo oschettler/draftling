@@ -371,10 +371,28 @@ static TimerHandle_t  s_reconn_timer = NULL;
  * callback and retries scanning until connected. */
 static TimerHandle_t  s_startup_timer = NULL;
 
+/* "Open watchdog" timer. esp_hidh_dev_open() blocks for the entire
+ * BLE GATT connect + service discovery + HID report-map handshake,
+ * which on a flaky link can stall well past the LE supervision
+ * timeout. If the controller drops the link mid-handshake, the
+ * Bluedroid disconnect path has been observed to crash on a
+ * partially-initialised device record (Load Access Fault inside
+ * gattc_conn_cb after rsn=0x8 connection-timeout).
+ *
+ * To sidestep that race we arm this one-shot timer when a connect
+ * is initiated; if neither ESP_HIDH_OPEN_EVENT nor ESP_HIDH_CLOSE_EVENT
+ * fires within OPEN_WATCHDOG_MS we explicitly call
+ * esp_ble_gap_disconnect() so the link is torn down on a fully-
+ * defined state rather than waiting for the controller's own
+ * supervision timeout. */
+static TimerHandle_t  s_open_watchdog_timer = NULL;
+#define OPEN_WATCHDOG_MS 8000
+
 /* Forward declarations */
 static void start_reconnection(void);
 static void reconn_timer_cb(TimerHandle_t timer);
 static void startup_timer_cb(TimerHandle_t timer);
+static void open_watchdog_cb(TimerHandle_t timer);
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param);
 static void hidh_callback(void *handler_args, esp_event_base_t base,
@@ -646,6 +664,9 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
 
     switch (event) {
     case ESP_HIDH_OPEN_EVENT:
+        /* Either branch (success or failure) terminates the open
+         * sequence -- disarm the watchdog. */
+        open_watchdog_stop();
         if (param->open.status == ESP_OK) {
             s_connected  = true;
             s_connecting = false;
@@ -697,6 +718,10 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         break;
 
     case ESP_HIDH_CLOSE_EVENT:
+        /* Disarm the open watchdog: a CLOSE here either follows a
+         * successful OPEN (already stopped above) or terminates a
+         * connect that never reached OPEN. */
+        open_watchdog_stop();
         s_connected  = false;
         s_connecting = false;
         s_hidh_dev   = NULL;
@@ -814,6 +839,44 @@ static inline bool is_hidh_ready(void)
 
 /* ---- Connect task (runs esp_hidh_dev_open which blocks) ---- */
 
+/* Helpers: arm/disarm the open-watchdog timer (see s_open_watchdog_timer
+ * doc comment near the top of the file). Tolerates being called before
+ * the timer is created (early init paths). */
+static void open_watchdog_start(void)
+{
+    if (!s_open_watchdog_timer) return;
+    /* xTimerChangePeriod also starts the timer if stopped; we use
+     * xTimerReset so a re-arm refreshes the deadline cleanly. */
+    xTimerReset(s_open_watchdog_timer, 0);
+}
+
+static void open_watchdog_stop(void)
+{
+    if (!s_open_watchdog_timer) return;
+    xTimerStop(s_open_watchdog_timer, 0);
+}
+
+/* Fires when esp_hidh_dev_open() has been outstanding longer than
+ * OPEN_WATCHDOG_MS. Forcibly disconnects the BLE link so the
+ * Bluedroid disconnect path runs against a still-defined device
+ * record. ESP_HIDH_CLOSE_EVENT (or open-failed) is expected to
+ * follow and will reset s_connecting + kick the reconnect timer. */
+static void open_watchdog_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    if (s_disabled) return;
+    if (!s_connecting || s_connected) return;
+    ESP_LOGW(TAG, "esp_hidh_dev_open watchdog fired after %d ms; "
+             "forcing GAP disconnect to avoid stuck-pairing crash",
+             OPEN_WATCHDOG_MS);
+    esp_bd_addr_t addr;
+    memcpy(addr, s_target_bda, sizeof(esp_bd_addr_t));
+    esp_err_t err = esp_ble_gap_disconnect(addr);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_ble_gap_disconnect: %s", esp_err_to_name(err));
+    }
+}
+
 /* Maximum number of open-connection retries.  esp_hidh_dev_open()
  * can fail transiently if the remote device is slow to respond.
  * A short retry loop handles this.  Keep this low (2) so that
@@ -847,10 +910,17 @@ static void connect_task(void *arg)
 
     esp_hidh_dev_t *dev = NULL;
     for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
+        /* Arm the open watchdog before the blocking call. The callback
+         * will force-disconnect if neither OPEN nor CLOSE fires within
+         * OPEN_WATCHDOG_MS; OPEN/CLOSE handlers stop the timer. */
+        open_watchdog_start();
         dev = esp_hidh_dev_open(s_target_bda,
                                 ESP_HID_TRANSPORT_BLE,
                                 s_target_addr_type);
         if (dev) break;
+        /* Open returned NULL -- no OPEN_EVENT will fire for this
+         * attempt, so disarm the watchdog ourselves. */
+        open_watchdog_stop();
         ESP_LOGW(TAG, "esp_hidh_dev_open attempt %d/%d failed, "
                  "retrying in %d ms...",
                  attempt + 1, CONNECT_RETRIES, CONNECT_RETRY_MS);
@@ -1308,6 +1378,12 @@ static void ble_init_task(void *arg)
     s_reconn_timer = xTimerCreate("reconn", pdMS_TO_TICKS(1000),
                                   pdFALSE, NULL, reconn_timer_cb);
 
+    /* Create the open-watchdog timer (one-shot). See
+     * s_open_watchdog_timer doc comment near the top of this file. */
+    s_open_watchdog_timer = xTimerCreate("ble_open_wd",
+                                         pdMS_TO_TICKS(OPEN_WATCHDOG_MS),
+                                         pdFALSE, NULL, open_watchdog_cb);
+
     /* Reconnection will be started from the SCAN_PARAM_SET_COMPLETE_EVT
      * callback once scan parameters are ready. */
     s_reconn_phase = RECONN_LAST;
@@ -1449,9 +1525,10 @@ extern "C" void ble_keyboard_disable(void)
 
     /* Stop our retry / safety timers so they cannot kick a fresh
      * scan after we have torn everything down below. */
-    if (s_scan_timer)    { xTimerStop(s_scan_timer,    0); }
-    if (s_reconn_timer)  { xTimerStop(s_reconn_timer,  0); }
-    if (s_startup_timer) { xTimerStop(s_startup_timer, 0); }
+    if (s_scan_timer)          { xTimerStop(s_scan_timer,          0); }
+    if (s_reconn_timer)        { xTimerStop(s_reconn_timer,        0); }
+    if (s_startup_timer)       { xTimerStop(s_startup_timer,       0); }
+    if (s_open_watchdog_timer) { xTimerStop(s_open_watchdog_timer, 0); }
 
     /* Tell the controller to stop scanning. Returns an error if no
      * scan is in flight, which we ignore. */

@@ -469,6 +469,20 @@ config DRAFTLING_TOUCH_RST_GPIO
     default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default -1
 
+config DRAFTLING_TOUCH_DEBUG_LOG
+    bool "Log every raw/logical touch coordinate (verbose)"
+    depends on DRAFTLING_TOUCHSCREEN
+    default n
+    help
+        Emit an INFO-level log line on every successful touch poll
+        with the raw native coordinates from the controller and
+        the logical (post-transform) coordinates handed to LVGL.
+
+        Useful when bringing up a new touch panel to dial in
+        TOUCH_SWAP_XY / TOUCH_MIRROR_X / TOUCH_MIRROR_Y in
+        app_config.h. Spammy during normal use, so leave off in
+        production builds.
+
 # ---- Standby behavior ----
 #
 # By default the standby manager enters real ESP32 deep sleep on
