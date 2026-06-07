@@ -379,14 +379,43 @@ static TimerHandle_t  s_startup_timer = NULL;
  * partially-initialised device record (Load Access Fault inside
  * gattc_conn_cb after rsn=0x8 connection-timeout).
  *
- * To sidestep that race we arm this one-shot timer when a connect
- * is initiated; if neither ESP_HIDH_OPEN_EVENT nor ESP_HIDH_CLOSE_EVENT
- * fires within OPEN_WATCHDOG_MS we explicitly call
- * esp_ble_gap_disconnect() so the link is torn down on a fully-
- * defined state rather than waiting for the controller's own
- * supervision timeout. */
+ * An earlier version of this watchdog called esp_ble_gap_disconnect()
+ * from the timer callback to force the link down. That turned out to
+ * be unsafe: while esp_hidh_dev_open() is still blocked inside service
+ * discovery / CCCD writes the controller link may not actually be up
+ * yet, so the synchronous disconnect is a no-op; when pairing later
+ * completes the stack ends up in exactly the half-initialised state
+ * we were trying to avoid, and the eventual controller supervision
+ * timeout (rsn=0x8) panics inside gattc_conn_cb / bta_hh_le.
+ *
+ * Current behaviour: on watchdog fire we do NOT touch the link from
+ * outside Bluedroid. Instead we set s_force_close_on_open and let the
+ * blocking esp_hidh_dev_open() finish naturally. The ESP_HIDH_OPEN_EVENT
+ * handler then calls esp_hidh_dev_close() on the fully-constructed
+ * device record (success branch) or simply restarts the reconnect
+ * sequence (failure branch). This guarantees the close runs against a
+ * defined device record, which is what avoids the post-rsn-0x8 crash.
+ *
+ * If even that does not produce a HIDH event within
+ * OPEN_STUCK_RECOVERY_MS after the watchdog fired, s_open_stuck_timer
+ * spawns a recovery task that tears down and re-initialises the HIDH
+ * subsystem so the next connect attempt starts from a clean state. */
 static TimerHandle_t  s_open_watchdog_timer = NULL;
-#define OPEN_WATCHDOG_MS 8000
+static TimerHandle_t  s_open_stuck_timer    = NULL;
+/* Long enough to cover a slow first-pair on a real keyboard
+ * (observed ~16 s end-to-end on a NuPhy Air60 V2). Shorter values
+ * caused the watchdog to fire on the success path. */
+#define OPEN_WATCHDOG_MS        25000
+/* Time after the watchdog fires before we assume the open is wedged
+ * inside Bluedroid and the HIDH subsystem itself needs restarting. */
+#define OPEN_STUCK_RECOVERY_MS  45000
+
+/* Set by open_watchdog_cb() to tell the ESP_HIDH_OPEN_EVENT handler
+ * (and connect_task post-return) to treat this connection attempt as
+ * abandoned: close the device cleanly and resume the reconnect
+ * sequence instead of marking us connected. Cleared on every HIDH
+ * event and whenever a fresh open is initiated. */
+static volatile bool s_force_close_on_open = false;
 
 /* Forward declarations */
 static void start_reconnection(void);
@@ -395,6 +424,7 @@ static void startup_timer_cb(TimerHandle_t timer);
 static void open_watchdog_cb(TimerHandle_t timer);
 static void open_watchdog_start(void);
 static void open_watchdog_stop(void);
+static void open_stuck_cb(TimerHandle_t timer);
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param);
 static void hidh_callback(void *handler_args, esp_event_base_t base,
@@ -665,11 +695,33 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
     esp_hidh_event_data_t *param = (esp_hidh_event_data_t *)event_data;
 
     switch (event) {
-    case ESP_HIDH_OPEN_EVENT:
+    case ESP_HIDH_OPEN_EVENT: {
+        /* Capture before stop_watchdog clears the flag. */
+        bool force_close = s_force_close_on_open;
         /* Either branch (success or failure) terminates the open
          * sequence -- disarm the watchdog. */
         open_watchdog_stop();
         if (param->open.status == ESP_OK) {
+            /* If the watchdog flagged this attempt as suspect (or
+             * the user disabled BLE while we were blocked inside
+             * dev_open), close the device cleanly NOW, on a
+             * fully-constructed record, and restart reconnection.
+             * This is the safe substitute for the previous
+             * mid-pairing gap_disconnect, and is what avoids the
+             * post-rsn-0x8 crash inside gattc_conn_cb. */
+            if (force_close || s_disabled) {
+                ESP_LOGW(TAG, "Discarding watchdog-flagged open: "
+                              "closing device and retrying");
+                esp_hidh_dev_t *dev = param->open.dev;
+                if (dev) {
+                    esp_hidh_dev_close(dev);
+                }
+                /* A subsequent ESP_HIDH_CLOSE_EVENT will reset
+                 * state and kick the reconnect timer; leave
+                 * s_connecting set until then so we don't race a
+                 * second connect on top of the close. */
+                break;
+            }
             s_connected  = true;
             s_connecting = false;
             s_hidh_dev   = param->open.dev;
@@ -718,6 +770,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
             }
         }
         break;
+    }
 
     case ESP_HIDH_CLOSE_EVENT:
         /* Disarm the open watchdog: a CLOSE here either follows a
@@ -847,35 +900,105 @@ static inline bool is_hidh_ready(void)
 static void open_watchdog_start(void)
 {
     if (!s_open_watchdog_timer) return;
-    /* xTimerChangePeriod also starts the timer if stopped; we use
-     * xTimerReset so a re-arm refreshes the deadline cleanly. */
+    /* Fresh attempt: clear any leftover force-close from a previous
+     * stuck open and reset both timers. */
+    s_force_close_on_open = false;
     xTimerReset(s_open_watchdog_timer, 0);
+    if (s_open_stuck_timer) {
+        xTimerStop(s_open_stuck_timer, 0);
+    }
 }
 
 static void open_watchdog_stop(void)
 {
-    if (!s_open_watchdog_timer) return;
-    xTimerStop(s_open_watchdog_timer, 0);
+    if (s_open_watchdog_timer) {
+        xTimerStop(s_open_watchdog_timer, 0);
+    }
+    if (s_open_stuck_timer) {
+        xTimerStop(s_open_stuck_timer, 0);
+    }
+    s_force_close_on_open = false;
+}
+
+/* Recovery task: tears HIDH down and re-initialises it. Spawned by
+ * open_stuck_cb() only when the watchdog has fired AND no HIDH event
+ * has arrived for OPEN_STUCK_RECOVERY_MS afterwards. Runs in its own
+ * task because esp_hidh_init() blocks on the BTC task and must not
+ * run from a FreeRTOS timer service. */
+static void hidh_recover_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGE(TAG, "HIDH appears wedged; deinit+init to recover");
+    notify_status("BLE stuck, restarting HID host...");
+    s_hidh_ready = false;
+    /* Drop any stale device handle without poking the (possibly
+     * half-built) Bluedroid device record -- esp_hidh_deinit() will
+     * tear the host's internal lists down. */
+    s_hidh_dev   = NULL;
+    s_connected  = false;
+    s_connecting = false;
+    s_force_close_on_open = false;
+
+    esp_err_t derr = esp_hidh_deinit();
+    if (derr != ESP_OK) {
+        ESP_LOGW(TAG, "esp_hidh_deinit: %s", esp_err_to_name(derr));
+    }
+    esp_hidh_config_t hidh_cfg = {};
+    hidh_cfg.callback = hidh_callback;
+    hidh_cfg.event_stack_size = 4096;
+    esp_err_t ierr = esp_hidh_init(&hidh_cfg);
+    if (ierr != ESP_OK) {
+        ESP_LOGE(TAG, "esp_hidh_init (recovery) failed: %s",
+                 esp_err_to_name(ierr));
+    } else {
+        s_hidh_ready = true;
+        ESP_LOGI(TAG, "HIDH re-initialised");
+    }
+    /* Kick the reconnect state machine from the top. */
+    if (!s_disabled) {
+        s_reconn_phase = RECONN_LAST;
+        s_reconn_idx   = 0;
+        if (s_reconn_timer) {
+            xTimerStart(s_reconn_timer, 0);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+/* Stuck-recovery timer callback. Only spawns the recovery task if the
+ * watchdog flag is still set (i.e. no HIDH event has arrived since
+ * the watchdog fired). */
+static void open_stuck_cb(TimerHandle_t timer)
+{
+    (void)timer;
+    if (s_disabled) return;
+    if (!s_force_close_on_open) return;     /* HIDH event arrived */
+    if (s_connected) return;
+    xTaskCreate(hidh_recover_task, "hidh_recover", 4096, NULL, 3, NULL);
 }
 
 /* Fires when esp_hidh_dev_open() has been outstanding longer than
- * OPEN_WATCHDOG_MS. Forcibly disconnects the BLE link so the
- * Bluedroid disconnect path runs against a still-defined device
- * record. ESP_HIDH_CLOSE_EVENT (or open-failed) is expected to
- * follow and will reset s_connecting + kick the reconnect timer. */
+ * OPEN_WATCHDOG_MS. We do NOT call esp_ble_gap_disconnect() here --
+ * see the s_open_watchdog_timer comment near the top of the file
+ * for why. Instead we set s_force_close_on_open and let the eventual
+ * ESP_HIDH_OPEN_EVENT close the device cleanly on a fully-defined
+ * device record. As a backstop we arm s_open_stuck_timer to restart
+ * HIDH if no event arrives at all. */
 static void open_watchdog_cb(TimerHandle_t timer)
 {
     (void)timer;
     if (s_disabled) return;
     if (!s_connecting || s_connected) return;
     ESP_LOGW(TAG, "esp_hidh_dev_open watchdog fired after %d ms; "
-             "forcing GAP disconnect to avoid stuck-pairing crash",
+             "will close device cleanly on OPEN_EVENT to avoid "
+             "stuck-pairing crash",
              OPEN_WATCHDOG_MS);
-    esp_bd_addr_t addr;
-    memcpy(addr, s_target_bda, sizeof(esp_bd_addr_t));
-    esp_err_t err = esp_ble_gap_disconnect(addr);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_ble_gap_disconnect: %s", esp_err_to_name(err));
+    s_force_close_on_open = true;
+    /* Intentionally leave s_connecting set and do not start the
+     * reconnect timer here: the eventual OPEN/CLOSE event is what
+     * resets state. If neither arrives, s_open_stuck_timer recovers. */
+    if (s_open_stuck_timer) {
+        xTimerReset(s_open_stuck_timer, 0);
     }
 }
 
@@ -912,14 +1035,29 @@ static void connect_task(void *arg)
 
     esp_hidh_dev_t *dev = NULL;
     for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
-        /* Arm the open watchdog before the blocking call. The callback
-         * will force-disconnect if neither OPEN nor CLOSE fires within
-         * OPEN_WATCHDOG_MS; OPEN/CLOSE handlers stop the timer. */
+        /* Arm the open watchdog before the blocking call. On fire
+         * the callback sets s_force_close_on_open; the OPEN_EVENT
+         * handler then closes the device cleanly. OPEN/CLOSE
+         * handlers stop the timer. */
         open_watchdog_start();
         dev = esp_hidh_dev_open(s_target_bda,
                                 ESP_HID_TRANSPORT_BLE,
                                 s_target_addr_type);
-        if (dev) break;
+        if (dev) {
+            /* Belt-and-braces: if the user disabled BLE while we
+             * were blocked inside esp_hidh_dev_open(), close the
+             * device here -- the OPEN_EVENT handler bails out early
+             * when s_disabled is set, so nobody else will. The
+             * watchdog-flagged case is handled inside the OPEN
+             * handler (which runs on the HIDH event task and may
+             * race with this return), so do nothing here for it. */
+            if (s_disabled) {
+                ESP_LOGW(TAG, "BLE disabled mid-open; closing device");
+                esp_hidh_dev_close(dev);
+                dev = NULL;
+            }
+            break;
+        }
         /* Open returned NULL -- no OPEN_EVENT will fire for this
          * attempt, so disarm the watchdog ourselves. */
         open_watchdog_stop();
@@ -1385,6 +1523,11 @@ static void ble_init_task(void *arg)
     s_open_watchdog_timer = xTimerCreate("ble_open_wd",
                                          pdMS_TO_TICKS(OPEN_WATCHDOG_MS),
                                          pdFALSE, NULL, open_watchdog_cb);
+    /* Secondary "stuck" timer: armed by the watchdog if no HIDH event
+     * arrives. Triggers a HIDH deinit/init via a recovery task. */
+    s_open_stuck_timer    = xTimerCreate("ble_open_stuck",
+                                         pdMS_TO_TICKS(OPEN_STUCK_RECOVERY_MS),
+                                         pdFALSE, NULL, open_stuck_cb);
 
     /* Reconnection will be started from the SCAN_PARAM_SET_COMPLETE_EVT
      * callback once scan parameters are ready. */
@@ -1531,6 +1674,8 @@ extern "C" void ble_keyboard_disable(void)
     if (s_reconn_timer)        { xTimerStop(s_reconn_timer,        0); }
     if (s_startup_timer)       { xTimerStop(s_startup_timer,       0); }
     if (s_open_watchdog_timer) { xTimerStop(s_open_watchdog_timer, 0); }
+    if (s_open_stuck_timer)    { xTimerStop(s_open_stuck_timer,    0); }
+    s_force_close_on_open = false;
 
     /* Tell the controller to stop scanning. Returns an error if no
      * scan is in flight, which we ignore. */
