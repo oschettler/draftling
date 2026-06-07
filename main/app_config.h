@@ -104,6 +104,22 @@
  * the Lite variant where the LoRa silicon is depopulated. */
 #define BOARD_LORA_CS_PIN 46
 
+/* MIA-M10Q GPS receiver UART pins (Pro variant). The chip has no
+ * dedicated power-enable GPIO on the H752-01 schematic, so software
+ * has to ask it to power itself down via UBX-RXM-PMREQ. main.cpp
+ * does that at boot (right after SD init) and again before deep
+ * sleep, via t5_gps_sleep(). Pin numbers match BOARD_GPS_TXD /
+ * BOARD_GPS_RXD in the LilyGO factory firmware:
+ *   examples/factory/main/utilities.h
+ *     #define BOARD_GPS_TXD 43
+ *     #define BOARD_GPS_RXD 44
+ * BOARD_GPS_TX_PIN is the ESP32-S3 TX (drives the GPS RX line) and
+ * BOARD_GPS_RX_PIN is the ESP32-S3 RX (sampled from GPS TX). The
+ * Lite variant has the GPS chip depopulated, so the UART write
+ * harmlessly clocks into an open pin. */
+#define BOARD_GPS_TX_PIN 43
+#define BOARD_GPS_RX_PIN 44
+
 /* I2C bus carrying the GT911 capacitive touch controller, the
  * PCF8563TS RTC, the BQ27220 fuel gauge, the BQ25896 charger, the
  * PCA9535 I/O expander (also used by epdiy for EPD power-rail

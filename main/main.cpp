@@ -10,6 +10,7 @@
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
+#include <driver/uart.h>
 #include <esp_sleep.h>
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
 #include <driver/i2c_master.h>
@@ -317,6 +318,92 @@ static void t5_lora_sleep(void)
 #endif
 }
 
+/* MIA-M10Q GPS (Pro variant) -> UBX-RXM-PMREQ "backup" mode.
+ *
+ * The T5 E-Paper S3 Pro / Pro Lite carries the MIA-M10Q on UART2
+ * (TX=43, RX=44, default baud 38400 -- see the factory firmware
+ * peri_gps.cpp comment "Set u-blox m10q gps baudrate 38400"). The
+ * chip has *no* dedicated power-enable GPIO -- it is hard-wired to
+ * the 3V3 rail -- so the only software lever for its ~25 mA run
+ * draw is the receiver's own RXM-PMREQ command (u-blox M10 interface
+ * description, sec.3.13.6.4). In backup the chip idles at ~15 uA
+ * until a level transition on its RX pin or a hardware reset wakes
+ * it up again. Draftling never uses GPS during normal operation, so
+ * we issue PMREQ once at boot and again from pre_sleep_t5_deinit().
+ *
+ * The Lite variant has the GPS chip depopulated; we still drive
+ * the UART pins, the bytes clock into a floating line, and the
+ * gpio_reset_pin() at the end releases them. No harm done. */
+static void t5_gps_sleep(void)
+{
+#if defined(BOARD_GPS_TX_PIN) && defined(BOARD_GPS_RX_PIN) && \
+    (BOARD_GPS_TX_PIN >= 0) && (BOARD_GPS_RX_PIN >= 0)
+    /* UBX-RXM-PMREQ v0 (CLASS=0x02, ID=0x41, len=8):
+     *   duration[4] = 0   (infinite)
+     *   flags[4]    = 0x06 (bit1=backup, bit2=force)
+     * Checksum is 8-bit Fletcher over class..payload (sec.3.4 of
+     * the M10 interface description). Pre-computed and frozen here
+     * so we don't have to drag a checksum helper into main.cpp. */
+    static const uint8_t kPmreqBackup[] = {
+        0xB5, 0x62,                         /* sync chars                  */
+        0x02, 0x41,                         /* class=RXM, id=PMREQ         */
+        0x08, 0x00,                         /* payload length = 8 (LE)     */
+        0x00, 0x00, 0x00, 0x00,             /* duration = 0 (infinite)     */
+        0x06, 0x00, 0x00, 0x00,             /* flags = backup | force      */
+        0x51, 0x4B                          /* CK_A, CK_B                  */
+    };
+
+    static const uart_port_t kPort = UART_NUM_1;
+    uart_config_t cfg = {};
+    cfg.baud_rate = 38400;
+    cfg.data_bits = UART_DATA_8_BITS;
+    cfg.parity    = UART_PARITY_DISABLE;
+    cfg.stop_bits = UART_STOP_BITS_1;
+    cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    cfg.source_clk = UART_SCLK_DEFAULT;
+
+    esp_err_t err = uart_driver_install(kPort, 256, 0, 0, NULL, 0);
+    bool installed_here = (err == ESP_OK);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGD(TAG, "GPS UART install failed: %s", esp_err_to_name(err));
+        return;
+    }
+    (void)uart_param_config(kPort, &cfg);
+    (void)uart_set_pin(kPort, BOARD_GPS_TX_PIN, BOARD_GPS_RX_PIN,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    int n = uart_write_bytes(kPort, (const char *)kPmreqBackup,
+                             sizeof(kPmreqBackup));
+    if (n == (int)sizeof(kPmreqBackup)) {
+        (void)uart_wait_tx_done(kPort, pdMS_TO_TICKS(100));
+        ESP_LOGI(TAG, "MIA-M10Q GPS: sent UBX-RXM-PMREQ backup (%d bytes)", n);
+    } else {
+        ESP_LOGD(TAG, "GPS UART write returned %d", n);
+    }
+
+    if (installed_here) {
+        (void)uart_driver_delete(kPort);
+    }
+    /* Release the UART pins so they go to high-Z and don't drive
+     * against the GPS once it has entered backup. The pads are not
+     * RTC-IO (GPIO 43/44 sit outside the 0..21 RTC range) so they
+     * default to high-Z in deep sleep automatically; this just
+     * detaches the UART matrix early. */
+    gpio_reset_pin((gpio_num_t)BOARD_GPS_TX_PIN);
+    gpio_reset_pin((gpio_num_t)BOARD_GPS_RX_PIN);
+#endif
+}
+
+/* One-shot "shut every Pro-only radio up" helper, called from
+ * app_main() right after SD init (so SPI3 is available to the LoRa
+ * sleep path). Idempotent and safe to re-invoke later. */
+static void t5_disable_radios_at_boot(void)
+{
+    ESP_LOGI(TAG, "Pro: disabling SX1262 LoRa and MIA-M10Q GPS at boot");
+    t5_lora_sleep();
+    t5_gps_sleep();
+}
+
 /* Sweep a hard-coded list of GPIOs that are not wired to any
  * peripheral on the T5 (per the LilyGO factory schematic) and
  * isolate them so they don't leak through floating inputs in deep
@@ -393,6 +480,11 @@ static void pre_sleep_t5_deinit(void)
 
     /* SX1262 LoRa -> sleep (Pro variant only; harmless NACK on Lite). */
     t5_lora_sleep();
+
+    /* MIA-M10Q GPS -> backup mode (Pro variant only; bytes clock into
+     * an unconnected line on Lite, which is harmless). Done before the
+     * RTC-IO isolation sweep so the UART pins are released cleanly. */
+    t5_gps_sleep();
 
     /* Release the SD card + SPI3 bus so the card itself drops to
      * standby and the bus pins float free. After this point any SPI3
@@ -899,6 +991,20 @@ extern "C" void app_main(void)
             draftling_lvgl_port_unlock();
         }
     }
+
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
+    /* LilyGO T5 E-Paper S3 Pro / Pro Lite: this firmware does not use
+     * the SX1262 LoRa radio or the MIA-M10Q GPS receiver. Both come
+     * up live after POR (SX1262 in STBY_RC ~600 uA, MIA-M10Q in full
+     * acquisition mode ~25 mA), which would burn ~25 mA on the
+     * battery for the entire active session before standby kicks in.
+     * Park them in their lowest-power state right now -- SPI3 has
+     * just been initialised by sd_card_init_spi() above, which is
+     * the bus the LoRa sleep helper needs. pre_sleep_t5_deinit()
+     * re-issues the same commands before deep sleep so a peripheral
+     * that was somehow re-armed in between still gets parked. */
+    t5_disable_radios_at_boot();
+#endif
 
     /* Bring up the ESP-Hosted SDIO link to the on-board ESP32-C6
      * co-processor before Bluetooth or Wi-Fi. The C6 provides the
