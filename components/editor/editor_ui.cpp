@@ -496,6 +496,7 @@ static bool s_esc_pending = false;
 #define DRAFTLING_HAS_BATT_INDICATOR 1
 static lv_obj_t  *s_lbl_dev_batt    = NULL;  /* editor screen */
 static lv_obj_t  *s_lbl_br_dev_batt = NULL;  /* file browser screen */
+static lv_obj_t  *s_lbl_ble_dev_batt = NULL; /* BLE prompt screen */
 static lv_timer_t *s_batt_timer     = NULL;
 #define BATT_POLL_MS 5000  /* refresh battery every 5 s (so charging
                               * state / plug-in events show up quickly
@@ -676,6 +677,7 @@ static void batt_timer_cb(lv_timer_t *timer)
     format_batt_str(batt, sizeof(batt));
     if (s_lbl_dev_batt)    lv_label_set_text(s_lbl_dev_batt, batt);
     if (s_lbl_br_dev_batt) lv_label_set_text(s_lbl_br_dev_batt, batt);
+    if (s_lbl_ble_dev_batt) lv_label_set_text(s_lbl_ble_dev_batt, batt);
 }
 #endif
 
@@ -1642,6 +1644,16 @@ static void list_touch_attach(lv_obj_t *list, list_touch_ctx_t *ctx)
 }
 
 
+/* Tap handler for the BLE-prompt screen's upper-right "Off" button.
+ * Drops the device straight into deep sleep -- standby_enter_sleep()
+ * runs the pre-sleep autosave + per-board teardown the same way
+ * the inactivity timeout and the power-button long-press do, so
+ * this is the touch-only equivalent of those paths. */
+static void ble_prompt_off_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    standby_enter_sleep();
+}
 
 #endif /* CONFIG_DRAFTLING_TOUCHSCREEN */
 
@@ -4147,6 +4159,22 @@ static void build_screens(void)
     /* ---- BLE connection prompt screen ---- */
     s_scr_ble_prompt = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_ble_prompt, theme_bg(), 0);
+    /* The default theme on lv_obj_create() puts a few pixels of
+     * padding and a SCROLLABLE flag on the screen. Both interfere
+     * with the absolutely-positioned children below: the padding
+     * shifts every lv_obj_set_pos() by ~12px (so the upper-right
+     * Off button drifts partly off the right edge of the screen
+     * and its visible portion no longer matches its hit area),
+     * and SCROLLABLE turns any small touch jitter into a scroll
+     * gesture that swallows the Off button's CLICKED event. Pin
+     * the screen to a 0-padding, non-scrollable surface so the
+     * children behave the same way they do on the editor /
+     * browser screens, where the same off-the-shelf positions
+     * have always worked. */
+    lv_obj_set_style_pad_all(s_scr_ble_prompt, 0, 0);
+    lv_obj_set_style_border_width(s_scr_ble_prompt, 0, 0);
+    lv_obj_set_scrollbar_mode(s_scr_ble_prompt, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_remove_flag(s_scr_ble_prompt, LV_OBJ_FLAG_SCROLLABLE);
 
     /* "draftling" title centered near the top */
     {
@@ -4168,6 +4196,69 @@ static void build_screens(void)
     lv_obj_set_style_text_align(s_ble_prompt_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_ble_prompt_lbl, "Initializing...");
     lv_obj_set_pos(s_ble_prompt_lbl, 10, SCR_H / 2 + 10);
+
+    /* Bottom status-bar separator line (matches editor / browser
+     * screens), with a battery percentage label on the right when
+     * the board has a battery monitor. Lets the user see remaining
+     * charge while the firmware is still scanning for a BLE keyboard
+     * or after the keyboard has disconnected. */
+    {
+        lv_obj_t *ble_sline = lv_obj_create(s_scr_ble_prompt);
+        lv_obj_set_size(ble_sline, SCR_W, 1);
+        lv_obj_set_pos(ble_sline, 0, SCR_H - STATUS_H);
+        lv_obj_set_style_bg_color(ble_sline, theme_fg(), 0);
+        lv_obj_set_style_bg_opa(ble_sline, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(ble_sline, 0, 0);
+        lv_obj_set_style_radius(ble_sline, 0, 0);
+        lv_obj_set_style_pad_all(ble_sline, 0, 0);
+    }
+
+#if defined(CONFIG_DRAFTLING_HAS_BATTERY)
+    /* Device battery label (right-aligned in BLE prompt status bar).
+     * Populated by batt_timer_cb() which is created further down in
+     * the file-browser init block. */
+    s_lbl_ble_dev_batt = lv_label_create(s_scr_ble_prompt);
+    lv_obj_set_style_text_font(s_lbl_ble_dev_batt, FONT_11, 0);
+    lv_obj_set_style_text_color(s_lbl_ble_dev_batt, theme_fg(), 0);
+    lv_obj_set_style_text_align(s_lbl_ble_dev_batt, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(s_lbl_ble_dev_batt, SCR_W - 80, SCR_H - STATUS_H + 2);
+    lv_obj_set_width(s_lbl_ble_dev_batt, 78);
+    lv_label_set_text(s_lbl_ble_dev_batt, "");
+#endif
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Power-off button in the upper-right corner. Tapping it sends
+     * the device into deep sleep immediately. Only useful on touch
+     * builds because there is no keyboard available yet on this
+     * screen (we are scanning for it). standby_enter_sleep() runs
+     * the registered pre-sleep callback (autosave + per-board
+     * peripheral teardown) before esp_deep_sleep_start(). */
+    {
+        lv_obj_t *off_btn = lv_button_create(s_scr_ble_prompt);
+        lv_obj_set_size(off_btn, 40, 24);
+        /* Anchor to the top-right corner with a small inset so the
+         * button stays fully on-screen and its hit area matches the
+         * pixels the user sees, independent of the parent screen's
+         * padding (which the default LVGL theme may bump non-zero
+         * on a future LVGL release). */
+        lv_obj_align(off_btn, LV_ALIGN_TOP_RIGHT, -4, 4);
+        lv_obj_set_style_bg_color(off_btn, theme_bg(), 0);
+        lv_obj_set_style_bg_opa(off_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(off_btn, theme_fg(), 0);
+        lv_obj_set_style_border_width(off_btn, 1, 0);
+        lv_obj_set_style_border_opa(off_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(off_btn, 4, 0);
+        lv_obj_set_style_pad_all(off_btn, 0, 0);
+        lv_obj_add_event_cb(off_btn, ble_prompt_off_btn_cb,
+                            LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t *off_lbl = lv_label_create(off_btn);
+        lv_obj_set_style_text_font(off_lbl, FONT_11, 0);
+        lv_obj_set_style_text_color(off_lbl, theme_fg(), 0);
+        lv_label_set_text(off_lbl, "Off");
+        lv_obj_center(off_lbl);
+    }
+#endif
 
     /* Register BLE status callbacks */
     ble_keyboard_set_connect_callback(ble_connect_status_cb);
@@ -4402,6 +4493,7 @@ static void teardown_screens(void)
     s_list_files = s_lbl_br_status = NULL;
 #if defined(DRAFTLING_HAS_BATT_INDICATOR)
     s_lbl_dev_batt = s_lbl_br_dev_batt = NULL;
+    s_lbl_ble_dev_batt = NULL;
 #endif
     s_menu_list = s_lbl_menu_hdr = NULL;
     s_settings_list = NULL;

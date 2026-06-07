@@ -535,33 +535,61 @@
 #define I2C_SDA_PIN         31
 #define I2C_SCL_PIN         32
 
-/* GT911 touch controller. The BSP forces the alternate (backup)
- * I2C address 0x14 at startup by holding the INT line LOW during
- * GT911 internal reset -- there is a hardware pull-up to 3V3 on
- * INT that would otherwise select the primary 0x5D address but
- * the GT911 stops responding under that condition (Tab5 board
- * quirk documented in bsp/m5stack_tab5/src/bsp_display.c). The
- * touchscreen component probes both addresses with primary first,
- * so we list the backup here to skip the failing primary probe
- * and speed up boot. RST is wired to the PI4IOE5V6408 (not to an
- * ESP32-P4 GPIO), so we leave the dedicated RST at -1.
+/* M5Stack Tab5 touch controller. Two hardware variants exist:
  *
- * GT911 reports panel-native coordinates 720 x 1280 portrait
- * (BSP panel orientation, INT/USB-C edge at the top of the GT911
- * frame). draftling_lvgl_port_init() is called with rotate_deg=90 to render
- * the editor landscape, and the touchscreen component applies the
- * same user_rotate_deg to map GT911 (x,y) -> LVGL (x,y). The
- * BSP-side swap/mirror is identity, so set both to 0 here too;
- * mirror flags can be flipped at hardware bring-up if the panel
- * arrives factory-flashed with a different orientation. */
+ *   - v1: Goodix GT911 capacitive touch at I2C 0x14 (backup
+ *         address). RST is not wired to any ESP32-P4 GPIO, so
+ *         the GT911 internal POR is triggered by power-cycling
+ *         BSP_TOUCH_EN through the first PI4IOE5V6408. main.cpp
+ *         pre-drives GPIO23 LOW (overriding the 3V3 pull-up on
+ *         INT) before that toggle so the GT911 latches its
+ *         backup address rather than the unused 0x5D.
+ *
+ *   - v2: Sitronix ST7123 integrated panel+touch at I2C 0x55.
+ *         No INT-latch dance is needed.
+ *
+ * Rather than re-implement the per-variant bring-up, the
+ * Draftling touchscreen component delegates to the upstream
+ * espressif/m5stack_tab5 BSP's bsp_touch_new() on this board.
+ * The BSP probes 0x55 first (ST7123, board v2) and falls back
+ * to 0x14 backup (GT911, board v1), instantiates the matching
+ * esp_lcd_touch_* driver, and returns a generic
+ * esp_lcd_touch_handle_t. touchscreen.cpp polls through
+ * esp_lcd_touch_read_data + esp_lcd_touch_get_coordinates so
+ * the same source handles both variants transparently. The
+ * pre-display TOUCH_EN power-cycle in main.cpp still runs (it
+ * is the only thing that fixes the v1 GT911 address latch).
+ *
+ * TOUCH_I2C_ADDR / TOUCH_RST_PIN below are kept as nominal
+ * (v1 GT911) values for the legacy touchscreen_config_t struct;
+ * the BSP path ignores them and uses BSP_LCD_TOUCH_INT for INT
+ * and GPIO_NUM_NC for RST. Native panel coordinate range is
+ * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
+ *
+ * draftling_lvgl_port_init() is called with the user-configured
+ * DISPLAY_ROTATE (default 270 for landscape) and LVGL v9.2 then
+ * rotates indev points itself inside indev_pointer_proc(). So
+ * touchscreen.cpp must hand LVGL coords in the *pre-rotation*
+ * portrait frame -- main.cpp passes user_rotate_deg=0 for that
+ * reason. Empirically (Tab5 v1, GT911 via BSP), the controller's
+ * native axes are inverted on both axes relative to the panel's
+ * portrait pixel axes: a tap at landscape upper-left produces
+ * raw_x near 0 (small end of the 0..720 short-axis range) and
+ * raw_y near 1280 (large end of the long-axis range), which
+ * corresponds to panel-native portrait corner (0, 1280-ish) --
+ * the opposite portrait corner from what LVGL's rotation-270
+ * indev transform expects for landscape (0, 0). Mirroring both
+ * X and Y in native_to_logical() flips raw onto panel-native
+ * portrait so LVGL's own indev rotation lands the cursor under
+ * the finger. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
 #define TOUCH_NATIVE_W      720
 #define TOUCH_NATIVE_H      1280
 #define TOUCH_SWAP_XY       0
-#define TOUCH_MIRROR_X      0
-#define TOUCH_MIRROR_Y      0
+#define TOUCH_MIRROR_X      1
+#define TOUCH_MIRROR_Y      1
 
 /* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
  * pack monitored by an INA226 power monitor at I2C 0x41 (on the

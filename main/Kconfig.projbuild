@@ -265,6 +265,19 @@ config DRAFTLING_BATTERY_INA226
     default y if DRAFTLING_MODEL_M5STACK_TAB5
     default n
 
+# Enables the BQ25896 single-cell Li-ion charger init in
+# components/battery (battery_init_bq25896). The chip lives on the
+# shared I2C bus at 0x6B on the LilyGO T5 E-Paper S3 Pro / Pro Lite
+# and ships with conservative defaults (500 mA IINLIM, 40 s I2C
+# watchdog that reverts host writes, AUTO_DPDM that re-snaps IINLIM
+# back to USB SDP). Without an explicit init the cell only charges
+# at ~500 mA. main.cpp calls battery_init_bq25896(shared_i2c_bus)
+# right after the shared bus is created when this symbol is set.
+config DRAFTLING_CHARGER_BQ25896
+    bool
+    default y if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
+    default n
+
 # Enables the USB Host stack + USB HID keyboard driver
 # (components/usb_kbd) on boards that wire a host-mode USB-A port.
 # On M5Stack Tab5 the USB-A connector is gated by BSP_FEATURE_USB
@@ -423,12 +436,18 @@ config DRAFTLING_TOUCH_INT_GPIO
     default 3  if DRAFTLING_MODEL_JC3248W535
     default 48 if DRAFTLING_MODEL_M5STACK_PAPERS3
     default 3  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
-    # M5Stack Tab5: GT911 INT on GPIO23. Held LOW at startup by the
-    # BSP so the GT911 powers up at its backup I2C address (0x14)
-    # instead of the primary 0x5D -- a hardware pull-up resistor on
-    # this board forces the alternate-address path. ESP32-P4
-    # GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake on
-    # this pin is unavailable: standby on Tab5 therefore enters
+    # M5Stack Tab5: GT911 INT on GPIO23. main.cpp pre-drives this
+    # pin LOW *and* power-cycles BSP_TOUCH_EN (PI4IOE5V6408 #1, IO5)
+    # before display_init() so the GT911 actually re-runs its
+    # internal POR with INT low and latches its backup I2C address
+    # 0x14 (the BSP only ever probes 0x14; a hardware 3V3 pull-up
+    # on INT would otherwise force the primary 0x5D path which the
+    # board does not route). The power-cycle is what makes this
+    # work across warm reboots, where TOUCH_EN was already high
+    # from the previous boot and the GT911 had already latched
+    # 0x5D before we got control.
+    # ESP32-P4 GPIO23 is not LP_IO so EXT0/EXT1/LP_IO deep-sleep wake
+    # on this pin is unavailable: standby on Tab5 therefore enters
     # real deep sleep with NO GPIO wake source and the only wake
     # path is the hardware RESET button (cold boot, autosave is
     # restored). DRAFTLING_STANDBY_WAKE_ON_TOUCH must NOT be set
@@ -449,6 +468,20 @@ config DRAFTLING_TOUCH_RST_GPIO
     range -1 54
     default 9  if DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO
     default -1
+
+config DRAFTLING_TOUCH_DEBUG_LOG
+    bool "Log every raw/logical touch coordinate (verbose)"
+    depends on DRAFTLING_TOUCHSCREEN
+    default n
+    help
+        Emit an INFO-level log line on every successful touch poll
+        with the raw native coordinates from the controller and
+        the logical (post-transform) coordinates handed to LVGL.
+
+        Useful when bringing up a new touch panel to dial in
+        TOUCH_SWAP_XY / TOUCH_MIRROR_X / TOUCH_MIRROR_Y in
+        app_config.h. Spammy during normal use, so leave off in
+        production builds.
 
 # ---- Standby behavior ----
 #

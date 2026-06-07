@@ -1,0 +1,18 @@
+## IDF Component manifest for the touchscreen component.
+##
+## The default GT911 / AXS5106L code paths talk to the controller
+## directly over driver-NG I2C and have no managed-component
+## dependencies. On the M5Stack Tab5 (ESP32-P4) we instead delegate
+## touch bring-up to the upstream espressif/m5stack_tab5 BSP via
+## bsp_touch_new(), so the same Draftling build handles both the v1
+## (GT911 at 0x14 backup) and v2 (ST7123 at 0x55) hardware variants
+## that the BSP auto-detects by I2C probe. The BSP transitively
+## pulls in the matching esp_lcd_touch_gt911 / esp_lcd_touch_st7123
+## drivers and the generic esp_lcd_touch core that
+## components/touchscreen/touchscreen.cpp polls through.
+dependencies:
+  espressif/m5stack_tab5:
+    version: "^1.2.0~1"
+    rules:
+      - if: "target == esp32p4"
+    require: public

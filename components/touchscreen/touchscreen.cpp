@@ -48,6 +48,20 @@
 
 #include "touchscreen.h"
 
+/* On the M5Stack Tab5 we delegate the controller-specific bring-up
+ * to the upstream espressif/m5stack_tab5 BSP via bsp_touch_new(),
+ * which auto-detects v1 (GT911 at 0x14 backup) vs v2 (ST7123 at
+ * 0x55) and returns an esp_lcd_touch_handle_t. We then poll through
+ * the generic esp_lcd_touch core (esp_lcd_touch_read_data +
+ * esp_lcd_touch_get_coordinates), so the same Draftling source
+ * handles both board variants transparently. The direct-I2C GT911
+ * / AXS5106L paths below are unaffected on every other board. */
+#if defined(CONFIG_DRAFTLING_MODEL_M5STACK_TAB5)
+#  define DRAFTLING_TOUCH_BSP_M5STACK_TAB5 1
+#  include "bsp/touch.h"
+#  include "esp_lcd_touch.h"
+#endif
+
 static const char *TAG = "Touch";
 
 static bool s_initialized = false;
@@ -61,6 +75,13 @@ static bool s_owns_bus = false;
 static i2c_master_dev_handle_t s_dev = NULL;
 static SemaphoreHandle_t s_mux = NULL;
 static lv_indev_t *s_indev = NULL;
+
+#if defined(DRAFTLING_TOUCH_BSP_M5STACK_TAB5)
+/* esp_lcd_touch handle owned by the m5stack_tab5 BSP. Created by
+ * bsp_touch_new() in touchscreen_init() when the Tab5 backend is
+ * selected; polled via the generic esp_lcd_touch_* API. */
+static esp_lcd_touch_handle_t s_bsp_tp = NULL;
+#endif
 
 /* Latched "current touch" state, updated on every successful poll. */
 static volatile bool s_pressed_latch = false;
@@ -269,10 +290,58 @@ static bool poll_gt911(int *out_x, int *out_y)
 
 #endif /* CONFIG_DRAFTLING_TOUCH_GT911 */
 
+/* ---- M5Stack Tab5 (BSP-delegated) driver ---- */
+#if defined(DRAFTLING_TOUCH_BSP_M5STACK_TAB5)
+
+/* Drain one frame from the BSP-managed touch handle. The BSP wraps
+ * either esp_lcd_touch_gt911 (board v1) or esp_lcd_touch_st7123
+ * (board v2) -- both expose the same generic esp_lcd_touch_*
+ * interface, so this poll function is variant-agnostic. */
+static bool poll_bsp_touch(int *out_x, int *out_y)
+{
+    if (!s_bsp_tp) return false;
+
+    if (esp_lcd_touch_read_data(s_bsp_tp) != ESP_OK) {
+        ESP_LOGD(TAG, "bsp touch read_data failed");
+        return false;
+    }
+
+    uint16_t x = 0, y = 0, strength = 0;
+    uint8_t  cnt = 0;
+    /* esp_lcd_touch_get_coordinates has a deprecation attribute in
+     * the upstream header targeting esp_lcd_touch 2.0; we keep
+     * using it because it is the only read API stably available
+     * across the 1.x line that the m5stack_tab5 BSP currently
+     * pins. The warning is benign. */
+    bool pressed = esp_lcd_touch_get_coordinates(
+        s_bsp_tp, &x, &y, &strength, &cnt, 1);
+    if (!pressed || cnt == 0) return false;
+
+    int lx, ly;
+    native_to_logical((int)x, (int)y, &lx, &ly);
+#if defined(CONFIG_DRAFTLING_TOUCH_DEBUG_LOG)
+    /* Diagnostic log: raw native coordinates from the BSP-managed
+     * esp_lcd_touch driver and the logical coordinates we hand to
+     * LVGL after native_to_logical(). Used to dial in TOUCH_SWAP_XY /
+     * TOUCH_MIRROR_* on new boards. Gated behind
+     * DRAFTLING_TOUCH_DEBUG_LOG (off by default) so the logs do not
+     * spam the console during normal use. */
+    ESP_LOGI(TAG, "bsp touch raw=(%u,%u) cnt=%u -> logical=(%d,%d)",
+             (unsigned)x, (unsigned)y, (unsigned)cnt, lx, ly);
+#endif
+    if (out_x) *out_x = lx;
+    if (out_y) *out_y = ly;
+    return true;
+}
+
+#endif /* DRAFTLING_TOUCH_BSP_M5STACK_TAB5 */
+
 /* Dispatch to the controller-specific poll. */
 static bool poll_controller(int *out_x, int *out_y)
 {
-#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+#if defined(DRAFTLING_TOUCH_BSP_M5STACK_TAB5)
+    return poll_bsp_touch(out_x, out_y);
+#elif defined(CONFIG_DRAFTLING_TOUCH_GT911)
     return poll_gt911(out_x, out_y);
 #elif defined(CONFIG_DRAFTLING_TOUCH_AXS5106L)
     return poll_axs5106l(out_x, out_y);
@@ -332,6 +401,48 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         ESP_LOGE(TAG, "mutex alloc failed");
         return;
     }
+
+#if defined(DRAFTLING_TOUCH_BSP_M5STACK_TAB5)
+    /* Tab5 backend: hand off bring-up to the m5stack_tab5 BSP. The
+     * BSP probes I2C 0x55 first (ST7123, board v2) and falls back
+     * to 0x14 (GT911 backup, board v1), then constructs the matching
+     * esp_lcd_touch driver. We do NOT manage rst/intr GPIOs, an I2C
+     * bus, or a per-controller I2C device handle on this board -- the
+     * BSP owns all of that. s_cfg.{native,logical,mirror,swap,rotate}
+     * are still consulted by native_to_logical() in poll_bsp_touch(). */
+    esp_err_t err = bsp_touch_new(NULL, &s_bsp_tp);
+    if (err != ESP_OK || !s_bsp_tp) {
+        ESP_LOGE(TAG, "bsp_touch_new failed: %s", esp_err_to_name(err));
+        s_bsp_tp = NULL;
+        return;
+    }
+
+    s_indev = lv_indev_create();
+    if (s_indev) {
+        lv_indev_set_type(s_indev, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(s_indev, indev_read_cb);
+        lv_indev_set_display(s_indev, lv_display_get_default());
+    } else {
+        ESP_LOGW(TAG, "lv_indev_create failed (LVGL not initialized?)");
+    }
+
+    s_initialized = true;
+    {
+        lv_display_t *d = lv_display_get_default();
+        int32_t dw = d ? lv_display_get_horizontal_resolution(d) : -1;
+        int32_t dh = d ? lv_display_get_vertical_resolution(d) : -1;
+        ESP_LOGI(TAG, "Tab5 BSP touch initialized "
+                      "(handle=%p, native=%dx%d, logical=%dx%d, "
+                      "mirror_x=%d mirror_y=%d swap_xy=%d, "
+                      "user_rotate_deg=%d, lvgl_disp=%ldx%ld)",
+                 (void *)s_bsp_tp,
+                 s_cfg.native_width, s_cfg.native_height,
+                 s_cfg.logical_width, s_cfg.logical_height,
+                 (int)s_cfg.mirror_x, (int)s_cfg.mirror_y, (int)s_cfg.swap_xy,
+                 s_cfg.user_rotate_deg, (long)dw, (long)dh);
+    }
+    return;
+#else
 
     /* Optional dedicated reset line. (On the JC3248W535 the touch
      * reset is tied to the LCD reset, so this is usually -1.) */
@@ -458,6 +569,7 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
              s_cfg.native_width, s_cfg.native_height,
              s_cfg.logical_width, s_cfg.logical_height,
              (int)s_cfg.mirror_x, (int)s_cfg.mirror_y, (int)s_cfg.swap_xy);
+#endif /* DRAFTLING_TOUCH_BSP_M5STACK_TAB5 */
 }
 
 extern "C" bool touchscreen_is_initialized(void)
@@ -499,8 +611,25 @@ extern "C" bool touchscreen_is_pressed(void)
 
 extern "C" void touchscreen_sleep(void)
 {
-    if (!s_initialized || !s_dev) return;
-#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    if (!s_initialized) return;
+#if defined(DRAFTLING_TOUCH_BSP_M5STACK_TAB5)
+    if (!s_bsp_tp) return;
+    /* esp_lcd_touch_enter_sleep dispatches to the BSP-selected
+     * controller's vendor sleep sequence (GT911 cmd 0x05 on v1,
+     * ST7123 equivalent on v2). Take the mutex so we don't race
+     * a concurrent poll. */
+    if (s_mux && xSemaphoreTake(s_mux, pdMS_TO_TICKS(50)) == pdTRUE) {
+        esp_err_t err = esp_lcd_touch_enter_sleep(s_bsp_tp);
+        xSemaphoreGive(s_mux);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Tab5 touch entered sleep mode");
+        } else {
+            ESP_LOGW(TAG, "Tab5 touch sleep cmd failed: %s",
+                     esp_err_to_name(err));
+        }
+    }
+#elif defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    if (!s_dev) return;
     /* GT911 datasheet, section 6 (command register 0x8040):
      * writing 0x05 puts the controller into sleep mode (typical
      * standby current < 10 uA). It wakes when the INT pin is
