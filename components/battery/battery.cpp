@@ -445,6 +445,10 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
  *                            1 = take min(IINLIM, I_LIM_pin))
  *     [5:0] IINLIM          input current limit, 100 mA + N * 50 mA
  *   REG02 - ADC, ICO and D+/D- detection:
+ *     [7]   CONV_START      (write 1 to trigger a one-shot ADC; self-
+ *                            clears when conversion completes)
+ *     [6]   CONV_RATE       (0 = one-shot (POR default), 1 = continuous
+ *                            ADC at 1 Hz feeding BATV/SYSV/ICHGR/TSPCT)
  *     [4]   ICO_EN          (0 = disable Input Current Optimizer;
  *                            1 = let the chip dynamically pick
  *                                IDPM_LIM <= IINLIM based on VBUS sag)
@@ -585,9 +589,10 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to disable I2C watchdog");
     }
 
-    /* (2) Disable the source-detection state machine. REG02 power-on
-     * default is 0x3D (CONV_RATE=0, BOOST_FREQ=1, ICO_EN=1, HVDCP_EN=1,
-     * MAXC_EN=1, FORCE_DPDM=0, AUTO_DPDM_EN=1). We clear:
+    /* (2) Disable the source-detection state machine and enable the
+     * continuous ADC. REG02 power-on default is 0x3D (CONV_START=0,
+     * CONV_RATE=0, BOOST_FREQ=1, ICO_EN=1, HVDCP_EN=1, MAXC_EN=1,
+     * FORCE_DPDM=0, AUTO_DPDM_EN=1). We clear:
      *
      *   - ICO_EN (bit 4): the Input Current Optimizer dynamically
      *     reduces the *actual* input current limit (IDPM_LIM, REG13)
@@ -607,9 +612,17 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
      *     (Note: the bit lives at position 0, not 1 -- bit 1 is
      *     FORCE_DPDM, a write-1-to-trigger pulse, default 0.)
      *
-     * Mask 0x1D = ICO_EN | HVDCP_EN | MAXC_EN | AUTO_DPDM_EN. */
-    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x1D, 0x00) != 0) {
-        ESP_LOGW(TAG, "BQ25896: failed to disable ICO / HVDCP / AUTO_DPDM");
+     * And we set:
+     *
+     *   - CONV_RATE (bit 6) = 1: run the BATV / SYSV / ICHGR / TSPCT
+     *     ADC continuously at 1 Hz. Without this the chip stays in
+     *     one-shot mode and battery_bq25896_dump_status() reads stale
+     *     register zeros (BATV=2304 mV / SYSV=2304 mV / ICHGR=0 mA
+     *     are the raw-zero ADC base values, not real measurements).
+     *
+     * Mask 0x5D = CONV_RATE | ICO_EN | HVDCP_EN | MAXC_EN | AUTO_DPDM_EN. */
+    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x5D, 0x40) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to configure REG02 (ADC / ICO / HVDCP / AUTO_DPDM)");
     }
 
     /* (3) Raise IINLIM. Clear EN_ILIM (bit 6) so the IINLIM register
@@ -853,12 +866,15 @@ extern "C" void battery_bq25896_reassert_config(void)
      * (watchdog = 40 s) and silently undo our writes 40 s later. */
     (void)bq25896_rmw_u8(BQ25896_REG_TIMER, 0x30, 0x00);
 
-    /* Force ICO_EN / HVDCP_EN / MAXC_EN / AUTO_DPDM_EN all = 0
-     * (REG02 mask 0x1D). Same rationale as init: the Input Current
-     * Optimizer can otherwise drag IDPM_LIM down to ~150 mA over
-     * time on a slightly sagging supply, and AUTO_DPDM would snap
-     * IINLIM back to USB-SDP 500 mA on every cable reseat. */
-    (void)bq25896_rmw_u8(BQ25896_REG_ADC, 0x1D, 0x00);
+    /* Force ICO_EN / HVDCP_EN / MAXC_EN / AUTO_DPDM_EN all = 0 and
+     * re-assert CONV_RATE = 1 (REG02 mask 0x5D, value 0x40). Same
+     * rationale as init: the Input Current Optimizer can otherwise
+     * drag IDPM_LIM down to ~150 mA over time on a slightly sagging
+     * supply, AUTO_DPDM would snap IINLIM back to USB-SDP 500 mA on
+     * every cable reseat, and a chip POR would revert CONV_RATE to 0
+     * and leave the ADC stuck in one-shot mode (so the next status
+     * dump would log raw-zero BATV/SYSV/ICHGR readings). */
+    (void)bq25896_rmw_u8(BQ25896_REG_ADC, 0x5D, 0x40);
 }
 
 extern "C" void battery_bq25896_dump_status(void)
