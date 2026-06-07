@@ -367,6 +367,29 @@ static reconn_phase_t s_reconn_phase = RECONN_LAST;
 static int            s_reconn_idx   = 0; /* index for RECONN_KNOWN */
 static TimerHandle_t  s_reconn_timer = NULL;
 
+/* Reconnect backoff. Defaults to RECONN_DEFAULT_MS, but is extended
+ * when the peer reports SMP_REPEATED_ATTEMPTS (0x61) in
+ * ESP_GAP_BLE_AUTH_CMPL_EVT -- many keyboards (e.g. NuPhy Air60)
+ * rate-limit pairing on their side, and hammering them at the
+ * default 1 s interval just keeps reproducing the failure (and the
+ * resulting BLE-bus storm wedges the epdiy `epd_prep` feeders).
+ * Reset on a successful auth. */
+#define RECONN_DEFAULT_MS   1000
+#define RECONN_SMP_BASE_MS  5000
+#define RECONN_SMP_MAX_MS   30000
+static uint32_t       s_reconn_delay_ms      = RECONN_DEFAULT_MS;
+static int            s_smp_repeat_attempts  = 0;
+
+/* Start (or restart) the reconnect timer using the current
+ * s_reconn_delay_ms backoff. xTimerChangePeriod() also starts the
+ * timer if it is dormant, so one call suffices. */
+static inline void reconn_timer_kick(void)
+{
+    if (!s_reconn_timer) return;
+    xTimerChangePeriod(s_reconn_timer,
+                       pdMS_TO_TICKS(s_reconn_delay_ms), 0);
+}
+
 /* Periodic startup timer: safety net that re-registers the GAP
  * callback and retries scanning until connected. */
 static TimerHandle_t  s_startup_timer = NULL;
@@ -765,9 +788,7 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
             notify_status("Connection failed, retrying...");
             s_connecting = false;
             /* Continue reconnection sequence after a short delay */
-            if (s_reconn_timer) {
-                xTimerStart(s_reconn_timer, 0);
-            }
+            reconn_timer_kick();
         }
         break;
     }
@@ -958,9 +979,7 @@ static void hidh_recover_task(void *arg)
     if (!s_disabled) {
         s_reconn_phase = RECONN_LAST;
         s_reconn_idx   = 0;
-        if (s_reconn_timer) {
-            xTimerStart(s_reconn_timer, 0);
-        }
+        reconn_timer_kick();
     }
     vTaskDelete(NULL);
 }
@@ -1026,9 +1045,7 @@ static void connect_task(void *arg)
         ESP_LOGE(TAG, "HIDH not available, cannot connect");
         notify_status("BLE HID not ready, retrying...");
         s_connecting = false;
-        if (s_reconn_timer) {
-            xTimerStart(s_reconn_timer, 0);
-        }
+        reconn_timer_kick();
         vTaskDelete(NULL);
         return;
     }
@@ -1076,9 +1093,7 @@ static void connect_task(void *arg)
         notify_status("Connection failed, retrying...");
         s_connecting = false;
         /* Retry reconnection after a delay */
-        if (s_reconn_timer) {
-            xTimerStart(s_reconn_timer, 0);
-        }
+        reconn_timer_kick();
     }
     vTaskDelete(NULL);
 }
@@ -1395,6 +1410,10 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             if (s_passkey_cb) {
                 s_passkey_cb(BLE_PASSKEY_DISMISS);
             }
+            /* Clear any SMP-rate-limit backoff accumulated from
+             * previous failed attempts. */
+            s_smp_repeat_attempts = 0;
+            s_reconn_delay_ms     = RECONN_DEFAULT_MS;
             /* Encryption is now established.  On ESP-IDF Bluedroid the
              * HIDH library discovers services and writes CCCDs after
              * the BLE connection is up; with "Just Works" or fast
@@ -1403,10 +1422,48 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
              * is needed -- it would waste GATT notification slots
              * (CONFIG_BT_GATTC_NOTIF_REG_MAX). */
         } else {
+            uint8_t reason = param->ble_security.auth_cmpl.fail_reason;
             ESP_LOGE(TAG, "BLE authentication failed, reason: 0x%x",
-                     param->ble_security.auth_cmpl.fail_reason);
+                     reason);
             if (s_passkey_cb) {
                 s_passkey_cb(BLE_PASSKEY_DISMISS);
+            }
+            /* Notify the UI of the (failed) connect attempt so that
+             * apply_pending_connect_state() latches a single GC16
+             * full refresh before the subsequent
+             * notify_status("Connection failed, retrying...") and
+             * any per-attempt status flicker repaints the BLE prompt
+             * label. Without this, the back-to-back near-full GL16
+             * partials issued while Bluedroid is still hammering the
+             * bus post-auth-fail wedge epdiy's `epd_prep` feeders
+             * (busy-spin at top priority on both cores, starves
+             * IDLE0, trips the task watchdog). Idempotent w.r.t. a
+             * later ESP_HIDH_CLOSE_EVENT, which also calls this. */
+            if (s_connect_cb) {
+                s_connect_cb(false);
+            }
+            /* SMP_REPEATED_ATTEMPTS (0x61): the peer is rate-limiting
+             * pairing. Hammering it at the default 1 s interval just
+             * keeps reproducing the failure (and the resulting
+             * post-fail BLE-bus storm keeps stressing the EPD rail).
+             * Back off exponentially up to RECONN_SMP_MAX_MS. Reset
+             * on a successful auth above. */
+            if (reason == 0x61) {
+                if (s_smp_repeat_attempts < 30) {
+                    s_smp_repeat_attempts++;
+                }
+                uint32_t delay_ms = RECONN_SMP_BASE_MS;
+                for (int i = 1; i < s_smp_repeat_attempts; i++) {
+                    delay_ms *= 2;
+                    if (delay_ms >= RECONN_SMP_MAX_MS) {
+                        delay_ms = RECONN_SMP_MAX_MS;
+                        break;
+                    }
+                }
+                s_reconn_delay_ms = delay_ms;
+                notify_status("Pairing rejected,\n"
+                              "retrying in %lu s...",
+                              (unsigned long)(delay_ms / 1000));
             }
         }
         break;
