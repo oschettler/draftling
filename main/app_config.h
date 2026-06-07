@@ -565,25 +565,26 @@
  * the BSP path ignores them and uses BSP_LCD_TOUCH_INT for INT
  * and GPIO_NUM_NC for RST. Native panel coordinate range is
  * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
- * draftling_lvgl_port_init() is called with rotate_deg=270 to
- * render the editor landscape, and touchscreen.cpp applies the
- * same user_rotate_deg when mapping native (x,y) -> LVGL. The
- * BSP exposes identity swap/mirror, but in the as-mounted
- * orientation of both the v1 (GT911) and v2 (ST7123) panels the
- * touch controller's native axes are rotated 90 degrees relative
- * to the panel's pixel axes AND its long (native-Y) axis runs
- * opposite to the panel's long axis. native_to_logical() composes
- * (mirror_y -> swap_xy -> scale -> rotate 270), so swap_xy=1 and
- * mirror_y=1 here aligns native (nx, ny) with the rotated
- * landscape coordinates the editor draws against. */
+ * draftling_lvgl_port_init() is called with the user-configured
+ * DISPLAY_ROTATE (default 270 for landscape) and touchscreen.cpp
+ * passes the same value as user_rotate_deg when mapping native
+ * (x,y) -> LVGL. Empirically (verified against the BSP path on a
+ * v1 GT911 board), the controller's native axes line up 1:1 with
+ * the panel: native_x in [0, 720) is the panel's short axis and
+ * native_y in [0, 1280) is its long axis, both running in the same
+ * direction as the panel-native portrait pixel axes. No swap or
+ * mirror is needed -- native_to_logical() with all flags clear
+ * produces panel-native portrait logical (lx, ly), and the trailing
+ * rotation step then handles every supported DISPLAY_ROTATE value
+ * (0 / 90 / 180 / 270) correctly. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
 #define TOUCH_NATIVE_W      720
 #define TOUCH_NATIVE_H      1280
-#define TOUCH_SWAP_XY       1
+#define TOUCH_SWAP_XY       0
 #define TOUCH_MIRROR_X      0
-#define TOUCH_MIRROR_Y      1
+#define TOUCH_MIRROR_Y      0
 
 /* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
  * pack monitored by an INA226 power monitor at I2C 0x41 (on the
