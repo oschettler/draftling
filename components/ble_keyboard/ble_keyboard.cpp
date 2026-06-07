@@ -1468,10 +1468,15 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
                  (unsigned)p->latency, (unsigned)p->timeout);
         if (p->status == ESP_BT_STATUS_SUCCESS &&
             p->timeout < SUPERVISION_TIMEOUT_FLOOR_10MS) {
+            /* p->min_int / p->max_int reflect the range that was just
+             * accepted, so they are guaranteed valid as a pair (min
+             * <= max). Re-submit them as-is to avoid regressing the
+             * peer's chosen interval/latency; only the supervision
+             * timeout is changed. */
             esp_ble_conn_update_params_t up = {};
             memcpy(up.bda, p->bda, sizeof(esp_bd_addr_t));
-            up.min_int = p->min_int ? p->min_int : p->conn_int;
-            up.max_int = p->max_int ? p->max_int : p->conn_int;
+            up.min_int = p->min_int;
+            up.max_int = p->max_int;
             up.latency = p->latency;
             up.timeout = SUPERVISION_TIMEOUT_FLOOR_10MS;
             esp_err_t uerr = esp_ble_gap_update_conn_params(&up);
