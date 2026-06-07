@@ -565,28 +565,31 @@
  * the BSP path ignores them and uses BSP_LCD_TOUCH_INT for INT
  * and GPIO_NUM_NC for RST. Native panel coordinate range is
  * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
+ *
  * draftling_lvgl_port_init() is called with the user-configured
  * DISPLAY_ROTATE (default 270 for landscape) and LVGL v9.2 then
  * rotates indev points itself inside indev_pointer_proc(). So
  * touchscreen.cpp must hand LVGL coords in the *pre-rotation*
  * portrait frame -- main.cpp passes user_rotate_deg=0 for that
- * reason. Empirically (verified against the BSP path on a v1
- * GT911 board), the controller's native axes line up 1:1 with
- * the panel: native_x in [0, 720) is the panel's short axis and
- * native_y in [0, 1280) is its long axis, both running in the same
- * direction as the panel-native portrait pixel axes. No swap or
- * mirror is needed -- native_to_logical() with all flags clear
- * and user_rotate_deg=0 produces panel-native portrait logical
- * (lx, ly), which is exactly what LVGL's own rotation step
- * expects to inverse-rotate into the rotated landscape UI. */
+ * reason. Empirically (Tab5 v1, GT911 via BSP), the controller's
+ * native axes are inverted on both axes relative to the panel's
+ * portrait pixel axes: a tap at landscape upper-left produces
+ * raw_x near 0 (small end of the 0..720 short-axis range) and
+ * raw_y near 1280 (large end of the long-axis range), which
+ * corresponds to panel-native portrait corner (0, 1280-ish) --
+ * the opposite portrait corner from what LVGL's rotation-270
+ * indev transform expects for landscape (0, 0). Mirroring both
+ * X and Y in native_to_logical() flips raw onto panel-native
+ * portrait so LVGL's own indev rotation lands the cursor under
+ * the finger. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO
 #define TOUCH_NATIVE_W      720
 #define TOUCH_NATIVE_H      1280
 #define TOUCH_SWAP_XY       0
-#define TOUCH_MIRROR_X      0
-#define TOUCH_MIRROR_Y      0
+#define TOUCH_MIRROR_X      1
+#define TOUCH_MIRROR_Y      1
 
 /* No board-managed battery ADC: Tab5 carries a 2S NP-F550 Li-ion
  * pack monitored by an INA226 power monitor at I2C 0x41 (on the
