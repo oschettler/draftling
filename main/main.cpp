@@ -3,6 +3,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <nvs_flash.h>
 #include <nvs.h>
@@ -415,16 +416,40 @@ static void t5_disable_radios_at_boot(void)
 static void t5_isolate_unused_gpios(void)
 {
     /* ESP32-S3 RTC-IO range is GPIO0..GPIO21. Skip pins that are
-     * actively used in deep sleep:
-     *   GPIO0  -- BOOT button, EXT0 wake (handled by standby.cpp)
-     *   GPIO11 -- front-light, held LOW (display_deep_sleep_prepare)
-     *   GPIO13 -- SD MOSI / shared SPI3 (released by sd_card_deinit)
-     *   GPIO14 -- SD SCK  / shared SPI3 (released by sd_card_deinit)
-     *   GPIO21 -- SD MISO / shared SPI3 (released by sd_card_deinit)
-     *   GPIO12 -- SD CS (released by sd_card_deinit)
-     */
+     * actively used in deep sleep OR are otherwise NOT spare:
+     *   GPIO0           -- BOOT button, EXT0 wake (handled by standby.cpp)
+     *   GPIO5..GPIO10   -- EPD 8-bit parallel data bus (epd_board_v7
+     *                      pins D0..D5; released by epd_lcd_deinit()
+     *                      inside display_deep_sleep_prepare(), so
+     *                      isolating them again here is redundant and
+     *                      historically mis-described as "unused").
+     *   GPIO11          -- front-light LED, held LOW with gpio_hold_en
+     *                      (display_deep_sleep_prepare); must NOT be
+     *                      reclaimed by an isolate call.
+     *   GPIO12          -- SD CS (released by sd_card_deinit).
+     *   GPIO13          -- SD MOSI / shared SPI3 (released by sd_card_deinit).
+     *   GPIO14          -- SD SCK  / shared SPI3 (released by sd_card_deinit).
+     *   GPIO15..GPIO18  -- EPD 8-bit parallel data bus (epd_board_v7
+     *                      pins D3, D4, D5, D6; same rationale as
+     *                      GPIO5..GPIO10).
+     *   GPIO19, GPIO20  -- ESP32-S3 USB-Serial-JTAG (USB CDC console).
+     *                      Isolating these silently kills the last
+     *                      few lines of log output before
+     *                      esp_deep_sleep_start(), which makes any
+     *                      pre-sleep crash invisible to `idf.py
+     *                      monitor`. Leave them alone -- the
+     *                      USB-Serial-JTAG controller is powered
+     *                      down by the digital domain in deep sleep
+     *                      regardless.
+     *   GPIO21          -- SD MISO / shared SPI3 (released by sd_card_deinit).
+     *
+     * That leaves GPIO1, GPIO2, GPIO3, GPIO4 as the genuinely spare
+     * RTC-IO pins on this board. GPIO3 (TOUCH_INT on the T5) is
+     * normally driven by the GT911; once display_deep_sleep_prepare()
+     * has collapsed the EPD rail the GT911 is unpowered and its INT
+     * line floats, so isolating GPIO3 here is appropriate. */
     static const int rtc_unused[] = {
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20
+        1, 2, 3, 4
     };
     for (size_t i = 0; i < sizeof(rtc_unused) / sizeof(rtc_unused[0]); ++i) {
         gpio_num_t g = (gpio_num_t)rtc_unused[i];
@@ -486,6 +511,19 @@ static void pre_sleep_t5_deinit(void)
      * RTC-IO isolation sweep so the UART pins are released cleanly. */
     t5_gps_sleep();
 
+    /* If we are about to enter deep sleep on battery (no USB plugged
+     * in), put the BQ25896 charger into HIZ so it stops drawing its
+     * ~1.5 mA idle bias current from the cell. No-op when VBUS is
+     * present (user wants to keep charging through sleep) or when
+     * the chip was never initialised. Cold-boot re-init clears HIZ.
+     *
+     * Done here -- BEFORE display_deep_sleep_prepare() tears down the
+     * shared I2C bus inside epd_deinit() -- so all the I2C-attached
+     * peripherals on this board (GT911 touch, BQ27220 fuel gauge,
+     * BQ25896 charger, TPS65185 EPD PMIC, PCA9535 expander) are
+     * touched in a single linear sweep with the bus still alive. */
+    battery_bq25896_prepare_sleep();
+
     /* Release the SD card + SPI3 bus so the card itself drops to
      * standby and the bus pins float free. After this point any SPI3
      * transaction (including the LoRa one above) is illegal -- which
@@ -495,26 +533,16 @@ static void pre_sleep_t5_deinit(void)
     /* Tear down the EPD power IC + epdiy I2C state. After this call
      * the shared I2C bus may have been released by epd_deinit(),
      * so any further I2C work (touchscreen, BQ27220, BQ25896) must
-     * have already happened above. */
+     * have already happened above.
+     *
+     * We deliberately do NOT re-issue touchscreen_sleep() afterwards.
+     * The GT911's RST line is wired through the TPS65185 / PCA9535
+     * expander, so epd_poweroff() can yank reset and the controller
+     * may come back at its backup I2C address 0x14 instead of 0x5D;
+     * blindly retrying a sleep command into that state is racy.
+     * The authoritative GT911 sleep already happened above (before
+     * any EPD teardown), with the bus still in a known-good state. */
     display_deep_sleep_prepare();
-
-    /* GT911 second-chance sleep cmd. The first call (issued before
-     * EPD power-down) is the authoritative one, but the GT911 RST
-     * line is wired through the TPS65185 / PCA9535 expander on the
-     * T5; when epd_poweroff() collapsed the EPD rail it may have
-     * yanked the GT911's reset too, putting the controller back into
-     * its boot-time polling state. Re-issuing sleep here is a no-op
-     * on a still-awake bus (the touchscreen API early-exits when its
-     * I2C dev handle is gone) but catches the reset-then-poll case
-     * when the bus is still alive. */
-    touchscreen_sleep();
-
-    /* If we are about to enter deep sleep on battery (no USB plugged
-     * in), put the BQ25896 charger into HIZ so it stops drawing its
-     * ~1.5 mA idle bias current from the cell. No-op when VBUS is
-     * present (user wants to keep charging through sleep) or when
-     * the chip was never initialised. Cold-boot re-init clears HIZ. */
-    battery_bq25896_prepare_sleep();
 
     /* Isolate every unused RTC-IO pin so floating inputs don't leak. */
     t5_isolate_unused_gpios();
@@ -599,6 +627,37 @@ static void pre_sleep_tab5_deinit(void)
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "Draftling - %s", BOARD_NAME);
+
+    /* Boot diagnostics: reset reason + wake-up cause.
+     *
+     * Logged as the very first thing in app_main so a "screen comes
+     * back on right after sleep" symptom can be triaged from a
+     * single boot line:
+     *   ESP_RST_DEEPSLEEP + EXT0  -> wake source fired immediately on
+     *                                entry (e.g. BOOT held, or pull-
+     *                                up not yet settled when EXT0 was
+     *                                armed).
+     *   ESP_RST_PANIC             -> something in pre_sleep_t5_deinit
+     *                                aborted; the panic backtrace
+     *                                will be in the lines above.
+     *   ESP_RST_BROWNOUT          -> rail dipped below the BOD
+     *                                threshold during sleep entry
+     *                                (most likely candidate: EPD
+     *                                rail collapse during
+     *                                epd_poweroff on a tired cell).
+     *   ESP_RST_INT_WDT/TASK_WDT  -> a watchdog tripped while we
+     *                                were holding off in
+     *                                pre_sleep_t5_deinit.
+     *   ESP_RST_POWERON           -> genuine cold boot (USB plug,
+     *                                latch released, full battery
+     *                                disconnect). Wake cause will
+     *                                read UNDEFINED. */
+    {
+        esp_reset_reason_t        rst  = esp_reset_reason();
+        esp_sleep_wakeup_cause_t  wake = esp_sleep_get_wakeup_cause();
+        ESP_LOGI(TAG, "Boot: reset_reason=%d wakeup_cause=%d",
+                 (int)rst, (int)wake);
+    }
 
     /* Initialize NVS - required for WiFi and BT */
     esp_err_t ret = nvs_flash_init();
