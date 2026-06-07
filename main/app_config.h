@@ -566,17 +566,19 @@
  * and GPIO_NUM_NC for RST. Native panel coordinate range is
  * 720 x 1280 portrait (matches BSP_LCD_H_RES / BSP_LCD_V_RES).
  * draftling_lvgl_port_init() is called with the user-configured
- * DISPLAY_ROTATE (default 270 for landscape) and touchscreen.cpp
- * passes the same value as user_rotate_deg when mapping native
- * (x,y) -> LVGL. Empirically (verified against the BSP path on a
- * v1 GT911 board), the controller's native axes line up 1:1 with
+ * DISPLAY_ROTATE (default 270 for landscape) and LVGL v9.2 then
+ * rotates indev points itself inside indev_pointer_proc(). So
+ * touchscreen.cpp must hand LVGL coords in the *pre-rotation*
+ * portrait frame -- main.cpp passes user_rotate_deg=0 for that
+ * reason. Empirically (verified against the BSP path on a v1
+ * GT911 board), the controller's native axes line up 1:1 with
  * the panel: native_x in [0, 720) is the panel's short axis and
  * native_y in [0, 1280) is its long axis, both running in the same
  * direction as the panel-native portrait pixel axes. No swap or
  * mirror is needed -- native_to_logical() with all flags clear
- * produces panel-native portrait logical (lx, ly), and the trailing
- * rotation step then handles every supported DISPLAY_ROTATE value
- * (0 / 90 / 180 / 270) correctly. */
+ * and user_rotate_deg=0 produces panel-native portrait logical
+ * (lx, ly), which is exactly what LVGL's own rotation step
+ * expects to inverse-rotate into the rotated landscape UI. */
 #define TOUCH_I2C_ADDR      0x14
 #define TOUCH_INT_PIN       CONFIG_DRAFTLING_TOUCH_INT_GPIO
 #define TOUCH_RST_PIN       CONFIG_DRAFTLING_TOUCH_RST_GPIO

@@ -950,22 +950,27 @@ extern "C" void app_main(void)
         tcfg.native_width   = TOUCH_NATIVE_W;
         tcfg.native_height  = TOUCH_NATIVE_H;
         /* All boards (including the Tab5 BSP-delegated path) feed
-         * LVGL indev coordinates in the same logical pixel frame the
-         * editor renders against. draftling_lvgl_port_init() calls
-         * lv_display_create(DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT)
-         * and then lv_display_set_rotation(DISPLAY_ROTATE), so the
-         * display reports its rotated landscape resolution as
-         * (DISPLAY_LOGICAL_HEIGHT, DISPLAY_LOGICAL_WIDTH) logical
-         * pixels. native_to_logical() scales raw touch coords into
-         * (DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT) and then
-         * applies user_rotate_deg=DISPLAY_ROTATE below, producing
-         * coords in that same rotated logical frame. */
+         * LVGL indev coordinates in the *pre-rotation* logical pixel
+         * frame -- i.e. (DISPLAY_LOGICAL_WIDTH, DISPLAY_LOGICAL_HEIGHT),
+         * the same dimensions handed to lv_display_create() in
+         * draftling_lvgl_port_init().
+         *
+         * LVGL v9.2 itself applies the display rotation to indev
+         * points inside indev_pointer_proc() (using disp->hor_res /
+         * disp->ver_res, which stay at their unrotated values even
+         * after lv_display_set_rotation()). If we also rotated the
+         * touch coords in native_to_logical(), the two transforms
+         * would stack and the cursor would land at the wrong spot
+         * (a middle tap on Tab5 -- DISPLAY_ROTATE=270 -- would map
+         * to roughly 1/4 down from the top instead of the centre).
+         * Pass user_rotate_deg=0 so the rotation happens exactly
+         * once, inside LVGL. */
         tcfg.logical_width  = DISPLAY_LOGICAL_WIDTH;
         tcfg.logical_height = DISPLAY_LOGICAL_HEIGHT;
         tcfg.swap_xy  = TOUCH_SWAP_XY  ? true : false;
         tcfg.mirror_x = TOUCH_MIRROR_X ? true : false;
         tcfg.mirror_y = TOUCH_MIRROR_Y ? true : false;
-        tcfg.user_rotate_deg = DISPLAY_ROTATE;
+        tcfg.user_rotate_deg = 0;
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
         tcfg.i2c_bus = (void *)shared_i2c_bus;
 #elif defined(CONFIG_DRAFTLING_DISPLAY_MIPI_DSI)
