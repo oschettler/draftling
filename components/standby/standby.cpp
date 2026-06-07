@@ -393,14 +393,74 @@ extern "C" void standby_enter_sleep(void)
                  (int)wake_gpio);
     }
 
+    /* Wait for the wake pin to actually settle HIGH before arming
+     * EXT0. Without this, we have observed boards (LilyGO T5 E-Paper
+     * S3 Pro) waking immediately from deep sleep with
+     * reset_reason=ESP_RST_DEEPSLEEP + wakeup_cause=EXT0 on the very
+     * first boot line, even though no button was pressed and no
+     * touch occurred. The cause is that the wake pin is briefly LOW
+     * at the moment esp_sleep_enable_ext0_wakeup() is called -- e.g.
+     * the BOOT-button net dipping while the EPD power rail collapses
+     * during display_deep_sleep_prepare(), a still-held button, or
+     * a touch controller INT line that has not released yet on
+     * wake-on-touch boards. EXT0 is a level detector, so any LOW
+     * sample at arm time latches the wake source.
+     *
+     * Poll the pad every 20 ms and require 3 consecutive HIGH reads
+     * (~60 ms quiet window) before we arm EXT0. Cap the total wait
+     * at 500 ms; if the pin is still LOW past that we skip EXT0
+     * arming entirely and fall through to RESET-only wake -- far
+     * better than burning the battery in a wake-sleep loop. We use
+     * gpio_get_level() because at this point the pad is still on
+     * the digital GPIO matrix; esp_sleep_enable_ext0_wakeup() is
+     * what later switches it to the RTC IO mux. */
+    bool wake_pin_ready = true;
+    {
+        const int     poll_ms        = 20;
+        const int     required_high  = 3;
+        const int     max_wait_ms    = 500;
+        int           consec_high    = 0;
+        int           waited_ms      = 0;
+        while (consec_high < required_high) {
+            int lvl = gpio_get_level(wake_gpio);
+            if (lvl == 1) {
+                consec_high++;
+            } else {
+                consec_high = 0;
+            }
+            if (consec_high >= required_high) {
+                break;
+            }
+            if (waited_ms >= max_wait_ms) {
+                ESP_LOGW(TAG, "Wake pin GPIO%d still LOW after %d ms -- "
+                              "skipping EXT0 arm to avoid immediate "
+                              "wake; device will only wake via RESET",
+                         (int)wake_gpio, max_wait_ms);
+                wake_pin_ready = false;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(poll_ms));
+            waited_ms += poll_ms;
+        }
+        if (wake_pin_ready && waited_ms > 0) {
+            ESP_LOGI(TAG, "Wake pin GPIO%d settled HIGH after %d ms",
+                     (int)wake_gpio, waited_ms);
+        }
+    }
+
     /* Configure wake-up GPIO as EXT0 wake-up source (wake on low level) */
-    esp_err_t wake_err = esp_sleep_enable_ext0_wakeup(wake_gpio, 0);
-    if (wake_err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_sleep_enable_ext0_wakeup(GPIO%d) failed: %s -- "
-                      "device will only wake via RESET",
-                 (int)wake_gpio, esp_err_to_name(wake_err));
+    esp_err_t wake_err = ESP_FAIL;
+    if (wake_pin_ready) {
+        wake_err = esp_sleep_enable_ext0_wakeup(wake_gpio, 0);
+        if (wake_err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_sleep_enable_ext0_wakeup(GPIO%d) failed: %s -- "
+                          "device will only wake via RESET",
+                     (int)wake_gpio, esp_err_to_name(wake_err));
+        } else {
+            ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
+        }
     } else {
-        ESP_LOGI(TAG, "Entering deep sleep, wake on GPIO%d...", (int)wake_gpio);
+        ESP_LOGI(TAG, "Entering deep sleep (EXT0 skipped, wake via RESET)...");
     }
 #else
     /* Target has no EXT0 wake source (ESP32-P4, ESP32-C2/C3/C6/H2/...).
