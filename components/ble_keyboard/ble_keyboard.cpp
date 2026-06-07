@@ -393,6 +393,8 @@ static void start_reconnection(void);
 static void reconn_timer_cb(TimerHandle_t timer);
 static void startup_timer_cb(TimerHandle_t timer);
 static void open_watchdog_cb(TimerHandle_t timer);
+static void open_watchdog_start(void);
+static void open_watchdog_stop(void);
 static void gap_event_handler(esp_gap_ble_cb_event_t event,
                                esp_ble_gap_cb_param_t *param);
 static void hidh_callback(void *handler_args, esp_event_base_t base,
