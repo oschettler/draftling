@@ -1298,6 +1298,12 @@ extern "C" void display_full_refresh(void)
     display_flush();
 }
 
+extern "C" void display_request_full_refresh(void)
+{
+    /* No ghost-clearing state machine on color LCDs; nothing to
+     * latch for the next flush. */
+}
+
 /* Put the panel into low-power sleep.
  *
  * 1. Backlight off (LEDC duty 0) -- by far the biggest power drain

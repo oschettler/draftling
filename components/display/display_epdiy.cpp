@@ -506,6 +506,21 @@ extern "C" void display_full_refresh(void)
     display_flush();
 }
 
+extern "C" void display_request_full_refresh(void)
+{
+    /* Latch the next display_flush() to a GC16 full refresh.  Safe
+     * to call from any task: this is a single bool write, and the
+     * flush itself will be issued from the LVGL render task as
+     * usual. Multiple requests coalesce naturally because the flag
+     * is only consumed (cleared) by the next flush.  We deliberately
+     * do NOT mark the framebuffer dirty here -- if no LVGL redraw
+     * follows, no flush happens and the latch simply waits for the
+     * next legitimate flush, at which point the dirty bbox is
+     * irrelevant because the GC16 path refreshes the whole panel. */
+    if (!s_initialized) return;
+    s_force_full = true;
+}
+
 extern "C" void display_set_partial_clip(int /*x*/, int /*y*/,
                                          int /*w*/, int /*h*/)
 {

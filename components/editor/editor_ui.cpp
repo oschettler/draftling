@@ -3636,6 +3636,15 @@ static void passkey_display_cb(uint32_t passkey)
         if (s_passkey_panel) {
             lv_obj_add_flag(s_passkey_panel, LV_OBJ_FLAG_HIDDEN);
         }
+        /* The dismiss is typically followed almost immediately by a
+         * connect-state transition (BLE auth complete -> HIDH open
+         * -> ble_connect_status_cb), which queues a second screen
+         * change. On the epdiy backend, two large GL16 partials
+         * issued back-to-back right after the BLE stack hammered
+         * the bus can wedge the `epd_prep` feeders and trip the
+         * task watchdog. Latch the next flush to a single GC16
+         * full refresh so both redraws coalesce. */
+        display_request_full_refresh();
     } else {
         /* Show the passkey overlay with the 6-digit code */
         if (s_passkey_panel) {
@@ -3671,6 +3680,16 @@ static void apply_pending_connect_state(void)
     s_pending_conn_state = -1;
 
     bool connected = (pending != 0);
+
+    /* Connect/disconnect changes the BLE prompt label and often
+     * swaps the active screen (prompt <-> editor / file browser),
+     * which on the epdiy backend would otherwise issue back-to-back
+     * GL16 partials in close succession with the post-auth passkey
+     * dismiss above. Coalesce all of these into a single GC16 full
+     * refresh -- the user is already seeing a connection-state
+     * change, the flash is acceptable, and it avoids wedging
+     * epdiy's `epd_prep` feeders. */
+    display_request_full_refresh();
 
     if (connected) {
         /* Flush any stale key events that accumulated while

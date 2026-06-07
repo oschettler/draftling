@@ -48,6 +48,26 @@ void display_flush(void);
  */
 void display_full_refresh(void);
 
+/*
+ * Request that the *next* display_flush() be promoted to a full
+ * (ghost-clearing) refresh, without performing a flush right now.
+ *
+ * Use this from contexts that are about to mark several LVGL regions
+ * dirty in rapid succession (e.g. closing an overlay AND switching
+ * screens), so that the resulting redraws coalesce into a single
+ * full refresh instead of two back-to-back partial refreshes. On
+ * the epdiy backend this avoids a known LCD-render wedge where the
+ * `epd_prep` feeder tasks busy-spin at top priority across both
+ * cores, starve IDLE0 and trip the task watchdog when large GL16
+ * partials are issued back-to-back before the EPD rail has fully
+ * settled. The latch is consumed by the next display_flush().
+ *
+ * On backends that do not maintain a partial-refresh state machine
+ * (RLCD, AXS15231B, MIPI-DSI) this is a no-op -- those backends
+ * always push a full frame anyway.
+ */
+void display_request_full_refresh(void);
+
 uint8_t *display_get_buffer(void);
 int display_get_buffer_size(void);
 
