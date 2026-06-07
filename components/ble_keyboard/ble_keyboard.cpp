@@ -433,6 +433,20 @@ static TimerHandle_t  s_open_stuck_timer    = NULL;
  * inside Bluedroid and the HIDH subsystem itself needs restarting. */
 #define OPEN_STUCK_RECOVERY_MS  45000
 
+/* LE supervision-timeout floor while a HIDH open is in flight, in
+ * units of 10 ms (BLE-spec encoding). 2000 = 20 s, which is longer
+ * than the worst HIDH service-discovery / CCCD-write window we are
+ * willing to wait (OPEN_WATCHDOG_MS / 1000), and well below the
+ * 32 s BLE spec maximum (0x0C80 = 3200). Applied via:
+ *  - esp_ble_gap_set_prefer_conn_params() before each connect, so the
+ *    initial negotiation already lands at or above this value;
+ *  - ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT handler, which bumps the
+ *    timeout back up if the peer later renegotiates a shorter value
+ *    (as some HID keyboards do after pairing for power reasons).
+ * See the s_open_watchdog_timer doc block above for why we must NOT
+ * try to force the link down from app code instead. */
+#define SUPERVISION_TIMEOUT_FLOOR_10MS  2000
+
 /* Set by open_watchdog_cb() to tell the ESP_HIDH_OPEN_EVENT handler
  * (and connect_task post-return) to treat this connection attempt as
  * abandoned: close the device cleanly and resume the reconnect
@@ -813,7 +827,14 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
         /* Reset reconnection to start with last-known device */
         s_reconn_phase = RECONN_LAST;
         s_reconn_idx   = 0;
-        start_reconnection();
+        /* Defer the next reconnect attempt instead of jumping straight
+         * into start_reconnection() / esp_hidh_dev_open() here.
+         * Rationale: when the user rapidly toggles the keyboard
+         * off/on, a fresh open stacked on top of an in-flight teardown
+         * was observed to land in the gattc_conn_cb half-built-record
+         * window (rsn=0x8 panic). Letting the BLE stack quiesce for
+         * RECONN_DEFAULT_MS first avoids that race. */
+        reconn_timer_kick();
         break;
 
     case ESP_HIDH_INPUT_EVENT: {
@@ -1051,6 +1072,23 @@ static void connect_task(void *arg)
     }
 
     esp_hidh_dev_t *dev = NULL;
+    /* Belt-and-braces: hint the controller to negotiate a generous
+     * supervision timeout from the start. The keyboard may renegotiate
+     * post-pairing, in which case the ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT
+     * handler bumps it back up.
+     *
+     * min_int=24 (30 ms), max_int=40 (50 ms): typical HID keyboard
+     * range; intentionally not aggressive so we do not regress power
+     * if the peer accepts it as-is. latency=0, supervision_timeout =
+     * SUPERVISION_TIMEOUT_FLOOR_10MS. */
+    esp_err_t pref_err = esp_ble_gap_set_prefer_conn_params(
+        s_target_bda,
+        24, 40, 0,
+        SUPERVISION_TIMEOUT_FLOOR_10MS);
+    ESP_LOGI(TAG, "Preferred conn params set (sto=%u 10 ms): %s",
+             (unsigned)SUPERVISION_TIMEOUT_FLOOR_10MS,
+             esp_err_to_name(pref_err));
+
     for (int attempt = 0; attempt < CONNECT_RETRIES; attempt++) {
         /* Arm the open watchdog before the blocking call. On fire
          * the callback sets s_force_close_on_open; the OPEN_EVENT
@@ -1400,6 +1438,47 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             s_passkey_cb(nc_num);
         }
         esp_ble_confirm_reply(param->ble_security.key_notif.bd_addr, true);
+        break;
+    }
+
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT: {
+        /* The peer (or our own preferred-params hint) negotiated a new
+         * set of link parameters. If the supervision timeout came out
+         * below SUPERVISION_TIMEOUT_FLOOR_10MS, push it back up.
+         *
+         * Why: esp_hidh_dev_open() stays blocked through the entire
+         * service-discovery + CCCD-write handshake (observed up to
+         * ~16 s on a NuPhy Air60 V2 first-pair; see OPEN_WATCHDOG_MS).
+         * Most HID keyboards negotiate a supervision timeout of
+         * ~5-7 s, so if the peer drops mid-handshake (e.g. the user
+         * powers the keyboard off and back on), the controller fires
+         * a rsn=0x8 disconnect into gattc_conn_cb against a
+         * half-built device record and Bluedroid panics. Extending
+         * supervision timeout to ~20 s keeps the rsn=0x8 *outside*
+         * the vulnerable window: by then HIDH OPEN_EVENT has either
+         * fired (clean close path runs) or our OPEN_WATCHDOG has
+         * flagged the attempt (force-close from OPEN handler).
+         *
+         * We deliberately leave min_int / max_int / latency at what
+         * the peer chose, to avoid regressing power or latency. */
+        auto *p = &param->update_conn_params;
+        ESP_LOGI(TAG,
+                 "Conn params updated: status=%d int=%u lat=%u sto=%u",
+                 (int)p->status, (unsigned)p->conn_int,
+                 (unsigned)p->latency, (unsigned)p->timeout);
+        if (p->status == ESP_BT_STATUS_SUCCESS &&
+            p->timeout < SUPERVISION_TIMEOUT_FLOOR_10MS) {
+            esp_ble_conn_update_params_t up = {};
+            memcpy(up.bda, p->bda, sizeof(esp_bd_addr_t));
+            up.min_int = p->min_int ? p->min_int : p->conn_int;
+            up.max_int = p->max_int ? p->max_int : p->conn_int;
+            up.latency = p->latency;
+            up.timeout = SUPERVISION_TIMEOUT_FLOOR_10MS;
+            esp_err_t uerr = esp_ble_gap_update_conn_params(&up);
+            ESP_LOGI(TAG,
+                     "Requesting supervision timeout bump to %u (10 ms): %s",
+                     (unsigned)up.timeout, esp_err_to_name(uerr));
+        }
         break;
     }
 
