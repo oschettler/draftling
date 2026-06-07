@@ -172,6 +172,64 @@ int battery_read_percent(void);
  */
 int battery_read_charging(void);
 
+/*
+ * Read the instantaneous cell current in milliamps, signed.
+ *
+ *   > 0 -- current flowing INTO the cell (charging)
+ *   < 0 -- current flowing OUT of the cell (discharging / system load)
+ *   = 0 -- no measurable current
+ *
+ * Returns INT32_MIN if the active backend cannot report current
+ * (only the BQ27220 fuel gauge does today; ADC, INA226 and "no
+ * backend" all return INT32_MIN).
+ *
+ * Source on BQ27220: register 0x0C (Current), 16-bit signed two's
+ * complement, LSB = 1 mA (BQ27220 TRM section 4.1, "Current").
+ */
+int battery_read_current_ma(void);
+
+/*
+ * BQ25896 sleep prep: when the charger reports VBUS is absent (i.e.
+ * the device is running on battery), drive EN_HIZ (REG00 bit 7) so
+ * the chip drops to its battery-only quiescent draw (~50 uA per the
+ * BQ25896 datasheet) instead of the ~1.5 mA it pulls with EN_HIZ=0
+ * even when no USB cable is plugged in. No-op when VBUS is present
+ * (we want the charger to keep working off USB) or when the chip
+ * was not initialised. Cold-boot from deep sleep re-runs
+ * battery_init_bq25896(), which clears EN_HIZ back to 0.
+ */
+void battery_bq25896_prepare_sleep(void);
+
+/*
+ * Re-write the small set of BQ25896 registers we care about
+ * (REG02 with ICO_EN=0 + HVDCP/MAXC/AUTO_DPDM=0, REG07 watchdog
+ * disabled). Cheap (two I2C transactions) and idempotent: if the
+ * chip rebooted or a noise event reverted the registers to their
+ * 500 mA USB-SDP defaults, this snaps them back. Safe to call from
+ * a periodic timer. No-op when the chip was not initialised.
+ */
+void battery_bq25896_reassert_config(void);
+
+/*
+ * Log the BQ25896 charger status as a single INFO line. Reads the
+ * full diagnostic register set (REG00, REG0B, REG0C, REG0E, REG0F,
+ * REG10, REG11, REG12, REG13) so a slow-charge symptom can be
+ * localised to a specific status bit (THERM_STAT, VDPM_STAT,
+ * NTC_FAULT, IDPM_STAT, etc.) without a bench meter. No-op when
+ * the chip was not initialised.
+ */
+void battery_bq25896_dump_status(void);
+
+/*
+ * Returns 1 if the BQ25896 has been initialised AND currently sees
+ * a valid VBUS (REG11 bit 7 VBUS_GD set), 0 if it is initialised
+ * but VBUS is absent, -1 if the chip is not initialised or the
+ * read failed. Used by the standby pre-sleep hook to decide
+ * whether to HIZ the chip and by the debug logger to decide
+ * whether to emit periodic status dumps.
+ */
+int battery_bq25896_vbus_present(void);
+
 #ifdef __cplusplus
 }
 #endif

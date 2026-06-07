@@ -29,6 +29,8 @@
 
 #include "battery.h"
 
+#include <climits>
+#include <cstdint>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
@@ -61,6 +63,8 @@ static int                       s_divider = 3;
 #define BQ27220_REG_VOLTAGE     0x08    /* u16 LE, mV */
 #define BQ27220_REG_FLAGS       0x06    /* u16 LE, bit 0 = DSG */
 #define BQ27220_FLAGS_DSG       0x0001  /* 0 = charging or full */
+#define BQ27220_REG_CURRENT     0x0C    /* s16 LE, mA -- signed two's complement,
+                                         * + = into cell, - = out of cell */
 #define BQ27220_REG_SOC         0x2C    /* u16 LE, 0-100 % */
 static i2c_master_dev_handle_t   s_bq_dev = NULL;
 
@@ -441,6 +445,10 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
  *                            1 = take min(IINLIM, I_LIM_pin))
  *     [5:0] IINLIM          input current limit, 100 mA + N * 50 mA
  *   REG02 - ADC, ICO and D+/D- detection:
+ *     [7]   CONV_START      (write 1 to trigger a one-shot ADC; self-
+ *                            clears when conversion completes)
+ *     [6]   CONV_RATE       (0 = one-shot (POR default), 1 = continuous
+ *                            ADC at 1 Hz feeding BATV/SYSV/ICHGR/TSPCT)
  *     [4]   ICO_EN          (0 = disable Input Current Optimizer;
  *                            1 = let the chip dynamically pick
  *                                IDPM_LIM <= IINLIM based on VBUS sag)
@@ -464,15 +472,39 @@ extern "C" int battery_init_ina226(void *i2c_master_bus, int i2c_addr,
 #define BQ25896_REG_ADC         0x02
 #define BQ25896_REG_ICHG        0x04
 #define BQ25896_REG_TIMER       0x07
-#define BQ25896_REG_VBUS_STAT   0x0B
+#define BQ25896_REG_VBUS_STAT   0x0B   /* REG0B: VBUS_STAT / CHRG_STAT / PG / VSYS */
+#define BQ25896_REG_FAULT       0x0C   /* REG0C: WATCHDOG / BOOST / CHRG / BAT / NTC fault */
 #define BQ25896_REG_VINDPM      0x0D
-#define BQ25896_REG_IDPM_LIM    0x13
+#define BQ25896_REG_BATV        0x0E   /* REG0E: THERM_STAT + BATV ADC (2.304 V + N * 20 mV) */
+#define BQ25896_REG_SYSV        0x0F   /* REG0F: SYSV ADC (2.304 V + N * 20 mV) */
+#define BQ25896_REG_TSPCT       0x10   /* REG10: TS thermistor percentage of REGN */
+#define BQ25896_REG_VBUSV       0x11   /* REG11: VBUS_GD + VBUSV ADC (2.6 V + N * 100 mV) */
+#define BQ25896_REG_ICHGR       0x12   /* REG12: cell charge current ADC (N * 50 mA) */
+#define BQ25896_REG_IDPM_LIM    0x13   /* REG13: VDPM_STAT / IDPM_STAT / IDPM_LIM */
 
 #define BQ25896_IINLIM_BASE_MA  100
 #define BQ25896_IINLIM_STEP_MA  50
 #define BQ25896_ICHG_STEP_MA    64
+#define BQ25896_ICHGR_STEP_MA   50      /* ICHGR ADC step (REG12) */
 #define BQ25896_VINDPM_BASE_MV  2600
 #define BQ25896_VINDPM_STEP_MV  100
+#define BQ25896_BATV_BASE_MV    2304    /* REG0E BATV ADC base */
+#define BQ25896_BATV_STEP_MV    20
+#define BQ25896_SYSV_BASE_MV    2304    /* REG0F SYSV ADC base */
+#define BQ25896_SYSV_STEP_MV    20
+#define BQ25896_VBUSV_BASE_MV   2600    /* REG11 VBUSV ADC base */
+#define BQ25896_VBUSV_STEP_MV   100
+
+/* Status / fault bit masks. */
+#define BQ25896_REG00_EN_HIZ           0x80
+#define BQ25896_REG0B_VBUS_STAT_SHIFT  5
+#define BQ25896_REG0B_CHRG_STAT_SHIFT  3
+#define BQ25896_REG0B_PG_STAT          0x04
+#define BQ25896_REG0B_VSYS_STAT        0x01
+#define BQ25896_REG0E_THERM_STAT       0x80
+#define BQ25896_REG11_VBUS_GD          0x80
+#define BQ25896_REG13_VDPM_STAT        0x80
+#define BQ25896_REG13_IDPM_STAT        0x40
 
 /* Defaults that comfortably charge a typical 1500-2500 mAh single-cell
  * LiPo. The external ILIM resistor on the board still caps the input
@@ -557,9 +589,10 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
         ESP_LOGW(TAG, "BQ25896: failed to disable I2C watchdog");
     }
 
-    /* (2) Disable the source-detection state machine. REG02 power-on
-     * default is 0x3D (CONV_RATE=0, BOOST_FREQ=1, ICO_EN=1, HVDCP_EN=1,
-     * MAXC_EN=1, FORCE_DPDM=0, AUTO_DPDM_EN=1). We clear:
+    /* (2) Disable the source-detection state machine and enable the
+     * continuous ADC. REG02 power-on default is 0x3D (CONV_START=0,
+     * CONV_RATE=0, BOOST_FREQ=1, ICO_EN=1, HVDCP_EN=1, MAXC_EN=1,
+     * FORCE_DPDM=0, AUTO_DPDM_EN=1). We clear:
      *
      *   - ICO_EN (bit 4): the Input Current Optimizer dynamically
      *     reduces the *actual* input current limit (IDPM_LIM, REG13)
@@ -579,9 +612,17 @@ extern "C" int battery_init_bq25896(void *i2c_master_bus)
      *     (Note: the bit lives at position 0, not 1 -- bit 1 is
      *     FORCE_DPDM, a write-1-to-trigger pulse, default 0.)
      *
-     * Mask 0x1D = ICO_EN | HVDCP_EN | MAXC_EN | AUTO_DPDM_EN. */
-    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x1D, 0x00) != 0) {
-        ESP_LOGW(TAG, "BQ25896: failed to disable ICO / HVDCP / AUTO_DPDM");
+     * And we set:
+     *
+     *   - CONV_RATE (bit 6) = 1: run the BATV / SYSV / ICHGR / TSPCT
+     *     ADC continuously at 1 Hz. Without this the chip stays in
+     *     one-shot mode and battery_bq25896_dump_status() reads stale
+     *     register zeros (BATV=2304 mV / SYSV=2304 mV / ICHGR=0 mA
+     *     are the raw-zero ADC base values, not real measurements).
+     *
+     * Mask 0x5D = CONV_RATE | ICO_EN | HVDCP_EN | MAXC_EN | AUTO_DPDM_EN. */
+    if (bq25896_rmw_u8(BQ25896_REG_ADC, 0x5D, 0x40) != 0) {
+        ESP_LOGW(TAG, "BQ25896: failed to configure REG02 (ADC / ICO / HVDCP / AUTO_DPDM)");
     }
 
     /* (3) Raise IINLIM. Clear EN_ILIM (bit 6) so the IINLIM register
@@ -760,4 +801,132 @@ extern "C" int battery_read_charging(void)
     }
     /* ADC backend and "no backend" cannot tell. */
     return -1;
+}
+
+/* ---- BQ27220 signed current readout ----
+ *
+ * BQ27220 register 0x0C (Current) is a 16-bit signed two's complement
+ * value in mA, LSB = 1 mA. Sign convention per the TRM (section 4.1):
+ * positive = current flowing INTO the cell (charging), negative =
+ * current flowing OUT of the cell (system load). */
+extern "C" int battery_read_current_ma(void)
+{
+    if (s_backend != BATT_BACKEND_BQ27220) return INT32_MIN;
+    uint16_t raw = 0;
+    if (bq27220_read_u16(BQ27220_REG_CURRENT, &raw) != 0) return INT32_MIN;
+    return (int)(int16_t)raw;
+}
+
+/* ---- BQ25896 helpers exposed for instrumentation / sleep prep ---- */
+
+extern "C" int battery_bq25896_vbus_present(void)
+{
+    if (!s_bq25896_dev) return -1;
+    uint8_t v = 0;
+    if (bq25896_read_u8(BQ25896_REG_VBUSV, &v) != 0) return -1;
+    return (v & BQ25896_REG11_VBUS_GD) ? 1 : 0;
+}
+
+extern "C" void battery_bq25896_prepare_sleep(void)
+{
+    /* Only HIZ the charger when we are running on battery. With
+     * VBUS present the rail is what we want the chip to be regulating
+     * (e.g. user left the device plugged in while it sleeps to charge
+     * overnight) and HIZ would disconnect it from VBUS. The cold-boot
+     * re-init in battery_init_bq25896() always clears EN_HIZ back
+     * to 0, so a stale HIZ from a previous sleep cycle cannot
+     * persist across a wake.
+     *
+     * Returning early on "VBUS present" or "read failed" is the
+     * conservative choice: a missed I2C transaction leaves the chip
+     * in its current state (already configured at boot to draw
+     * ~50 uA when VBUS is genuinely absent) instead of forcing a
+     * change we cannot verify. */
+    int present = battery_bq25896_vbus_present();
+    if (present != 0) return;  /* present or unknown -> leave alone */
+
+    /* Set EN_HIZ (bit 7) in REG00 while preserving the IINLIM bits
+     * we wrote at init. EN_ILIM stays 0. */
+    uint8_t reg00 = 0;
+    if (bq25896_read_u8(BQ25896_REG_ISC, &reg00) != 0) return;
+    uint8_t target = reg00 | BQ25896_REG00_EN_HIZ;
+    if (target == reg00) return;  /* already HIZ */
+    if (bq25896_write_u8(BQ25896_REG_ISC, target) != 0) {
+        ESP_LOGW(TAG, "BQ25896: pre-sleep EN_HIZ write failed");
+        return;
+    }
+    ESP_LOGI(TAG, "BQ25896: VBUS absent -> EN_HIZ set for battery-only sleep");
+}
+
+extern "C" void battery_bq25896_reassert_config(void)
+{
+    /* Disable the I2C watchdog (bits 5:4 = 00 in REG07). Re-issued
+     * periodically because a brown-out / glitch reset on the chip
+     * power rail would otherwise revert REG07 to its POR 0x9D
+     * (watchdog = 40 s) and silently undo our writes 40 s later. */
+    (void)bq25896_rmw_u8(BQ25896_REG_TIMER, 0x30, 0x00);
+
+    /* Force ICO_EN / HVDCP_EN / MAXC_EN / AUTO_DPDM_EN all = 0 and
+     * re-assert CONV_RATE = 1 (REG02 mask 0x5D, value 0x40). Same
+     * rationale as init: the Input Current Optimizer can otherwise
+     * drag IDPM_LIM down to ~150 mA over time on a slightly sagging
+     * supply, AUTO_DPDM would snap IINLIM back to USB-SDP 500 mA on
+     * every cable reseat, and a chip POR would revert CONV_RATE to 0
+     * and leave the ADC stuck in one-shot mode (so the next status
+     * dump would log raw-zero BATV/SYSV/ICHGR readings). */
+    (void)bq25896_rmw_u8(BQ25896_REG_ADC, 0x5D, 0x40);
+}
+
+extern "C" void battery_bq25896_dump_status(void)
+{
+    if (!s_bq25896_dev) return;
+
+    uint8_t reg00 = 0, reg0b = 0, reg0c = 0, reg0e = 0, reg0f = 0;
+    uint8_t reg10 = 0, reg11 = 0, reg12 = 0, reg13 = 0;
+    (void)bq25896_read_u8(BQ25896_REG_ISC,      &reg00);
+    (void)bq25896_read_u8(BQ25896_REG_VBUS_STAT,&reg0b);
+    (void)bq25896_read_u8(BQ25896_REG_FAULT,    &reg0c);
+    (void)bq25896_read_u8(BQ25896_REG_BATV,     &reg0e);
+    (void)bq25896_read_u8(BQ25896_REG_SYSV,     &reg0f);
+    (void)bq25896_read_u8(BQ25896_REG_TSPCT,    &reg10);
+    (void)bq25896_read_u8(BQ25896_REG_VBUSV,    &reg11);
+    (void)bq25896_read_u8(BQ25896_REG_ICHGR,    &reg12);
+    (void)bq25896_read_u8(BQ25896_REG_IDPM_LIM, &reg13);
+
+    int iinlim_ma  = BQ25896_IINLIM_BASE_MA +
+                     (int)(reg00 & 0x3F) * BQ25896_IINLIM_STEP_MA;
+    int batv_mv    = BQ25896_BATV_BASE_MV +
+                     (int)(reg0e & 0x7F) * BQ25896_BATV_STEP_MV;
+    int sysv_mv    = BQ25896_SYSV_BASE_MV +
+                     (int)(reg0f & 0x7F) * BQ25896_SYSV_STEP_MV;
+    int vbusv_mv   = BQ25896_VBUSV_BASE_MV +
+                     (int)(reg11 & 0x7F) * BQ25896_VBUSV_STEP_MV;
+    int ichgr_ma   = (int)(reg12 & 0x7F) * BQ25896_ICHGR_STEP_MA;
+    int idpm_lim_ma = BQ25896_IINLIM_BASE_MA +
+                      (int)(reg13 & 0x3F) * BQ25896_IINLIM_STEP_MA;
+
+    unsigned vbus_stat = (reg0b >> BQ25896_REG0B_VBUS_STAT_SHIFT) & 0x07;
+    unsigned chrg_stat = (reg0b >> BQ25896_REG0B_CHRG_STAT_SHIFT) & 0x03;
+
+    ESP_LOGI(TAG,
+        "BQ25896 status: EN_HIZ=%d IINLIM=%dmA VBUSV=%dmV (GD=%d) "
+        "BATV=%dmV SYSV=%dmV ICHGR=%dmA IDPM_LIM=%dmA "
+        "VBUS_STAT=%u CHRG_STAT=%u PG=%d VSYS=%d "
+        "THERM=%d VDPM=%d IDPM=%d TSPCT=%u%% "
+        "FAULT[wd=%d boost=%d chrg=%u bat=%d ntc=%u]",
+        (reg00 & BQ25896_REG00_EN_HIZ) ? 1 : 0, iinlim_ma, vbusv_mv,
+        (reg11 & BQ25896_REG11_VBUS_GD) ? 1 : 0,
+        batv_mv, sysv_mv, ichgr_ma, idpm_lim_ma,
+        vbus_stat, chrg_stat,
+        (reg0b & BQ25896_REG0B_PG_STAT) ? 1 : 0,
+        (reg0b & BQ25896_REG0B_VSYS_STAT) ? 1 : 0,
+        (reg0e & BQ25896_REG0E_THERM_STAT) ? 1 : 0,
+        (reg13 & BQ25896_REG13_VDPM_STAT) ? 1 : 0,
+        (reg13 & BQ25896_REG13_IDPM_STAT) ? 1 : 0,
+        (unsigned)(reg10 & 0x7F),
+        (reg0c >> 7) & 1,
+        (reg0c >> 6) & 1,
+        (unsigned)((reg0c >> 4) & 0x03),
+        (reg0c >> 3) & 1,
+        (unsigned)(reg0c & 0x07));
 }

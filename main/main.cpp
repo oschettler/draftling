@@ -1,12 +1,17 @@
 #include <cstdio>
+#include <cinttypes>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
+#include <esp_system.h>
+#include <esp_timer.h>
 #include <nvs_flash.h>
+#include <nvs.h>
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
+#include <driver/uart.h>
 #include <esp_sleep.h>
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
 #include <driver/i2c_master.h>
@@ -41,6 +46,125 @@
 #endif
 
 static const char *TAG = "Draftling";
+
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER) || \
+    defined(CONFIG_DRAFTLING_CHARGER_WATCHDOG_REASSERT)
+/* esp_timer handle for the periodic charger maintenance task. Created
+ * once after battery_init_bq25896() succeeds; runs every 30 s and
+ * does two things:
+ *
+ *   - Always re-asserts the safety-critical BQ25896 registers
+ *     (ICO_EN=0 in REG02, WATCHDOG=00 in REG07) when
+ *     CONFIG_DRAFTLING_CHARGER_WATCHDOG_REASSERT is set. Idempotent
+ *     and cheap (two I2C RMW + write transactions). Catches the
+ *     edge case where a one-off bus glitch or a missed write at
+ *     boot would otherwise leave the charger in its 500 mA USB-SDP
+ *     default until reboot.
+ *
+ *   - When CONFIG_DRAFTLING_DEBUG_POWER is also set AND the chip
+ *     currently sees VBUS, logs the full diagnostic register set
+ *     (REG00 / REG0B / REG0C / REG0E / REG0F / REG10 / REG11 /
+ *     REG12 / REG13). This is enough to localise a slow-charge
+ *     regression to a specific status bit (THERM_STAT, VDPM_STAT,
+ *     NTC_FAULT, IDPM_STAT, etc.) without a bench meter.
+ */
+static esp_timer_handle_t s_charger_maint_timer = NULL;
+
+/* 30 s cadence for the BQ25896 maintenance / debug timer: short
+ * enough to recover from a 40 s POR I2C watchdog timeout before it
+ * reverts our register writes, long enough that the periodic I2C
+ * traffic is negligible. */
+#define CHARGER_MAINT_PERIOD_US ((uint64_t)30 * 1000 * 1000)
+
+static void charger_maint_cb(void *arg)
+{
+    (void)arg;
+#if defined(CONFIG_DRAFTLING_CHARGER_WATCHDOG_REASSERT)
+    battery_bq25896_reassert_config();
+#endif
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER)
+    /* Only dump status while charging is plausible. Avoids spamming
+     * the log every 30 s when the device is running on battery and
+     * there is no useful charger telemetry to report. */
+    if (battery_bq25896_vbus_present() == 1) {
+        battery_bq25896_dump_status();
+    }
+#endif
+}
+
+static void charger_maint_start(void)
+{
+    if (s_charger_maint_timer) return;
+    esp_timer_create_args_t args = {};
+    args.callback = charger_maint_cb;
+    args.name     = "charger_maint";
+    if (esp_timer_create(&args, &s_charger_maint_timer) != ESP_OK) {
+        ESP_LOGW(TAG, "charger_maint: esp_timer_create failed");
+        s_charger_maint_timer = NULL;
+        return;
+    }
+    /* 30 s cadence: see CHARGER_MAINT_PERIOD_US comment above. */
+    if (esp_timer_start_periodic(s_charger_maint_timer,
+                                 CHARGER_MAINT_PERIOD_US) != ESP_OK) {
+        ESP_LOGW(TAG, "charger_maint: esp_timer_start_periodic failed");
+    }
+}
+#endif /* DEBUG_POWER || CHARGER_WATCHDOG_REASSERT */
+
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER)
+/* NVS keys for the deep-sleep drain estimator. Written by
+ * pre_sleep_t5_deinit on the way into deep sleep; read back here on
+ * the next cold boot to compute "uA average" across the sleep
+ * interval. esp_sleep_get_wakeup_cause() distinguishes wake-from-
+ * deep-sleep (we have a meaningful delta) from a real cold boot
+ * (we don't -- the SOC drop, if any, came from active use, not
+ * sleep). The wall-clock anchor is uptime since wake; combined with
+ * the BQ27220's reported SOC step it is enough for a rough but
+ * useful "device drew X uA average for Y minutes" estimate. */
+static void log_boot_power_telemetry(void)
+{
+    int mv  = battery_read_mv();
+    int soc = battery_read_percent();
+    int cur = battery_read_current_ma();
+    ESP_LOGI(TAG, "Boot telemetry: %dmV %d%% %dmA (signed: +charge / -load)",
+             mv, soc, cur);
+
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (cause == ESP_SLEEP_WAKEUP_UNDEFINED) {
+        /* Power-on / RESET / brown-out: no prior sleep entry to
+         * compare against, so the persisted entry SOC is stale. */
+        return;
+    }
+
+    nvs_handle_t h;
+    if (nvs_open("draftling_pwr", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t entry_soc = 0xFF;
+    int32_t entry_mv  = 0;
+    int32_t entry_cur = 0;
+    esp_err_t e1 = nvs_get_u8(h,  "entry_soc",  &entry_soc);
+    (void)nvs_get_i32(h, "entry_mv",   &entry_mv);
+    (void)nvs_get_i32(h, "entry_curr", &entry_cur);
+    nvs_close(h);
+    if (e1 != ESP_OK || entry_soc > 100 || soc < 0) return;
+
+    int delta_soc = (int)entry_soc - soc;
+    /* esp_sleep_get_wakeup_cause is set on the wake that just
+     * happened; uptime since wake is a good proxy for "time spent
+     * post-wake" but the *sleep duration* is what we actually want.
+     * ESP-IDF exposes that only on targets with RTC slow clock
+     * retention; with RTC_SLOW_MEM powered off (our pre-sleep
+     * hook) it is unavailable. As a fallback we report the SOC
+     * delta and let the operator divide by their observed wall
+     * clock. Without a wall-clock the uA estimate is meaningless,
+     * so we skip it. */
+    ESP_LOGI(TAG,
+        "Sleep delta vs persisted entry: dSOC=%d%% (entry %u%% @ %ldmV, %ldmA) "
+        "-> woke at %d%% @ %dmV, %dmA",
+        delta_soc,
+        (unsigned)entry_soc, (long)entry_mv, (long)entry_cur,
+        soc, mv, cur);
+}
+#endif /* CONFIG_DRAFTLING_DEBUG_POWER */
 
 /* Called by standby just before entering deep sleep */
 static void pre_sleep_autosave(void)
@@ -119,7 +243,18 @@ static void pre_sleep_autosave(void)
 
 /* SX1262 SetSleep opcode (sx126x datasheet sec.13.1.7). We issue a
  * cold-start sleep (no register retention -- we don't have any
- * persistent radio state to keep). 1-byte opcode + 1-byte param. */
+ * persistent radio state to keep). 1-byte opcode + 1-byte param.
+ *
+ * Before issuing SetSleep we read a GetStatus byte. If the chip is
+ * depopulated (Lite variant) the MISO line will read 0xFF or 0x00
+ * idle and we skip the sleep write; on the Pro variant a healthy
+ * SX1262 returns a non-trivial status byte and we proceed. This
+ * prevents two failure modes:
+ *   - on Lite, a stale "SX1262 entered sleep" log when no radio
+ *     actually responded;
+ *   - on Pro, a SetSleep being NAK'd because the radio is mid-FSK
+ *     RX after a stray init -- a state we cannot recover from
+ *     blind. */
 static void t5_lora_sleep(void)
 {
 #if defined(BOARD_LORA_CS_PIN) && (BOARD_LORA_CS_PIN >= 0)
@@ -140,19 +275,134 @@ static void t5_lora_sleep(void)
                  esp_err_to_name(err));
         return;
     }
+
+    /* GetStatus (opcode 0xC0) returns the chip mode + command status
+     * in the byte clocked back as we send a 0x00 dummy. SX1262
+     * datasheet sec. 13.5.1: bits[6:4] = ChipMode (1..6 == valid;
+     * 0/7 == invalid/reserved). On a depopulated bus we'll read 0x00
+     * or 0xFF here -- both invalid -- and bail out without spamming
+     * the log. */
+    uint8_t gs_tx[2] = { 0xC0, 0x00 };
+    uint8_t gs_rx[2] = { 0xFF, 0xFF };
+    spi_transaction_t gs = {};
+    gs.length    = sizeof(gs_tx) * 8;
+    gs.tx_buffer = gs_tx;
+    gs.rx_buffer = gs_rx;
+    err = spi_device_polling_transmit(lora, &gs);
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "SX1262 GetStatus transmit failed: %s",
+                 esp_err_to_name(err));
+        spi_bus_remove_device(lora);
+        return;
+    }
+    uint8_t chip_mode = (gs_rx[1] >> 4) & 0x07;
+    if (chip_mode == 0 || chip_mode == 7) {
+        ESP_LOGD(TAG, "SX1262 GetStatus=0x%02X (no chip response) -- "
+                 "skipping SetSleep", gs_rx[1]);
+        spi_bus_remove_device(lora);
+        return;
+    }
+
     uint8_t tx[2] = { 0x84 /* SetSleep */, 0x00 /* cold start */ };
     spi_transaction_t t = {};
     t.length    = sizeof(tx) * 8;
     t.tx_buffer = tx;
     err = spi_device_polling_transmit(lora, &t);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "SX1262 entered sleep mode");
+        ESP_LOGI(TAG, "SX1262 entered sleep mode (was ChipMode=%u)",
+                 (unsigned)chip_mode);
     } else {
         ESP_LOGD(TAG, "SX1262 SetSleep transmit failed: %s",
                  esp_err_to_name(err));
     }
     spi_bus_remove_device(lora);
 #endif
+}
+
+/* MIA-M10Q GPS (Pro variant) -> UBX-RXM-PMREQ "backup" mode.
+ *
+ * The T5 E-Paper S3 Pro / Pro Lite carries the MIA-M10Q on UART2
+ * (TX=43, RX=44, default baud 38400 -- see the factory firmware
+ * peri_gps.cpp comment "Set u-blox m10q gps baudrate 38400"). The
+ * chip has *no* dedicated power-enable GPIO -- it is hard-wired to
+ * the 3V3 rail -- so the only software lever for its ~25 mA run
+ * draw is the receiver's own RXM-PMREQ command (u-blox M10 interface
+ * description, sec.3.13.6.4). In backup the chip idles at ~15 uA
+ * until a level transition on its RX pin or a hardware reset wakes
+ * it up again. Draftling never uses GPS during normal operation, so
+ * we issue PMREQ once at boot and again from pre_sleep_t5_deinit().
+ *
+ * The Lite variant has the GPS chip depopulated; we still drive
+ * the UART pins, the bytes clock into a floating line, and the
+ * gpio_reset_pin() at the end releases them. No harm done. */
+static void t5_gps_sleep(void)
+{
+#if defined(BOARD_GPS_TX_PIN) && defined(BOARD_GPS_RX_PIN) && \
+    (BOARD_GPS_TX_PIN >= 0) && (BOARD_GPS_RX_PIN >= 0)
+    /* UBX-RXM-PMREQ v0 (CLASS=0x02, ID=0x41, len=8):
+     *   duration[4] = 0   (infinite)
+     *   flags[4]    = 0x06 (bit1=backup, bit2=force)
+     * Checksum is 8-bit Fletcher over class..payload (sec.3.4 of
+     * the M10 interface description). Pre-computed and frozen here
+     * so we don't have to drag a checksum helper into main.cpp. */
+    static const uint8_t kPmreqBackup[] = {
+        0xB5, 0x62,                         /* sync chars                  */
+        0x02, 0x41,                         /* class=RXM, id=PMREQ         */
+        0x08, 0x00,                         /* payload length = 8 (LE)     */
+        0x00, 0x00, 0x00, 0x00,             /* duration = 0 (infinite)     */
+        0x06, 0x00, 0x00, 0x00,             /* flags = backup | force      */
+        0x51, 0x4B                          /* CK_A, CK_B                  */
+    };
+
+    static const uart_port_t kPort = UART_NUM_1;
+    uart_config_t cfg = {};
+    cfg.baud_rate = 38400;
+    cfg.data_bits = UART_DATA_8_BITS;
+    cfg.parity    = UART_PARITY_DISABLE;
+    cfg.stop_bits = UART_STOP_BITS_1;
+    cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    cfg.source_clk = UART_SCLK_DEFAULT;
+
+    esp_err_t err = uart_driver_install(kPort, 256, 0, 0, NULL, 0);
+    bool installed_here = (err == ESP_OK);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGD(TAG, "GPS UART install failed: %s", esp_err_to_name(err));
+        return;
+    }
+    (void)uart_param_config(kPort, &cfg);
+    (void)uart_set_pin(kPort, BOARD_GPS_TX_PIN, BOARD_GPS_RX_PIN,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    int n = uart_write_bytes(kPort, (const char *)kPmreqBackup,
+                             sizeof(kPmreqBackup));
+    if (n == (int)sizeof(kPmreqBackup)) {
+        (void)uart_wait_tx_done(kPort, pdMS_TO_TICKS(100));
+        ESP_LOGI(TAG, "MIA-M10Q GPS: sent UBX-RXM-PMREQ backup (%d bytes)", n);
+    } else {
+        ESP_LOGD(TAG, "GPS UART write returned %d", n);
+    }
+
+    if (installed_here) {
+        (void)uart_driver_delete(kPort);
+    }
+    /* Release the UART pins so they go to high-Z and don't drive
+     * against the GPS once it has entered backup. The pads are not
+     * RTC-IO (GPIO 43/44 sit outside the 0..21 RTC range) so they
+     * default to high-Z in deep sleep automatically; this just
+     * detaches the UART matrix early. */
+    gpio_reset_pin((gpio_num_t)BOARD_GPS_TX_PIN);
+    gpio_reset_pin((gpio_num_t)BOARD_GPS_RX_PIN);
+#endif
+}
+
+/* One-shot "shut every Pro-only radio up" helper, called from
+ * app_main() right after SD init (so SPI3 is available to the LoRa
+ * sleep path). Idempotent and safe to re-invoke later. */
+static void t5_disable_radios_at_boot(void)
+{
+    ESP_LOGI(TAG, "Pro: disabling SX1262 LoRa and MIA-M10Q GPS at boot");
+    t5_lora_sleep();
+    t5_gps_sleep();
 }
 
 /* Sweep a hard-coded list of GPIOs that are not wired to any
@@ -166,16 +416,40 @@ static void t5_lora_sleep(void)
 static void t5_isolate_unused_gpios(void)
 {
     /* ESP32-S3 RTC-IO range is GPIO0..GPIO21. Skip pins that are
-     * actively used in deep sleep:
-     *   GPIO0  -- BOOT button, EXT0 wake (handled by standby.cpp)
-     *   GPIO11 -- front-light, held LOW (display_deep_sleep_prepare)
-     *   GPIO13 -- SD MOSI / shared SPI3 (released by sd_card_deinit)
-     *   GPIO14 -- SD SCK  / shared SPI3 (released by sd_card_deinit)
-     *   GPIO21 -- SD MISO / shared SPI3 (released by sd_card_deinit)
-     *   GPIO12 -- SD CS (released by sd_card_deinit)
-     */
+     * actively used in deep sleep OR are otherwise NOT spare:
+     *   GPIO0           -- BOOT button, EXT0 wake (handled by standby.cpp)
+     *   GPIO5..GPIO10   -- EPD 8-bit parallel data bus (epd_board_v7
+     *                      pins D0..D5; released by epd_lcd_deinit()
+     *                      inside display_deep_sleep_prepare(), so
+     *                      isolating them again here is redundant and
+     *                      historically mis-described as "unused").
+     *   GPIO11          -- front-light LED, held LOW with gpio_hold_en
+     *                      (display_deep_sleep_prepare); must NOT be
+     *                      reclaimed by an isolate call.
+     *   GPIO12          -- SD CS (released by sd_card_deinit).
+     *   GPIO13          -- SD MOSI / shared SPI3 (released by sd_card_deinit).
+     *   GPIO14          -- SD SCK  / shared SPI3 (released by sd_card_deinit).
+     *   GPIO15..GPIO18  -- EPD 8-bit parallel data bus (epd_board_v7
+     *                      pins D3, D4, D5, D6; same rationale as
+     *                      GPIO5..GPIO10).
+     *   GPIO19, GPIO20  -- ESP32-S3 USB-Serial-JTAG (USB CDC console).
+     *                      Isolating these silently kills the last
+     *                      few lines of log output before
+     *                      esp_deep_sleep_start(), which makes any
+     *                      pre-sleep crash invisible to `idf.py
+     *                      monitor`. Leave them alone -- the
+     *                      USB-Serial-JTAG controller is powered
+     *                      down by the digital domain in deep sleep
+     *                      regardless.
+     *   GPIO21          -- SD MISO / shared SPI3 (released by sd_card_deinit).
+     *
+     * That leaves GPIO1, GPIO2, GPIO3, GPIO4 as the genuinely spare
+     * RTC-IO pins on this board. GPIO3 (TOUCH_INT on the T5) is
+     * normally driven by the GT911; once display_deep_sleep_prepare()
+     * has collapsed the EPD rail the GT911 is unpowered and its INT
+     * line floats, so isolating GPIO3 here is appropriate. */
     static const int rtc_unused[] = {
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20
+        1, 2, 3, 4
     };
     for (size_t i = 0; i < sizeof(rtc_unused) / sizeof(rtc_unused[0]); ++i) {
         gpio_num_t g = (gpio_num_t)rtc_unused[i];
@@ -192,11 +466,63 @@ static void pre_sleep_t5_deinit(void)
      * touch / display / I2C / SD subsystems while they are still up. */
     pre_sleep_autosave();
 
-    /* GT911 touch controller -> sleep (uses the shared I2C bus). */
+    /* GT911 touch controller -> sleep (uses the shared I2C bus).
+     * Issued before EPD power-down because the GT911 lives on the
+     * same bus that epd_deinit() will tear down. */
     touchscreen_sleep();
+
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER)
+    /* Snapshot the fuel gauge's current draw and SOC immediately
+     * before we start cutting peripherals. The next cold boot will
+     * read the persisted SOC delta and estimate average sleep draw
+     * in uA without needing a bench meter. */
+    {
+        int mv_now   = battery_read_mv();
+        int soc_now  = battery_read_percent();
+        int cur_now  = battery_read_current_ma();
+        ESP_LOGI(TAG, "Pre-sleep telemetry: %dmV %d%% %dmA (active draw)",
+                 mv_now, soc_now, cur_now);
+        if (soc_now >= 0) {
+            nvs_handle_t h;
+            if (nvs_open("draftling_pwr", NVS_READWRITE, &h) == ESP_OK) {
+                /* Persist the entry SOC and a wall-clock anchor. We
+                 * use uptime in microseconds (esp_timer_get_time)
+                 * because no RTC time-of-day is guaranteed to be
+                 * synced; on the next cold boot we can read RTC
+                 * residual time via esp_sleep_get_wakeup_cause +
+                 * gpio_dump_io_configuration, but the simplest
+                 * portable proxy is "store wall time if SNTP got us
+                 * one, else nothing". Always store SOC. */
+                (void)nvs_set_u8(h,  "entry_soc",  (uint8_t)soc_now);
+                (void)nvs_set_i32(h, "entry_curr", (int32_t)cur_now);
+                (void)nvs_set_i32(h, "entry_mv",   (int32_t)mv_now);
+                (void)nvs_commit(h);
+                nvs_close(h);
+            }
+        }
+    }
+#endif
 
     /* SX1262 LoRa -> sleep (Pro variant only; harmless NACK on Lite). */
     t5_lora_sleep();
+
+    /* MIA-M10Q GPS -> backup mode (Pro variant only; bytes clock into
+     * an unconnected line on Lite, which is harmless). Done before the
+     * RTC-IO isolation sweep so the UART pins are released cleanly. */
+    t5_gps_sleep();
+
+    /* If we are about to enter deep sleep on battery (no USB plugged
+     * in), put the BQ25896 charger into HIZ so it stops drawing its
+     * ~1.5 mA idle bias current from the cell. No-op when VBUS is
+     * present (user wants to keep charging through sleep) or when
+     * the chip was never initialised. Cold-boot re-init clears HIZ.
+     *
+     * Done here -- BEFORE display_deep_sleep_prepare() tears down the
+     * shared I2C bus inside epd_deinit() -- so all the I2C-attached
+     * peripherals on this board (GT911 touch, BQ27220 fuel gauge,
+     * BQ25896 charger, TPS65185 EPD PMIC, PCA9535 expander) are
+     * touched in a single linear sweep with the bus still alive. */
+    battery_bq25896_prepare_sleep();
 
     /* Release the SD card + SPI3 bus so the card itself drops to
      * standby and the bus pins float free. After this point any SPI3
@@ -204,14 +530,31 @@ static void pre_sleep_t5_deinit(void)
      * is why we do LoRa first. */
     (void)sd_card_deinit();
 
+    /* Tear down the EPD power IC + epdiy I2C state. After this call
+     * the shared I2C bus may have been released by epd_deinit(),
+     * so any further I2C work (touchscreen, BQ27220, BQ25896) must
+     * have already happened above.
+     *
+     * We deliberately do NOT re-issue touchscreen_sleep() afterwards.
+     * The GT911's RST line is wired through the TPS65185 / PCA9535
+     * expander, so epd_poweroff() can yank reset and the controller
+     * may come back at its backup I2C address 0x14 instead of 0x5D;
+     * blindly retrying a sleep command into that state is racy.
+     * The authoritative GT911 sleep already happened above (before
+     * any EPD teardown), with the bus still in a known-good state. */
+    display_deep_sleep_prepare();
+
     /* Isolate every unused RTC-IO pin so floating inputs don't leak. */
     t5_isolate_unused_gpios();
 
     /* Power down the RTC peripherals domain. We have no ULP and no
      * RTC SLOW memory data to retain across wake (the SoC cold-boots
      * on wake and the editor restores from autosave), so dropping
-     * this domain saves ~40 uA on ESP32-S3 over the default. */
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+     * this domain saves ~40 uA on ESP32-S3 over the default. The
+     * ESP32-S3 does not expose separate ESP_PD_DOMAIN_RTC_SLOW_MEM /
+     * RTC_FAST_MEM controls in current ESP-IDF -- those memories
+     * follow the RTC_PERIPH / VDD_SDIO domains automatically. */
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH,   ESP_PD_OPTION_OFF);
 
     /* Latch every pad that called gpio_hold_en() (the front-light,
      * specifically) so the level stays driven through deep sleep. */
@@ -284,6 +627,37 @@ static void pre_sleep_tab5_deinit(void)
 extern "C" void app_main(void)
 {
     ESP_LOGI(TAG, "Draftling - %s", BOARD_NAME);
+
+    /* Boot diagnostics: reset reason + wake-up cause.
+     *
+     * Logged as the very first thing in app_main so a "screen comes
+     * back on right after sleep" symptom can be triaged from a
+     * single boot line:
+     *   ESP_RST_DEEPSLEEP + EXT0  -> wake source fired immediately on
+     *                                entry (e.g. BOOT held, or pull-
+     *                                up not yet settled when EXT0 was
+     *                                armed).
+     *   ESP_RST_PANIC             -> something in pre_sleep_t5_deinit
+     *                                aborted; the panic backtrace
+     *                                will be in the lines above.
+     *   ESP_RST_BROWNOUT          -> rail dipped below the BOD
+     *                                threshold during sleep entry
+     *                                (most likely candidate: EPD
+     *                                rail collapse during
+     *                                epd_poweroff on a tired cell).
+     *   ESP_RST_INT_WDT/TASK_WDT  -> a watchdog tripped while we
+     *                                were holding off in
+     *                                pre_sleep_t5_deinit.
+     *   ESP_RST_POWERON           -> genuine cold boot (USB plug,
+     *                                latch released, full battery
+     *                                disconnect). Wake cause will
+     *                                read UNDEFINED. */
+    {
+        esp_reset_reason_t        rst  = esp_reset_reason();
+        esp_sleep_wakeup_cause_t  wake = esp_sleep_get_wakeup_cause();
+        ESP_LOGI(TAG, "Boot: reset_reason=%d wakeup_cause=%d",
+                 (int)rst, (int)wake);
+    }
 
     /* Initialize NVS - required for WiFi and BT */
     esp_err_t ret = nvs_flash_init();
@@ -606,6 +980,22 @@ extern "C" void app_main(void)
     }
 #endif
 
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER)
+    /* Boot-time fuel-gauge dump + (if this boot was a wake from
+     * deep sleep) drain-rate estimate vs the SOC we persisted on
+     * the way into sleep. Cheap (two I2C reads + one NVS read);
+     * Kconfig-gated so production builds stay quiet. */
+    log_boot_power_telemetry();
+#endif
+#if defined(CONFIG_DRAFTLING_DEBUG_POWER) || \
+    defined(CONFIG_DRAFTLING_CHARGER_WATCHDOG_REASSERT)
+    /* Periodic BQ25896 maintenance task (30 s):
+     *   - re-asserts ICO_EN=0 + watchdog disabled (tamper-resistance)
+     *   - logs full charger status when VBUS is present (DEBUG_POWER)
+     * No-op when the chip is not present (the helper API early-exits). */
+    charger_maint_start();
+#endif
+
     /* Create editor UI */
     ESP_LOGI(TAG, "Creating editor UI...");
     if (draftling_lvgl_port_lock(-1)) {
@@ -660,6 +1050,20 @@ extern "C" void app_main(void)
             draftling_lvgl_port_unlock();
         }
     }
+
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
+    /* LilyGO T5 E-Paper S3 Pro / Pro Lite: this firmware does not use
+     * the SX1262 LoRa radio or the MIA-M10Q GPS receiver. Both come
+     * up live after POR (SX1262 in STBY_RC ~600 uA, MIA-M10Q in full
+     * acquisition mode ~25 mA), which would burn ~25 mA on the
+     * battery for the entire active session before standby kicks in.
+     * Park them in their lowest-power state right now -- SPI3 has
+     * just been initialised by sd_card_init_spi() above, which is
+     * the bus the LoRa sleep helper needs. pre_sleep_t5_deinit()
+     * re-issues the same commands before deep sleep so a peripheral
+     * that was somehow re-armed in between still gets parked. */
+    t5_disable_radios_at_boot();
+#endif
 
     /* Bring up the ESP-Hosted SDIO link to the on-board ESP32-C6
      * co-processor before Bluetooth or Wi-Fi. The C6 provides the
