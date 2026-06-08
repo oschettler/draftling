@@ -548,6 +548,39 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    /* Wake the GT911 from any prior sleep state (datasheet section
+     * 5.7). The previous run may have issued GT911_CMD_SLEEP (0x05
+     * to 0x8040) from touchscreen_sleep() right before deep sleep.
+     * On cold-boot wake the controller stays in low-power state and
+     * NACKs every I2C transaction until it sees either (a) a falling
+     * edge on RST or (b) the host driving INT HIGH for >5 ms.
+     *
+     * On the LilyGO T5 E-Paper S3 Pro / Pro Lite the RST line is
+     * routed through the TPS65185 / PCA9535 expander rather than a
+     * direct ESP-S3 GPIO (CONFIG_DRAFTLING_TOUCH_RST_GPIO=-1), so the
+     * reset path is unavailable here -- without an INT-pulse wake the
+     * subsequent i2c_master_probe() below fails at both 0x5D and 0x14
+     * and the touchscreen is silently dead until the next hard reset.
+     * On boards that do drive RST through an ESP GPIO (or have no
+     * pre-sleep teardown) the brief HIGH pulse is harmless: the
+     * controller just observes a moment of host-side idle on INT.
+     *
+     * Drive INT push-pull HIGH for 10 ms (>5 ms datasheet minimum
+     * with margin) and leave it asserted HIGH; the regular INT-as-
+     * input config immediately below releases the pin and lets the
+     * controller resume pulling it LOW on new touch frames. */
+    if (s_cfg.intr >= 0) {
+        gpio_config_t g = {};
+        g.intr_type    = GPIO_INTR_DISABLE;
+        g.mode         = GPIO_MODE_OUTPUT;
+        g.pin_bit_mask = (1ULL << s_cfg.intr);
+        gpio_config(&g);
+        gpio_set_level((gpio_num_t)s_cfg.intr, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+#endif
+
     /* INT line as plain input with pull-up. We do *not* attach a
      * GPIO ISR -- LVGL's read_cb polls the level cheaply and it is
      * easier to share the pin with the standby manager's EXT0 wake
