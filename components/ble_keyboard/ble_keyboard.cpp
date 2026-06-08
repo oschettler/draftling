@@ -432,26 +432,39 @@ static TimerHandle_t  s_open_stuck_timer    = NULL;
 /* Time after the watchdog fires before we assume the open is wedged
  * inside Bluedroid and the HIDH subsystem itself needs restarting.
  *
- * HARD CONSTRAINT: this must be strictly less than
- * (SUPERVISION_TIMEOUT_FLOOR_10MS * 10) ms. Otherwise, when the peer
- * goes silent inside service discovery / CCCD writes (no OPEN_EVENT
- * ever fires), the controller's supervision timeout (rsn=0x8) beats
- * the recovery timer and Bluedroid runs the disconnect path against
- * a still-half-built device record, crashing in gattc_conn_cb
- * (LoadProhibited). Keep at most ~half the supervision floor so we
- * have margin against jitter in the watchdog start instant.
- *
- * With SUPERVISION_TIMEOUT_FLOOR_10MS = 3200 (32 s), 8 s here leaves
- * a comfortable 24 s margin and is still well above HIDH's internal
- * retry pacing. */
-#define OPEN_STUCK_RECOVERY_MS   8000
+ * Recovery is a true last resort: tearing HIDH down and back up at
+ * runtime is fragile (esp_hidh_deinit() refuses to run while any
+ * device record exists, and a failed re-init can leave the host
+ * permanently unusable). We must therefore wait long enough that
+ * every natural failure path has had time to produce a HIDH event
+ * (OPEN or CLOSE) which would clear s_force_close_on_open and stop
+ * this timer before it fires. The known natural timeouts are:
+ *   - SMP authentication timeout (~30 s)
+ *   - LE supervision timeout (SUPERVISION_TIMEOUT_FLOOR_10MS, 32 s)
+ *   - HIDH's own service-discovery / CCCD-write retries
+ * 60 s after the watchdog (≈85 s after esp_hidh_dev_open() was
+ * called) sits comfortably past all of these, so reaching this
+ * callback is genuine evidence that no HIDH event will ever arrive
+ * for this open attempt. */
+#define OPEN_STUCK_RECOVERY_MS  60000
+
+/* Cooldown applied when a reconnect attempt finds HIDH not ready
+ * (i.e. a previous hidh_recover_task failed to re-arm the host).
+ * Without this, connect_task bails out and immediately rearms the
+ * reconnect timer at RECONN_DEFAULT_MS (1 s), producing a flood of
+ * "HIDH not available, cannot connect" errors. The hidh_recover_task
+ * itself reschedules its own retry via s_open_stuck_timer; this
+ * cooldown just keeps the connect path from spinning in the
+ * meantime. */
+#define HIDH_DOWN_RETRY_MS      15000
 
 /* LE supervision-timeout floor while a HIDH open is in flight, in
  * units of 10 ms (BLE-spec encoding). 3200 = 32 s, the BLE spec
- * maximum (0x0C80). Chosen so that the open-stuck recovery timer
- * (OPEN_STUCK_RECOVERY_MS) is guaranteed to fire before the
- * controller's supervision timeout produces a rsn=0x8 disconnect
- * against a half-built HIDH device record. Applied via:
+ * maximum (0x0C80). Chosen to be longer than the worst HIDH
+ * service-discovery / CCCD-write window we are willing to wait
+ * (OPEN_WATCHDOG_MS), so the controller does not drop the link out
+ * from under a still-half-built device record while we are
+ * patiently waiting for HIDH to surface an OPEN event. Applied via:
  *  - esp_ble_gap_set_prefer_conn_params() before each connect, so the
  *    initial negotiation already lands at or above this value;
  *  - ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT handler, which bumps the
@@ -1011,36 +1024,85 @@ static void open_watchdog_stop(void)
  * open_stuck_cb() only when the watchdog has fired AND no HIDH event
  * has arrived for OPEN_STUCK_RECOVERY_MS afterwards. Runs in its own
  * task because esp_hidh_init() blocks on the BTC task and must not
- * run from a FreeRTOS timer service. */
+ * run from a FreeRTOS timer service.
+ *
+ * Atomicity rules (learned the hard way from a bricked-HIDH session):
+ *  - Do NOT clear s_hidh_ready until esp_hidh_deinit() actually
+ *    succeeds. If deinit returns ESP_ERR_INVALID_STATE ("Please
+ *    disconnect all devices first!"), HIDH is still up and
+ *    functional -- just bail out and let the natural OPEN/CLOSE
+ *    event drive the next attempt via the existing
+ *    s_force_close_on_open path.
+ *  - If esp_hidh_init() fails after a successful deinit, do not
+ *    silently leave the host down. Surface the failure on the UI
+ *    and re-arm s_open_stuck_timer so we try again later instead
+ *    of bricking the keyboard subsystem until reboot.
+ *  - Only kick the reconnect timer when HIDH is actually ready
+ *    again. connect_task() also has a HIDH-down cooldown as a
+ *    belt-and-braces backstop. */
 static void hidh_recover_task(void *arg)
 {
     (void)arg;
     ESP_LOGE(TAG, "HIDH appears wedged; deinit+init to recover");
     notify_status("BLE stuck, restarting HID host...");
+
+    esp_err_t derr = esp_hidh_deinit();
+    if (derr == ESP_ERR_INVALID_STATE) {
+        /* HIDH still has a device record it can't tear down.
+         * Leave the host marked ready -- the natural OPEN/CLOSE
+         * event for the wedged open will eventually arrive and the
+         * existing s_force_close_on_open path will clean up. Do
+         * NOT kick the reconnect timer here; that would just stack
+         * another open on top of the half-built record. */
+        ESP_LOGW(TAG, "esp_hidh_deinit: %s (HIDH still up, leaving "
+                      "as-is and waiting for natural OPEN/CLOSE)",
+                 esp_err_to_name(derr));
+        s_force_close_on_open = true;  /* belt-and-braces */
+        notify_status("BLE waiting for keyboard to time out...");
+        vTaskDelete(NULL);
+        return;
+    }
+    if (derr != ESP_OK) {
+        ESP_LOGW(TAG, "esp_hidh_deinit: %s (proceeding with re-init)",
+                 esp_err_to_name(derr));
+    }
+
+    /* Deinit succeeded (or returned a non-INVALID_STATE error we are
+     * choosing to ignore): HIDH is now down. Mark it so and drop
+     * any stale device handle. */
     s_hidh_ready = false;
-    /* Drop any stale device handle without poking the (possibly
-     * half-built) Bluedroid device record -- esp_hidh_deinit() will
-     * tear the host's internal lists down. */
     s_hidh_dev   = NULL;
     s_connected  = false;
     s_connecting = false;
     s_force_close_on_open = false;
 
-    esp_err_t derr = esp_hidh_deinit();
-    if (derr != ESP_OK) {
-        ESP_LOGW(TAG, "esp_hidh_deinit: %s", esp_err_to_name(derr));
-    }
     esp_hidh_config_t hidh_cfg = {};
     hidh_cfg.callback = hidh_callback;
     hidh_cfg.event_stack_size = 4096;
     esp_err_t ierr = esp_hidh_init(&hidh_cfg);
     if (ierr != ESP_OK) {
-        ESP_LOGE(TAG, "esp_hidh_init (recovery) failed: %s",
-                 esp_err_to_name(ierr));
-    } else {
-        s_hidh_ready = true;
-        ESP_LOGI(TAG, "HIDH re-initialised");
+        ESP_LOGE(TAG, "esp_hidh_init (recovery) failed: %s; will "
+                      "retry in %d ms",
+                 esp_err_to_name(ierr), OPEN_STUCK_RECOVERY_MS);
+        notify_status("BLE HID restart failed, retrying...");
+        /* Re-arm the stuck timer so we make another attempt later
+         * instead of leaving s_hidh_ready=false forever. Set the
+         * watchdog flag so open_stuck_cb()'s guard passes when it
+         * fires next. */
+        s_force_close_on_open = true;
+        if (s_open_stuck_timer) {
+            xTimerChangePeriod(s_open_stuck_timer,
+                               pdMS_TO_TICKS(OPEN_STUCK_RECOVERY_MS),
+                               0);
+            xTimerReset(s_open_stuck_timer, 0);
+        }
+        vTaskDelete(NULL);
+        return;
     }
+
+    s_hidh_ready = true;
+    ESP_LOGI(TAG, "HIDH re-initialised");
+
     /* Kick the reconnect state machine; skip RECONN_LAST so we don't
      * immediately re-open the same address that just wedged HIDH. */
     if (!s_disabled) {
@@ -1115,9 +1177,18 @@ static void connect_task(void *arg)
      * we cannot connect. */
     if (!is_hidh_ready()) {
         ESP_LOGE(TAG, "HIDH not available, cannot connect");
-        notify_status("BLE HID not ready, retrying...");
+        notify_status("BLE HID restarting, please wait...");
         s_connecting = false;
+        /* Apply a long cooldown before the next reconnect attempt.
+         * hidh_recover_task is responsible for restoring the host;
+         * spinning the reconnect timer at RECONN_DEFAULT_MS here
+         * just floods the log with "HIDH not available" while
+         * recovery is in progress (or has failed and re-armed
+         * itself via s_open_stuck_timer). */
+        uint32_t prev = s_reconn_delay_ms;
+        s_reconn_delay_ms = HIDH_DOWN_RETRY_MS;
         reconn_timer_kick();
+        s_reconn_delay_ms = prev;
         vTaskDelete(NULL);
         return;
     }
