@@ -97,24 +97,29 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
-    /* Cap the SPI data-phase clock conservatively. SDSPI_HOST_DEFAULT()
-     * leaves max_freq_khz at SDMMC_FREQ_DEFAULT (20 MHz), which fails
-     * outright on older SDSC cards on long / shared SPI buses (e.g.
-     * the SX1262 LoRa radio shares SPI3 with the MicroSD slot on the
-     * LilyGO T5 E-Paper S3 Pro). 10 MHz was the next obvious step
-     * down, but on the LilyGO board a 968 MB SanDisk SU01G mounts,
-     * passes a spread-out single-sector probe, then still fails
-     * FatFs's first FAT/cluster-chain read with
-     * 0x108 ESP_ERR_INVALID_RESPONSE -- the bus is right on the
-     * edge of marginal at 10 MHz and only fast multi-sector
-     * traffic exposes it.
+    /* SPI data-phase clock retry ladder. We start at the SDSPI
+     * spec-default 20 MHz (SDMMC_FREQ_DEFAULT) and step down on any
+     * mount / post-mount probe failure.
      *
-     * 4 MHz is well within the SDSPI spec for every card we have
-     * tested, leaves comfortable headroom on a shared bus, and is
-     * fast enough that the editor's small reads see no measurable
-     * slowdown. The retry steps below (2 MHz, 1 MHz) cover the
-     * worst-of-the-worst cards.  */
+     * History: an earlier revision capped this at 4 MHz to work
+     * around a 968 MB SanDisk SU01G SDSC card that mounted at 10 MHz
+     * but then failed FatFs's first FAT/cluster-chain read with
+     * 0x108 ESP_ERR_INVALID_RESPONSE on the LilyGO T5 E-Paper S3
+     * Pro's shared SPI3 bus (the SX1262 LoRa radio sits on the same
+     * bus). The 4 MHz cap fixed that card but broke every healthy
+     * SDHC card -- a 16 GB SanDisk SD16G that ran fine at 20 MHz
+     * started returning 0x107 ESP_ERR_TIMEOUT from
+     * sdmmc_read_sectors_dma on the very first real read.
+     *
+     * The correct guard against the SU01G failure mode is the
+     * post-mount data-phase probe below (broadened to touch the
+     * FAT / cluster region a multi-GB FAT32 volume actually uses),
+     * not a global clock cap. Starting at 20 MHz lets healthy SDHC
+     * cards run at full speed, and the step-down ladder
+     * (10 → 4 → 2 → 1 MHz) catches the marginal SDSC cases. */
     static const int kRetryFreqKhz[] = {
+        20000,
+        10000,
         4000,
         2000,
         1000,
@@ -169,8 +174,17 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
              * (sector 0 BPB + a chunk likely covering the FAT and
              * root dir on a sub-1 GB FAT16 volume). If any of them
              * fail, unmount and step down. */
-            uint8_t probe[512];
-            const uint32_t kProbeSectors[] = {0, 1, 16, 64, 256, 1024, 4096};
+            uint8_t probe[2048];
+            /* Single-sector probes spread across the volume. The
+             * higher offsets (16k, 64k, 256k) cover where FatFs's
+             * first FAT / root-dir / cluster-chain reads actually
+             * land on multi-GB FAT32 SDHC cards -- the original
+             * narrow probe (max sector 4096) only touched the
+             * reserved region and missed the area that fails. */
+            const uint32_t kProbeSectors[] = {
+                0, 1, 16, 64, 256, 1024, 4096,
+                16384, 65536, 262144,
+            };
             esp_err_t rerr = ESP_OK;
             for (size_t i = 0;
                  i < sizeof(kProbeSectors) / sizeof(kProbeSectors[0]);
@@ -184,6 +198,20 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
                              (unsigned)sect, host.max_freq_khz,
                              esp_err_to_name(rerr));
                     break;
+                }
+            }
+            /* Multi-sector burst probe. The SU01G symptom was a
+             * corrupted start-token only on burst transfers; a
+             * single-sector read at the same offset would succeed.
+             * A 4-sector read near sector 0 (BPB + reserved area)
+             * reliably reproduces that failure mode without
+             * depending on a particular FAT layout. */
+            if (rerr == ESP_OK && s_card->csd.capacity >= 4) {
+                rerr = sdmmc_read_sectors(s_card, probe, 0, 4);
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "SD/SPI 4-sector burst probe at %d kHz "
+                                  "failed: %s",
+                             host.max_freq_khz, esp_err_to_name(rerr));
                 }
             }
             if (rerr == ESP_OK) {
