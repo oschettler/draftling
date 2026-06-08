@@ -150,16 +150,37 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
         ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
                                       &mount_cfg, &s_card);
         if (ret == ESP_OK) {
-            if (attempt > 0) {
-                ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
-                              "at %d kHz", attempt + 1, host.max_freq_khz);
+            /* Mount uses the 400 kHz probe rate; the data-phase
+             * clock (host.max_freq_khz) is only exercised when real
+             * sectors are read. Old SDSC cards on the LilyGO T5
+             * shared SPI bus mount cleanly at 10 MHz but then return
+             * ESP_ERR_INVALID_RESPONSE / data-CRC errors from
+             * sdmmc_read_sectors_dma the moment FatFs touches sector
+             * 0 (observed pattern: corrupted start-token
+             * "6d 5f ff ff ..." in sdspi_host). Verify the bus
+             * actually works at the chosen clock by reading the
+             * first sector; if it fails, unmount and step down. */
+            uint8_t probe[512];
+            esp_err_t rerr = sdmmc_read_sectors(s_card, probe, 0, 1);
+            if (rerr == ESP_OK) {
+                if (attempt > 0) {
+                    ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
+                                  "at %d kHz", attempt + 1, host.max_freq_khz);
+                }
+                break;
             }
-            break;
+            ESP_LOGW(TAG, "SD/SPI sector-0 read at %d kHz failed: %s "
+                          "-- unmounting and stepping down",
+                     host.max_freq_khz, esp_err_to_name(rerr));
+            esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+            s_card = NULL;
+            ret = rerr;
+        } else {
+            ESP_LOGW(TAG, "SD/SPI mount attempt %d/%d at %d kHz failed: %s",
+                     attempt + 1, attempts, host.max_freq_khz,
+                     esp_err_to_name(ret));
+            s_card = NULL;
         }
-        ESP_LOGW(TAG, "SD/SPI mount attempt %d/%d at %d kHz failed: %s",
-                 attempt + 1, attempts, host.max_freq_khz,
-                 esp_err_to_name(ret));
-        s_card = NULL;
         if (attempt + 1 < attempts) {
             /* Back off progressively (200, 400 ms) -- enough for a
              * slow card to finish its power-on initialisation
