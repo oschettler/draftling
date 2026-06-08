@@ -1218,56 +1218,18 @@ static void ensure_cursor_visible(void)
  * colors and the initial selection highlight). */
 static void apply_list_selection_styles(lv_obj_t *list, int sel);
 static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel);
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-/* The three activate-on-tap callbacks for the touchable lists.
- * They are defined further down with the rest of their respective
- * list code; forward-declared here so list_touch_attach can store
- * them as function pointers in the static touch contexts. */
-static void browser_activate_item(int row);
-static void menu_activate_item(int idx);
-static void settings_activate_item(int idx);
-#endif
 
-/* ---- Touch input ----
- *
- * Touch is gated on CONFIG_DRAFTLING_TOUCHSCREEN. When enabled we
- * register LVGL pointer-event handlers on:
- *   - the editor content area (s_cont_edit): tap moves the cursor,
- *     double-tap selects the word at the tap point, and vertical
- *     swipes scroll the document.
- *   - each list-row button in the main menu, settings menu, and
- *     file browser: a tap highlights the row (single click) and a
- *     second tap on the already-highlighted row activates it.
- *     This mirrors the keyboard flow (arrow keys then Enter) so a
- *     touch-only user can reach every command.
- *
- * The keyboard handlers are untouched and continue to work in
- * parallel; touch is purely additive. */
-
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-
-#include <cctype>
-#include <cstdlib>
-
-/* Treat as a "word" character: ASCII alnum / underscore, and any
- * UTF-8 continuation/start byte (>= 0x80). This makes word-select
- * work on Latin, Cyrillic, accented chars, etc. without needing a
- * full Unicode category table. */
-static bool touch_is_word_byte(unsigned char c)
-{
-    if (c >= 0x80) return true;
-    if (c == '_') return true;
-    if (c >= '0' && c <= '9') return true;
-    if (c >= 'a' && c <= 'z') return true;
-    if (c >= 'A' && c <= 'Z') return true;
-    return false;
-}
+/* ---- Pixel <-> document-offset helpers (used by both touch input
+ * and visual-line cursor navigation).  Always compiled so that the
+ * arrow-key handler can ask "which character is at pixel (x, y) of
+ * the rendered editor body?" regardless of whether the touchscreen
+ * driver is enabled. */
 
 /* Walk N UTF-8 codepoints into a buffer and return the resulting
  * byte offset, clamped to len. The display layer already laid the
  * codepoints out in monospaced glyphs, so this is the inverse of
  * what lv_label_get_letter_on() reports for our needs. */
-static int touch_utf8_skip(const char *s, int len, int n_cp)
+static int ui_utf8_skip_cp(const char *s, int len, int n_cp)
 {
     int i = 0;
     while (n_cp > 0 && i < len) {
@@ -1284,38 +1246,11 @@ static int touch_utf8_skip(const char *s, int len, int n_cp)
     return i;
 }
 
-/* Last tap state for software double-tap detection. LVGL fires
- * LV_EVENT_CLICKED on every release; we compare against the
- * previous one and promote consecutive close-in-time clicks to a
- * "double tap". */
-static uint32_t s_last_tap_ms = 0;
-static int      s_last_tap_x  = -1;
-static int      s_last_tap_y  = -1;
-#define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
-#define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
-
-/* Drag-to-scroll state. Touch panels here typically poll at 30-60 Hz
- * with small per-frame deltas; LVGL's built-in gesture detector needs
- * a fairly high velocity to fire, which makes "slow scroll a long
- * document" feel unresponsive. So we implement drag-scrolling
- * directly off LV_EVENT_PRESSED / _PRESSING / _RELEASED: every time
- * the finger has moved one full line height vertically, scroll the
- * document by one line and re-anchor. The accumulated drag distance
- * also lets us suppress the LV_EVENT_CLICKED that LVGL emits on
- * release after a drag, so a swipe never moves the cursor by
- * accident. */
-static bool s_drag_active     = false;
-static int  s_drag_start_x    = 0;
-static int  s_drag_start_y    = 0;
-static int  s_drag_anchor_y   = 0;
-static int  s_drag_total_dy   = 0;
-#define TOUCH_DRAG_SUPPRESS_PX 8   /* clicks within this radius still count as taps */
-
-/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+/* Convert a point (in s_cont_edit local coordinates) to a byte
  * offset within the editor's flat text buffer. Returns true on
- * success and fills *out_off; returns false if the tap landed on
+ * success and fills *out_off; returns false if the point landed on
  * empty space below the last rendered line. */
-static bool touch_point_to_offset(int x, int y, size_t *out_off)
+static bool ui_point_to_offset(int x, int y, size_t *out_off)
 {
     if (!out_off) return false;
 
@@ -1397,7 +1332,7 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
     }
     case MD_LINE_HR:
     case MD_LINE_EMPTY:
-        /* Display content is synthetic; map every tap to the start
+        /* Display content is synthetic; map every point to the start
          * of the raw line so Enter/typing inserts there. */
         *out_off = line_off;
         return true;
@@ -1416,17 +1351,218 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
         break;
     }
 
-    /* Clamp the display column to the rendered text length so a tap
-     * past end-of-line places the cursor right after the last char. */
+    /* Clamp the display column to the rendered text length so a
+     * point past end-of-line places the cursor right after the last char. */
     int content_cp = disp_char - disp_prefix_cp;
     if (content_cp < 0) content_cp = 0;
 
     /* Walk content_cp codepoints into mi.content to get the raw
      * byte offset inside the content span, then add the raw prefix. */
-    int byte_in_content = touch_utf8_skip(mi.content,
+    int byte_in_content = ui_utf8_skip_cp(mi.content,
                                           (int)mi.content_len, content_cp);
     *out_off = line_off + (size_t)raw_prefix_b + (size_t)byte_in_content;
     return true;
+}
+
+/* ---- Visual-line cursor movement ----
+ *
+ * The default editor_move_up()/_down() jump by *logical* lines,
+ * which on a long soft-wrapped paragraph skips the whole rendered
+ * block in one keystroke. The functions below instead step the
+ * cursor to the next/previous *visual* row, matching what most
+ * other editors do.
+ *
+ * s_visual_goal_x remembers the cursor's preferred x pixel across
+ * consecutive Up/Down presses so the column is preserved even when
+ * crossing shorter rows -- it is reset by handle_editor_key() on
+ * any non-vertical key. */
+static int s_visual_goal_x = -1;
+
+static void editor_ui_move_visual(int direction)
+{
+    /* direction: -1 = up, +1 = down */
+    if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = -1;
+        return;
+    }
+
+    int cx = lv_obj_get_x(s_cursor);
+    int cy = lv_obj_get_y(s_cursor);
+    int ch = lv_obj_get_height(s_cursor);
+    int gx = (s_visual_goal_x >= 0) ? s_visual_goal_x : cx;
+    int target_y = (direction < 0) ? cy - 1 : cy + ch;
+
+    /* Short-circuit at document boundaries so a Down press on the
+     * very last visual row of the document does not scroll past
+     * end-of-text. We still need this check up front because the
+     * scroll fall-through below assumes there is another logical
+     * line to bring into view. */
+    {
+        int cur_line, cur_col;
+        editor_get_cursor_pos(&cur_line, &cur_col);
+        (void)cur_col;
+        int total = editor_get_line_count();
+        if (direction > 0 && cur_line >= total - 1) {
+            /* Last logical line: see if any visual row remains
+             * within the current label below the cursor. If not,
+             * stay put. */
+            if (target_y >= EDITOR_H) {
+                /* Conservative: at-or-past viewport bottom on the
+                 * last line -> nothing more to move to. */
+                return;
+            }
+        }
+        if (direction < 0 && cur_line == 0) {
+            /* First logical line: if the cursor is already on the
+             * first visual row (cy <= 0), there is no row above. */
+            if (cy <= 0) return;
+        }
+    }
+
+    /* If the target visual row is outside the rendered editor area,
+     * scroll one logical line and re-render so the row above/below
+     * becomes addressable via ui_point_to_offset(). */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (target_y >= 0 && target_y < EDITOR_H) break;
+        int sc = editor_get_scroll_line();
+        if (direction < 0) {
+            if (sc <= 0) {
+                editor_move_up();
+                s_visual_goal_x = gx;
+                return;
+            }
+            editor_set_scroll_line(sc - 1);
+        } else {
+            int total = editor_get_line_count();
+            if (sc + 1 >= total) {
+                editor_move_down();
+                s_visual_goal_x = gx;
+                return;
+            }
+            editor_set_scroll_line(sc + 1);
+        }
+        editor_ui_refresh();
+        if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+            if (direction < 0) editor_move_up();
+            else               editor_move_down();
+            s_visual_goal_x = gx;
+            return;
+        }
+        cy = lv_obj_get_y(s_cursor);
+        ch = lv_obj_get_height(s_cursor);
+        target_y = (direction < 0) ? cy - 1 : cy + ch;
+    }
+
+    if (target_y < 0 || target_y >= EDITOR_H) {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = gx;
+        return;
+    }
+
+    size_t off;
+    if (ui_point_to_offset(gx, target_y, &off)) {
+        editor_set_cursor(off);
+        s_visual_goal_x = gx;
+    } else {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = gx;
+    }
+}
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+/* The three activate-on-tap callbacks for the touchable lists.
+ * They are defined further down with the rest of their respective
+ * list code; forward-declared here so list_touch_attach can store
+ * them as function pointers in the static touch contexts. */
+static void browser_activate_item(int row);
+static void menu_activate_item(int idx);
+static void settings_activate_item(int idx);
+#endif
+
+/* ---- Touch input ----
+ *
+ * Touch is gated on CONFIG_DRAFTLING_TOUCHSCREEN. When enabled we
+ * register LVGL pointer-event handlers on:
+ *   - the editor content area (s_cont_edit): tap moves the cursor,
+ *     double-tap selects the word at the tap point, and vertical
+ *     swipes scroll the document.
+ *   - each list-row button in the main menu, settings menu, and
+ *     file browser: a tap highlights the row (single click) and a
+ *     second tap on the already-highlighted row activates it.
+ *     This mirrors the keyboard flow (arrow keys then Enter) so a
+ *     touch-only user can reach every command.
+ *
+ * The keyboard handlers are untouched and continue to work in
+ * parallel; touch is purely additive. */
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+
+#include <cctype>
+#include <cstdlib>
+
+/* Treat as a "word" character: ASCII alnum / underscore, and any
+ * UTF-8 continuation/start byte (>= 0x80). This makes word-select
+ * work on Latin, Cyrillic, accented chars, etc. without needing a
+ * full Unicode category table. */
+static bool touch_is_word_byte(unsigned char c)
+{
+    if (c >= 0x80) return true;
+    if (c == '_') return true;
+    if (c >= '0' && c <= '9') return true;
+    if (c >= 'a' && c <= 'z') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    return false;
+}
+
+/* Walk N UTF-8 codepoints into a buffer and return the resulting
+ * byte offset, clamped to len. The display layer already laid the
+ * codepoints out in monospaced glyphs, so this is the inverse of
+ * what lv_label_get_letter_on() reports for our needs. */
+/* (ui_utf8_skip_cp / ui_point_to_offset are defined unconditionally
+ * above so visual-line cursor movement can use them too.) */
+
+/* Last tap state for software double-tap detection. LVGL fires
+ * LV_EVENT_CLICKED on every release; we compare against the
+ * previous one and promote consecutive close-in-time clicks to a
+ * "double tap". */
+static uint32_t s_last_tap_ms = 0;
+static int      s_last_tap_x  = -1;
+static int      s_last_tap_y  = -1;
+#define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
+#define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
+
+/* Drag-to-scroll state. Touch panels here typically poll at 30-60 Hz
+ * with small per-frame deltas; LVGL's built-in gesture detector needs
+ * a fairly high velocity to fire, which makes "slow scroll a long
+ * document" feel unresponsive. So we implement drag-scrolling
+ * directly off LV_EVENT_PRESSED / _PRESSING / _RELEASED: every time
+ * the finger has moved one full line height vertically, scroll the
+ * document by one line and re-anchor. The accumulated drag distance
+ * also lets us suppress the LV_EVENT_CLICKED that LVGL emits on
+ * release after a drag, so a swipe never moves the cursor by
+ * accident. */
+static bool s_drag_active     = false;
+static int  s_drag_start_x    = 0;
+static int  s_drag_start_y    = 0;
+static int  s_drag_anchor_y   = 0;
+static int  s_drag_total_dy   = 0;
+#define TOUCH_DRAG_SUPPRESS_PX 8   /* clicks within this radius still count as taps */
+
+/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+ * offset within the editor's flat text buffer. Returns true on
+ * success and fills *out_off; returns false if the tap landed on
+ * empty space below the last rendered line. */
+/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+ * offset within the editor's flat text buffer. Implemented as a
+ * thin wrapper around ui_point_to_offset(), which is also reused
+ * by keyboard-driven visual-line cursor movement. */
+static bool touch_point_to_offset(int x, int y, size_t *out_off)
+{
+    return ui_point_to_offset(x, y, out_off);
 }
 
 /* Expand a single-tap byte offset into the selection range of the
@@ -3139,6 +3275,14 @@ static void handle_editor_key(const kb_event_t *ev)
             "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
     }
 
+    /* Forget the "preferred column" used by visual Up/Down navigation
+     * the moment the user presses anything else -- otherwise typing,
+     * Home/End, etc. would leave a stale goal_x that the next Up/Down
+     * would snap back to. */
+    if (ev->keycode != KB_KEY_UP && ev->keycode != KB_KEY_DOWN) {
+        s_visual_goal_x = -1;
+    }
+
     /* F1 opens the menu */
     if (ev->keycode == KB_KEY_F1) {
         show_menu();
@@ -3296,12 +3440,12 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_UP:
         if (shift) editor_set_selection_anchor();
         else editor_clear_selection();
-        editor_move_up();
+        editor_ui_move_visual(-1);
         break;
     case KB_KEY_DOWN:
         if (shift) editor_set_selection_anchor();
         else editor_clear_selection();
-        editor_move_down();
+        editor_ui_move_visual(+1);
         break;
     case KB_KEY_HOME:
         if (shift) editor_set_selection_anchor();
