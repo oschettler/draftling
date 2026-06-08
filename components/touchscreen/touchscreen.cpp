@@ -267,15 +267,16 @@ static bool gt911_try_recover(void)
 {
     if (!s_bus) return false;
 
+    /* Always try both possible GT911 addresses, configured first.
+     * GT911 only ever lands on 0x5D or 0x14; if `configured` is
+     * something exotic we still try the two canonical addresses so
+     * recovery has a chance to succeed. */
     uint8_t configured = s_cfg.i2c_addr;
-    uint8_t order[2];
-    order[0] = configured;
-    order[1] = (configured == 0x5D) ? 0x14 :
-               (configured == 0x14) ? 0x5D : 0x5D;
+    uint8_t order[2] = { configured,
+                         (configured == 0x14) ? 0x5D : 0x14 };
 
     for (int i = 0; i < 2; i++) {
         uint8_t addr = order[i];
-        if (i == 1 && addr == order[0]) break; /* no distinct alt */
         if (i2c_master_probe(s_bus, addr, 50) != ESP_OK) continue;
 
         if (addr == s_cfg.i2c_addr) {
