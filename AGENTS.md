@@ -258,8 +258,8 @@ build; on non-EPD targets the column counter is appended as well.
 
 The bottom status bar of both the editor and the file browser
 displays a small Wi-Fi icon (`components/editor/wifi_icon.c`) in the
-right corner whenever `wifi_manager_is_connected()` is true. The
-Greybeard fonts cover U+0020-U+04FF plus a few currency / numero
+right corner whenever `wifi_manager_is_connected()` is true. The base
+Greybeard fonts cover U+0020-U+00FF plus a few currency / numero
 glyphs, which excludes the U+1F6DC "wireless" pictograph, so the
 icon is rendered from a small embedded LVGL `LV_COLOR_FORMAT_I1`
 image instead of as a font glyph. Two pre-baked descriptors are
@@ -460,17 +460,33 @@ lv_font_conv \
 
 ### Unicode Ranges
 
-Every font file includes the same set of Unicode ranges so that all
-keyboard layouts (US, UA, DE, FR) can share a single font set:
+The base `greybeard_NN.c` files cover the always-on core ranges:
 
 | Range | Description |
 |-------|-------------|
 | U+0020 - U+007F | Basic Latin (ASCII printable characters) |
 | U+00A0 - U+00FF | Latin-1 Supplement (accented Latin characters, symbols) |
-| U+0400 - U+04FF | Cyrillic (Ukrainian and other Slavic alphabets) |
 | U+20AC | Euro sign |
-| U+20B4 | Hryvnia sign (Ukrainian currency) |
 | U+2116 | Numero sign |
+
+Additional script coverage is split into separate subset font files
+that are compiled into the firmware only when the corresponding
+keyboard layout is enabled in Kconfig. This keeps the firmware small
+for builds that do not need a given script.
+
+| File pattern | Range | Gated on |
+|--------------|-------|----------|
+| `greybeard_cyrillic_NN.c` | U+0400 - U+04FF (Cyrillic) + U+20B4 (Hryvnia) | `CONFIG_KB_LAYOUT_ENABLE_UA` |
+| `greybeard_hebrew_NN.c`   | U+0590 - U+05FF (Hebrew block) | `CONFIG_KB_LAYOUT_ENABLE_HE` |
+
+The base font is generated with `--lv-fallback greybeard_NN_ext` and
+the Hebrew subset with `--lv-fallback greybeard_NN_he_next`. Both
+fallback symbols are tiny runtime-mutable "router" `lv_font_t` structs
+defined in `components/fonts/greybeard.c`; `greybeard_init()` chains
+their `.fallback` pointers at boot so that a missed glyph lookup in
+the base font walks into Hebrew and/or Cyrillic as appropriate.
+Hebrew layouts also require `CONFIG_LV_USE_BIDI=y` so LVGL renders
+RTL strings in the correct visual order.
 
 ### Sizes and Metrics
 

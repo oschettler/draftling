@@ -1270,7 +1270,9 @@ static bool ui_point_to_offset(int x, int y, size_t *out_off)
     if (y_in_label < 0) y_in_label = 0;
 
     /* lv_label_get_letter_on returns a codepoint index into the
-     * displayed text (BIDI-aware, but our content is LTR-only). */
+     * displayed text. LVGL's BIDI reordering (LV_USE_BIDI) is enabled
+     * so Hebrew text renders right-to-left; for pure LTR content this
+     * lookup is a no-op. */
     int disp_char = 0;
     if (s_line_labels[slot]) {
         lv_point_t p;
@@ -4763,6 +4765,10 @@ static void rebuild_screens_for_theme(void)
 
 extern "C" void editor_ui_init(void)
 {
+    /* Chain optional Greybeard font subsets (Cyrillic / Hebrew) into
+     * the base font's fallback slot before any text is rendered. */
+    greybeard_init();
+
     load_font_size_from_nvs();
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     load_theme_from_nvs();
