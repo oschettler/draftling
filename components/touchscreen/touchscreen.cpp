@@ -273,7 +273,7 @@ static bool gt911_try_recover(void)
      * recovery has a chance to succeed. */
     uint8_t configured = s_cfg.i2c_addr;
     uint8_t order[2] = { configured,
-                         (configured == 0x14) ? 0x5D : 0x14 };
+                         static_cast<uint8_t>((configured == 0x14) ? 0x5D : 0x14) };
 
     for (int i = 0; i < 2; i++) {
         uint8_t addr = order[i];
