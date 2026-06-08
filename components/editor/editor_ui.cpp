@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
@@ -547,16 +548,15 @@ static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
 /* Line label pool */
 #define MAX_LINE_LABELS 24
 
-/* Maximum byte length of the rendered text for a single editor line.
- * Must be large enough to hold a full screen-width line in worst-case
- * UTF-8: Cyrillic / Greek / Hebrew use 2 bytes per glyph, CJK uses
- * 3 bytes, most emoji use 4 bytes. 1024 bytes comfortably covers any
- * soft-wrapped line that LVGL can layout within SCR_W on our
- * supported panels. Sizing this too small previously caused
- * multi-byte text (e.g. Cyrillic past ~127 characters) to be silently
- * truncated before reaching the label, so the text became invisible
- * while editor_get_line() still held the full content. */
-#define EDITOR_LINE_BUF_BYTES 1024
+/* A "line" here is one source paragraph (run between '\n's) which can
+ * be arbitrarily long, so the rendered text for a slot must NOT be
+ * capped to a fixed size. Earlier revisions used a 1024-byte buffer
+ * and silently dropped trailing UTF-8 codepoints once a single
+ * paragraph filled it -- e.g. a 569-Cyrillic-char paragraph fits in
+ * exactly 1023 bytes and the next typed character (any 2-byte glyph)
+ * was discarded by the codepoint trimmer. We now build the per-line
+ * display string into a growable std::string and cache it the same
+ * way, so the cap is bounded only by available heap. */
 static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
 
 /* Selection highlight rectangle pool (one per visible line) */
@@ -579,7 +579,7 @@ static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
  * with no active selection: only the slot whose text actually changed
  * (and the cursor bar / title bar) gets invalidated, so the panel can
  * run a fast partial-region waveform instead of a full refresh. */
-static char s_prev_line_text[MAX_LINE_LABELS][EDITOR_LINE_BUF_BYTES];
+static std::string s_prev_line_text[MAX_LINE_LABELS];
 static int  s_prev_line_type[MAX_LINE_LABELS];     /* md_line_type_t, -1 if cache empty */
 static int  s_prev_line_y[MAX_LINE_LABELS];        /* y_pos last used for this slot, -1 if cache empty */
 static int  s_prev_line_h[MAX_LINE_LABELS];        /* rendered_h last computed */
@@ -589,7 +589,7 @@ static bool s_prev_line_was_selected[MAX_LINE_LABELS]; /* line intersected the s
 static void invalidate_render_cache(void)
 {
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        s_prev_line_text[i][0]      = '\0';
+        s_prev_line_text[i].clear();
         s_prev_line_type[i]         = -1;
         s_prev_line_y[i]            = -1;
         s_prev_line_h[i]            = 0;
@@ -807,19 +807,6 @@ static size_t utf8_char_offset(const char *text, int n)
     return off;
 }
 
-/* Trim len so it does not split a UTF-8 codepoint. Walks back over
- * continuation bytes (0b10xxxxxx) until the byte immediately past the
- * cut is a start byte (or len becomes 0). Used wherever we truncate a
- * source string into a fixed-size buffer for rendering -- truncating
- * mid-sequence would feed LVGL an invalid UTF-8 fragment and cause
- * the trailing character to render as garbage or be dropped. */
-static size_t utf8_trim_to_codepoint(const char *text, size_t len)
-{
-    while (len > 0 && ((unsigned char)text[len] & 0xC0) == 0x80) {
-        len--;
-    }
-    return len;
-}
 
 extern "C" void editor_ui_refresh(void)
 {
@@ -867,7 +854,8 @@ extern "C" void editor_ui_refresh(void)
             if (md_is_code_fence(lt, ll)) in_code = !in_code;
         }
 
-        char line_buf[EDITOR_LINE_BUF_BYTES];
+        std::string line_buf;   /* reusable scratch for bullet/HR prefixing */
+        std::string tmp;        /* final rendered text for the current slot */
         int y_pos = 0;       /* running y position in editor content area */
         cur_y = -1;
         cur_x = -1;
@@ -908,24 +896,15 @@ extern "C" void editor_ui_refresh(void)
             size_t disp_len = mi.content_len;
             if (mi.type == MD_LINE_BULLET) {
                 int prefix = mi.indent_level * 2;
-                int n = snprintf(line_buf, sizeof(line_buf), "%*s* ", prefix, "");
-                if (n < 0) n = 0;
-                if ((size_t)n >= sizeof(line_buf)) n = (int)sizeof(line_buf) - 1;
-                size_t avail = sizeof(line_buf) - 1 - (size_t)n;
-                size_t copy_len = disp_len < avail ? disp_len : avail;
-                /* Don't split a UTF-8 codepoint at the truncation point. */
-                copy_len = utf8_trim_to_codepoint(disp_text, copy_len);
-                if (copy_len > 0) {
-                    memcpy(line_buf + n, disp_text, copy_len);
-                }
-                line_buf[n + copy_len] = '\0';
-                disp_text = line_buf;
-                disp_len = (size_t)n + copy_len;
+                line_buf.assign((size_t)prefix, ' ');
+                line_buf.append("* ");
+                line_buf.append(disp_text, disp_len);
+                disp_text = line_buf.data();
+                disp_len  = line_buf.size();
             } else if (mi.type == MD_LINE_HR) {
-                memset(line_buf, '-', 40);
-                line_buf[40] = '\0';
-                disp_text = line_buf;
-                disp_len = 40;
+                line_buf.assign(40, '-');
+                disp_text = line_buf.data();
+                disp_len  = line_buf.size();
             } else if (mi.type == MD_LINE_EMPTY) {
                 disp_text = " ";
                 disp_len = 1;
@@ -933,16 +912,9 @@ extern "C" void editor_ui_refresh(void)
 
             /* Build the final display string up-front so we can compare
              * against the cached previous content before touching any
-             * LVGL state. */
-            char tmp[EDITOR_LINE_BUF_BYTES];
-            size_t clen = disp_len < sizeof(tmp) - 1 ? disp_len : sizeof(tmp) - 1;
-            /* Don't split a UTF-8 codepoint when truncating: an
-             * orphaned continuation byte would cause LVGL to drop the
-             * trailing glyph and (depending on the font) the rest of
-             * the label as well. */
-            clen = utf8_trim_to_codepoint(disp_text, clen);
-            memcpy(tmp, disp_text, clen);
-            tmp[clen] = '\0';
+             * LVGL state. The std::string grows to fit, so paragraphs
+             * of arbitrary length render in full without truncation. */
+            tmp.assign(disp_text, disp_len);
 
             /* Determine whether this line intersects the active
              * selection (used both for the highlight branches below
@@ -975,7 +947,7 @@ extern "C" void editor_ui_refresh(void)
                             !s_prev_line_was_selected[i] &&
                             s_prev_line_type[i] == (int)mi.type &&
                             s_prev_line_y[i] == y_pos &&
-                            strcmp(s_prev_line_text[i], tmp) == 0;
+                            s_prev_line_text[i] == tmp;
 
             int line_h;
             int rendered_h;
@@ -1003,7 +975,7 @@ extern "C" void editor_ui_refresh(void)
                  * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
                 lv_obj_set_width(s_line_labels[i], SCR_W - 4);
                 lv_label_set_text_static(s_line_labels[i], "");
-                lv_label_set_text(s_line_labels[i], tmp);
+                lv_label_set_text(s_line_labels[i], tmp.c_str());
                 lv_obj_set_pos(s_line_labels[i], 2, y_pos);
 
                 /* Get the font for this line to compute correct line height */
@@ -1017,7 +989,7 @@ extern "C" void editor_ui_refresh(void)
                 if (rendered_h < line_h) rendered_h = line_h;
 
                 /* Update cache with what we just drew. */
-                memcpy(s_prev_line_text[i], tmp, clen + 1);
+                s_prev_line_text[i]    = tmp;
                 s_prev_line_type[i]    = (int)mi.type;
                 s_prev_line_y[i]       = y_pos;
                 s_prev_line_h[i]       = rendered_h;
@@ -1084,22 +1056,11 @@ extern "C" void editor_ui_refresh(void)
                             /* Single visual row: overlay label with
                              * only the selected substring in white
                              * on black background. */
-                            size_t byte_s = utf8_char_offset(tmp, disp_s);
-                            size_t byte_e = utf8_char_offset(tmp, disp_e);
-                            char sel_buf[EDITOR_LINE_BUF_BYTES];
-                            size_t sel_len = byte_e - byte_s;
-                            if (sel_len >= sizeof(sel_buf))
-                                sel_len = sizeof(sel_buf) - 1;
-                            /* tmp is already known-valid UTF-8 (we
-                             * trimmed it above), and byte_s/byte_e
-                             * land on codepoint boundaries because
-                             * they come from utf8_char_offset(); the
-                             * trim here only guards against the
-                             * sizeof(sel_buf)-1 cap landing inside a
-                             * multi-byte sequence. */
-                            sel_len = utf8_trim_to_codepoint(tmp + byte_s, sel_len);
-                            memcpy(sel_buf, tmp + byte_s, sel_len);
-                            sel_buf[sel_len] = '\0';
+                            size_t byte_s = utf8_char_offset(tmp.c_str(), disp_s);
+                            size_t byte_e = utf8_char_offset(tmp.c_str(), disp_e);
+                            if (byte_s > tmp.size()) byte_s = tmp.size();
+                            if (byte_e > tmp.size()) byte_e = tmp.size();
+                            std::string sel_buf = tmp.substr(byte_s, byte_e - byte_s);
 
                             const lv_font_t *sf =
                                 lv_obj_get_style_text_font(
