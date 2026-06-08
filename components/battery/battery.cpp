@@ -167,6 +167,22 @@ static const batt_step BATT_TABLE[] = {
 
 static const int BATT_TABLE_N = sizeof(BATT_TABLE) / sizeof(BATT_TABLE[0]);
 
+/* ---- Charging-time IR correction ----
+ * The voltage-to-percent LUT above is an *open-circuit* / rest curve.
+ * While the BQ25896 is actively pushing ~1 A into the cell, terminal
+ * voltage runs ~150-250 mV above OCV due to the pack's internal
+ * resistance, and in the CV taper it is pinned near Vreg (~4.2 V)
+ * regardless of true SoC. Feeding that into mv_to_percent() makes a
+ * cell that was sitting at ~3.95 V / ~89 % jump straight to 100 %
+ * the moment USB is plugged in.
+ *
+ * 180 mOhm is a midpoint for a typical 1S 18650 / pouch pack in this
+ * board's form factor. The correction is clamped (CORR_MAX_MV) so a
+ * bogus / runaway current reading cannot drag the displayed percentage
+ * arbitrarily low. */
+#define BATT_INTERNAL_R_MOHM    180
+#define BATT_IR_CORR_MAX_MV     300
+
 static int mv_to_percent(int mv)
 {
     /* Above the highest entry -> cap at 100 % */
@@ -776,6 +792,60 @@ extern "C" int battery_read_mv(void)
     return (int)(s_smooth_acc / SMOOTH_SAMPLES);
 }
 
+/* Forward decl: battery_read_current_ma() is defined further down. */
+extern "C" int battery_read_current_ma(void);
+
+/* Return the BQ25896 CHRG_STAT field (0..3) or -1 if the charger is
+ * absent / unreadable. 0=Not Charging, 1=Pre-charge, 2=Fast Charge,
+ * 3=Charge Termination Done. */
+static int bq25896_chrg_stat(void)
+{
+    if (!s_bq25896_dev) return -1;
+    uint8_t reg0b = 0;
+    if (bq25896_read_u8(BQ25896_REG_VBUS_STAT, &reg0b) != 0) return -1;
+    return (int)((reg0b >> BQ25896_REG0B_CHRG_STAT_SHIFT) & 0x03);
+}
+
+/* Translate a BQ27220 terminal-voltage reading to a displayed
+ * percentage, applying a charge-state-aware correction when the
+ * BQ25896 reports the cell is actively being charged. */
+static int bq27220_mv_to_displayed_percent(int mv)
+{
+    if (mv <= 0) return -1;
+
+    int chrg = bq25896_chrg_stat();
+
+    /* Termination Done -> cell is at Vreg with current tapered off;
+     * display 100 % regardless of the LUT's nearest entry. */
+    if (chrg == 3) return 100;
+
+    /* Pre-charge: cell is so deeply discharged the charger is using
+     * the low-current pre-charge phase. Whatever the LUT says about
+     * 3.0-3.2 V is fine, but cap displayed % so we never show e.g.
+     * 30 % while still in pre-charge. */
+    if (chrg == 1) {
+        int p = mv_to_percent(mv);
+        return (p > 10) ? 10 : p;
+    }
+
+    /* Fast Charge: subtract I*R_int from the measured terminal
+     * voltage to estimate OCV before the LUT. battery_read_current_ma()
+     * returns + when current flows INTO the cell. */
+    if (chrg == 2) {
+        int corrected = mv;
+        int ima = battery_read_current_ma();
+        if (ima != INT32_MIN && ima > 0) {
+            int drop = (ima * BATT_INTERNAL_R_MOHM) / 1000;
+            if (drop > BATT_IR_CORR_MAX_MV) drop = BATT_IR_CORR_MAX_MV;
+            corrected = mv - drop;
+        }
+        return mv_to_percent(corrected);
+    }
+
+    /* Not Charging (or charger absent / I2C failure): treat as OCV. */
+    return mv_to_percent(mv);
+}
+
 extern "C" int battery_read_percent(void)
 {
     if (s_backend == BATT_BACKEND_BQ27220) {
@@ -791,10 +861,17 @@ extern "C" int battery_read_percent(void)
          * Trust the gauge only as a voltmeter and derive percentage
          * from the same LiPo discharge LUT used by the ADC backend.
          * battery_read_mv() applies an EMA over recent samples so the
-         * displayed percentage does not lurch on each USB unplug. */
+         * displayed percentage does not lurch on each USB unplug.
+         *
+         * While the BQ25896 is actively charging the cell, terminal
+         * voltage runs ~150-250 mV above OCV (and is pinned at Vreg
+         * during CV taper), so feeding it straight into the OCV LUT
+         * makes a ~89 % cell display 100 % the instant USB is plugged
+         * in. bq27220_mv_to_displayed_percent() consults the charger's
+         * CHRG_STAT and applies an I*R_int correction during Fast
+         * Charge to keep the percentage close to true SoC. */
         int mv = battery_read_mv();
-        if (mv <= 0) return -1;
-        return mv_to_percent(mv);
+        return bq27220_mv_to_displayed_percent(mv);
     }
     if (s_backend == BATT_BACKEND_INA226) {
         int cell_mv = ina226_read_cell_mv();
