@@ -288,7 +288,13 @@ static bool gt911_try_recover(void)
             return true;
         }
 
-        /* Drift detected -- rebind to the new address. */
+        /* Drift detected -- rebind to the new address. The window
+         * between updating s_dev / s_cfg.i2c_addr and removing the
+         * old handle is safe because gt911_try_recover() is only
+         * ever invoked from poll_gt911(), which runs under s_mux
+         * (held by indev_read_cb / touchscreen_read), and all
+         * other poll paths take the same mutex -- no other task
+         * can be poking the stale handle through s_cfg.i2c_addr. */
         i2c_device_config_t dev_cfg = {};
         dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
         dev_cfg.device_address  = addr;
