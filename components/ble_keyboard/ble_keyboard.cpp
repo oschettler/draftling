@@ -1194,17 +1194,42 @@ static void hidh_recover_task(void *arg)
 
     esp_err_t derr = esp_hidh_deinit();
     if (derr == ESP_ERR_INVALID_STATE) {
-        /* HIDH still has a device record it can't tear down.
-         * Leave the host marked ready -- the natural OPEN/CLOSE
-         * event for the wedged open will eventually arrive and the
-         * existing s_force_close_on_open path will clean up. Do
-         * NOT kick the reconnect timer here; that would just stack
-         * another open on top of the half-built record. */
-        ESP_LOGW(TAG, "esp_hidh_deinit: %s (HIDH still up, leaving "
-                      "as-is and waiting for natural OPEN/CLOSE)",
+        /* HIDH still has a device record it can't tear down, which
+         * means esp_hidh_dev_open() is still blocked inside service
+         * discovery / CCCD writes. We've already waited
+         * OPEN_STUCK_RECOVERY_MS past the watchdog, so all the
+         * natural timeouts (SMP ~30 s, LE supervision
+         * SUPERVISION_TIMEOUT_FLOOR_10MS = 32 s, HIDH internal
+         * retries) have had a chance to fire and clearly will not.
+         *
+         * At this point the link IS fully up -- we got AUTH_CMPL
+         * and UPDATE_CONN_PARAMS before the wedge -- so a clean
+         * host-initiated esp_ble_gap_disconnect() is well defined
+         * (controller produces a local-user 0x16 termination, not
+         * a half-built-record rsn=0x8). That forces HIDH to surface
+         * an OPEN/CLOSE event which the existing
+         * s_force_close_on_open path will then clean up.
+         *
+         * If even that doesn't shake HIDH free, re-arm the stuck
+         * timer so we try the whole sequence again instead of
+         * giving up forever (which would leave BLE permanently
+         * unable to reconnect until reboot). */
+        ESP_LOGW(TAG, "esp_hidh_deinit: %s (HIDH still up); forcing "
+                      "link down via gap_disconnect to unwedge open",
                  esp_err_to_name(derr));
+        notify_status("BLE stuck, forcing disconnect...");
         s_force_close_on_open = true;  /* belt-and-braces */
-        notify_status("BLE waiting for keyboard to time out...");
+        esp_err_t derr2 = esp_ble_gap_disconnect(s_target_bda);
+        if (derr2 != ESP_OK) {
+            ESP_LOGW(TAG, "esp_ble_gap_disconnect: %s",
+                     esp_err_to_name(derr2));
+        }
+        if (s_open_stuck_timer) {
+            xTimerChangePeriod(s_open_stuck_timer,
+                               pdMS_TO_TICKS(OPEN_STUCK_RECOVERY_MS),
+                               0);
+            xTimerReset(s_open_stuck_timer, 0);
+        }
         vTaskDelete(NULL);
         return;
     }
