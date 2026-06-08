@@ -174,7 +174,6 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
              * (sector 0 BPB + a chunk likely covering the FAT and
              * root dir on a sub-1 GB FAT16 volume). If any of them
              * fail, unmount and step down. */
-            uint8_t probe[2048];
             /* Single-sector probes spread across the volume. The
              * higher offsets (16k, 64k, 256k) cover where FatFs's
              * first FAT / root-dir / cluster-chain reads actually
@@ -185,6 +184,23 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
                 0, 1, 16, 64, 256, 1024, 4096,
                 16384, 65536, 262144,
             };
+            /* Probe buffer sized for the 4-sector burst test below.
+             * Allocated on the heap (PSRAM is fine -- sdmmc handles
+             * the bounce buffer when DMA-incapable memory is passed)
+             * because main_task's stack is too tight to hold 2 KiB
+             * of scratch; an earlier revision that put `probe` on
+             * the stack caused
+             * "***ERROR*** A stack overflow in task main has been
+             * detected." right after sdspi_transaction probed the
+             * card. */
+            const size_t kProbeBufSize = 4 * 512;
+            uint8_t *probe = (uint8_t *)malloc(kProbeBufSize);
+            if (!probe) {
+                ESP_LOGW(TAG, "SD/SPI probe buffer alloc failed -- "
+                              "skipping data-phase verify at %d kHz",
+                         host.max_freq_khz);
+                break;
+            }
             esp_err_t rerr = ESP_OK;
             for (size_t i = 0;
                  i < sizeof(kProbeSectors) / sizeof(kProbeSectors[0]);
@@ -214,6 +230,7 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
                              host.max_freq_khz, esp_err_to_name(rerr));
                 }
             }
+            free(probe);
             if (rerr == ESP_OK) {
                 if (attempt > 0) {
                     ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
