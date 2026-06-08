@@ -1254,10 +1254,10 @@ static bool ui_point_to_offset(int x, int y, size_t *out_off)
 {
     if (!out_off) return false;
 
-    /* Walk the per-slot render cache to find which line was tapped.
-     * The cache is kept in lock-step with the visible labels by
-     * editor_ui_refresh(), so s_prev_line_y[i] / s_prev_line_h[i]
-     * describe the layout the user actually sees. */
+    /* Walk the per-slot render cache to find which line contains
+     * the point. The cache is kept in lock-step with the visible
+     * labels by editor_ui_refresh(), so s_prev_line_y[i] /
+     * s_prev_line_h[i] describe the layout the user actually sees. */
     int slot = -1;
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
         if (!s_prev_line_visible[i]) continue;
@@ -1267,7 +1267,7 @@ static bool ui_point_to_offset(int x, int y, size_t *out_off)
         if (y >= y1 && y < y2) { slot = i; break; }
     }
     if (slot < 0) {
-        /* Tapped below the last visible line -- map to end-of-document. */
+        /* Point lies below the last visible line -- map to end-of-document. */
         size_t total = 0;
         (void)editor_get_text(&total);
         *out_off = total;
