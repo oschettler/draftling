@@ -1060,6 +1060,7 @@ extern "C" void editor_ui_refresh(void)
                             size_t byte_e = utf8_char_offset(tmp.c_str(), disp_e);
                             if (byte_s > tmp.size()) byte_s = tmp.size();
                             if (byte_e > tmp.size()) byte_e = tmp.size();
+                            if (byte_e < byte_s)     byte_e = byte_s;
                             std::string sel_buf = tmp.substr(byte_s, byte_e - byte_s);
 
                             const lv_font_t *sf =
@@ -1068,7 +1069,7 @@ extern "C" void editor_ui_refresh(void)
                             lv_obj_set_style_text_font(
                                 s_sel_rects[i],
                                 sf ? sf : body_font(), 0);
-                            lv_label_set_text(s_sel_rects[i], sel_buf);
+                            lv_label_set_text(s_sel_rects[i], sel_buf.c_str());
                             lv_obj_set_pos(s_sel_rects[i],
                                            2 + sp.x, y_pos + sp.y);
                             lv_obj_move_foreground(s_sel_rects[i]);
