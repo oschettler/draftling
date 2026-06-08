@@ -484,6 +484,51 @@ static void t5_isolate_unused_gpios(void)
     }
 }
 
+/* Undo, at boot, every IO state we forced into deep sleep:
+ *
+ *   * gpio_deep_sleep_hold_en() -- chip-wide latch enable. On
+ *     ESP32-S3 the per-pin hold registers survive the wake reset
+ *     and keep latched pads driven (or, for inputs, isolated)
+ *     until explicitly released. Without this, the front-light
+ *     stays dark and the touchscreen INT line never goes back to
+ *     a normal digital input.
+ *
+ *   * gpio_hold_en() on the front-light (GPIO11). Pinned LOW by
+ *     display_deep_sleep_prepare() so the LED does not glow on
+ *     leakage during sleep. Released here so display_init() ->
+ *     backlight_pwm_init() can route LEDC back to the pin.
+ *
+ *   * rtc_gpio_isolate() on the spare RTC-IO pads (GPIO1..GPIO4)
+ *     from t5_isolate_unused_gpios(). Isolation switches the pad
+ *     to the RTC GPIO mux with both input and output buffers
+ *     disabled, and that selection survives wake. GPIO3 (the
+ *     GT911 TOUCH_INT) in particular has to come back to the
+ *     digital GPIO mux before touchscreen_init() configures it as
+ *     an input with pull-up, otherwise the INT line never reads
+ *     a valid level and the touchscreen appears dead.
+ *
+ * Safe to call unconditionally on every boot: gpio_hold_dis on a
+ * pad that was never latched is a no-op, and rtc_gpio_deinit on a
+ * pad already in the digital mux just rewrites the (same) mux
+ * selection. */
+static void t5_release_held_gpios_after_wake(void)
+{
+    gpio_deep_sleep_hold_dis();
+
+    /* Front-light pin must match EPDIY_BL_PIN in display_epdiy.cpp. */
+    gpio_hold_dis((gpio_num_t)11);
+
+    static const int rtc_isolated[] = {
+        1, 2, 3, 4
+    };
+    for (size_t i = 0; i < sizeof(rtc_isolated) / sizeof(rtc_isolated[0]); ++i) {
+        gpio_num_t g = (gpio_num_t)rtc_isolated[i];
+        if (rtc_gpio_is_valid_gpio(g)) {
+            (void)rtc_gpio_deinit(g);
+        }
+    }
+}
+
 static void pre_sleep_t5_deinit(void)
 {
     ESP_LOGI(TAG, "Pre-sleep: LilyGO T5 peripheral teardown");
@@ -713,6 +758,18 @@ extern "C" void app_main(void)
 
     /* Initialize display */
     ESP_LOGI(TAG, "Initializing display...");
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
+    /* If this boot is a wake from deep sleep, undo every IO latch
+     * pre_sleep_t5_deinit() applied before esp_deep_sleep_start().
+     * Front-light GPIO11 was held LOW (so it stayed dark in sleep)
+     * and the spare RTC-IO pads (GPIO1..GPIO4, including the GT911
+     * TOUCH_INT on GPIO3) were rtc_gpio_isolate()'d. Both states
+     * survive the wake reset on ESP32-S3 and would otherwise leave
+     * the front-light dark and the touchscreen unresponsive after
+     * wake. Called before display_init() / touchscreen_init() so
+     * those bring-up paths see fresh, un-latched pads. */
+    t5_release_held_gpios_after_wake();
+#endif
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
     /* The LilyGO T5 E-Paper S3 Pro / Pro Lite shares its on-board
      * I2C bus between epdiy (TPS65185 EPD power IC + PCA9535 IO
