@@ -211,6 +211,8 @@ static void notify_status(const char *fmt, ...)
  * newest entry (highest index) per name lets RECONN_KNOWN walk a
  * meaningful list. Returns true if anything was removed (caller
  * should bonded_save() if so). */
+static void bonded_save(void);
+
 static bool bonded_dedupe_by_name(void)
 {
     bool changed = false;
