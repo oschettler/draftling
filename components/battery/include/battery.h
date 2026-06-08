@@ -24,9 +24,12 @@ extern "C" {
  *
  *   - TI BQ27220 fuel gauge over I2C (battery_init_bq27220): used on
  *     boards that route the cell through a dedicated coulomb counter
- *     (LilyGO T5 E-Paper S3 Pro / Pro Lite). The percentage comes
- *     straight from the gauge's StateOfCharge register and does not
- *     need software smoothing or a voltage-to-percent table.
+ *     (LilyGO T5 E-Paper S3 Pro / Pro Lite). Only the gauge's
+ *     Voltage register is used; percentage is derived from that
+ *     voltage via the same LiPo discharge LUT the ADC backend uses,
+ *     because the gauge's StateOfCharge register requires Data
+ *     Memory programming (Design Capacity, chemistry, etc.) and a
+ *     learning cycle that the factory firmware never performs.
  */
 
 /*
@@ -56,9 +59,15 @@ int battery_init(int gpio_num, int enable_gpio, int divider);
  *                     does not need to pull in driver/i2c_master.h).
  *
  * Returns 0 on success, non-zero on failure. After a successful call,
- * `battery_read_mv()` reports the cell voltage in millivolts and
- * `battery_read_percent()` reports the StateOfCharge register
- * (0x2C) directly.
+ * `battery_read_mv()` reports the cell voltage in millivolts from
+ * the BQ27220 Voltage register (0x08), and `battery_read_percent()`
+ * runs that voltage through the same LiPo discharge lookup table
+ * used by the ADC backend. The BQ27220's StateOfCharge register
+ * (0x2C) is NOT used: out of the factory the gauge ships with
+ * default Data Memory and its Impedance-Track SoC stays pinned
+ * around 50 % regardless of actual cell voltage, even after several
+ * full discharge/charge cycles. Treating the gauge as a voltmeter
+ * sidesteps the required-but-unprogrammed DM setup.
  *
  * Used on boards that route the LiPo cell through a TI BQ27220
  * coulomb counter on I2C (addr 0x55) instead of a GPIO ADC divider,

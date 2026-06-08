@@ -23,8 +23,12 @@
  *       The caller passes in an already-created
  *       i2c_master_bus_handle_t (the bus is shared with epdiy + GT911,
  *       so the battery component must not own it). Voltage comes from
- *       the 16-bit Voltage register at 0x08 (mV) and the percentage
- *       comes from the StateOfCharge register at 0x2C (already 0-100).
+ *       the 16-bit Voltage register at 0x08 (mV); percentage is then
+ *       derived from that voltage via the same LiPo discharge LUT
+ *       used by the ADC backend, because the BQ27220's StateOfCharge
+ *       register at 0x2C ships with default Data Memory on the T5
+ *       Pro and reports a meaningless ~50 % regardless of actual
+ *       cell voltage, even after several discharge/charge cycles.
  */
 
 #include "battery.h"
@@ -134,10 +138,16 @@ static bool ina226_battery_absent(int cell_mv)
     return cell_mv < INA226_BATTERY_MIN_MV_PER_CELL;
 }
 
-/* Exponential moving average state (ADC backend only -- the BQ27220
- * does its own smoothing internally). */
+/* Exponential moving average state. Used by the ADC backend always,
+ * and by the BQ27220 backend to dampen short-term IR-drop sag in the
+ * gauge's raw Voltage register so the displayed percentage does not
+ * cliff-step from 100 % down by ~10 percentage points the moment the
+ * USB cable is unplugged and the e-paper / radio load pulls the cell
+ * below its post-charge resting voltage. */
 #define SMOOTH_SAMPLES 8
 static uint32_t s_smooth_acc = 0;   /* accumulated mV * SMOOTH_SAMPLES */
+static uint32_t s_bq27220_smooth_acc = 0;
+static bool     s_bq27220_smooth_primed = false;
 
 /* Approximate max voltage (mV) at the ADC pin with 12 dB attenuation */
 #define ADC_VREF_MV 3100
@@ -156,6 +166,22 @@ static const batt_step BATT_TABLE[] = {
 };
 
 static const int BATT_TABLE_N = sizeof(BATT_TABLE) / sizeof(BATT_TABLE[0]);
+
+/* ---- Charging-time IR correction ----
+ * The voltage-to-percent LUT above is an *open-circuit* / rest curve.
+ * While the BQ25896 is actively pushing ~1 A into the cell, terminal
+ * voltage runs ~150-250 mV above OCV due to the pack's internal
+ * resistance, and in the CV taper it is pinned near Vreg (~4.2 V)
+ * regardless of true SoC. Feeding that into mv_to_percent() makes a
+ * cell that was sitting at ~3.95 V / ~89 % jump straight to 100 %
+ * the moment USB is plugged in.
+ *
+ * 180 mOhm is a midpoint for a typical 1S 18650 / pouch pack in this
+ * board's form factor. The correction is clamped (CORR_MAX_MV) so a
+ * bogus / runaway current reading cannot drag the displayed percentage
+ * arbitrarily low. */
+#define BATT_INTERNAL_R_MOHM    180
+#define BATT_IR_CORR_MAX_MV     300
 
 static int mv_to_percent(int mv)
 {
@@ -719,7 +745,21 @@ extern "C" int battery_read_mv(void)
     if (s_backend == BATT_BACKEND_BQ27220) {
         uint16_t mv = 0;
         if (bq27220_read_u16(BQ27220_REG_VOLTAGE, &mv) != 0) return 0;
-        return (int)mv;
+        /* Smooth with an 8-sample EMA. Without smoothing the displayed
+         * percentage tracks raw cell-voltage transients (e.g. unplug
+         * relaxation, e-paper refresh bursts) and can drop ~10 % in a
+         * few minutes after USB removal even though the pack itself
+         * is still near full. The first sample primes the accumulator
+         * so we don't return ~mv/8 on cold start. */
+        if (!s_bq27220_smooth_primed) {
+            s_bq27220_smooth_acc = (uint32_t)mv * SMOOTH_SAMPLES;
+            s_bq27220_smooth_primed = true;
+        } else {
+            s_bq27220_smooth_acc = s_bq27220_smooth_acc
+                                 - (s_bq27220_smooth_acc / SMOOTH_SAMPLES)
+                                 + (uint32_t)mv;
+        }
+        return (int)(s_bq27220_smooth_acc / SMOOTH_SAMPLES);
     }
     if (s_backend == BATT_BACKEND_INA226) {
         int cell_mv = ina226_read_cell_mv();
@@ -752,13 +792,86 @@ extern "C" int battery_read_mv(void)
     return (int)(s_smooth_acc / SMOOTH_SAMPLES);
 }
 
+/* Forward decl: battery_read_current_ma() is defined further down. */
+extern "C" int battery_read_current_ma(void);
+
+/* Return the BQ25896 CHRG_STAT field (0..3) or -1 if the charger is
+ * absent / unreadable. 0=Not Charging, 1=Pre-charge, 2=Fast Charge,
+ * 3=Charge Termination Done. */
+static int bq25896_chrg_stat(void)
+{
+    if (!s_bq25896_dev) return -1;
+    uint8_t reg0b = 0;
+    if (bq25896_read_u8(BQ25896_REG_VBUS_STAT, &reg0b) != 0) return -1;
+    return (int)((reg0b >> BQ25896_REG0B_CHRG_STAT_SHIFT) & 0x03);
+}
+
+/* Translate a BQ27220 terminal-voltage reading to a displayed
+ * percentage, applying a charge-state-aware correction when the
+ * BQ25896 reports the cell is actively being charged. */
+static int bq27220_mv_to_displayed_percent(int mv)
+{
+    if (mv <= 0) return -1;
+
+    int chrg = bq25896_chrg_stat();
+
+    /* Termination Done -> cell is at Vreg with current tapered off;
+     * display 100 % regardless of the LUT's nearest entry. */
+    if (chrg == 3) return 100;
+
+    /* Pre-charge: cell is so deeply discharged the charger is using
+     * the low-current pre-charge phase. Whatever the LUT says about
+     * 3.0-3.2 V is fine, but cap displayed % so we never show e.g.
+     * 30 % while still in pre-charge. */
+    if (chrg == 1) {
+        int p = mv_to_percent(mv);
+        return (p > 10) ? 10 : p;
+    }
+
+    /* Fast Charge: subtract I*R_int from the measured terminal
+     * voltage to estimate OCV before the LUT. battery_read_current_ma()
+     * returns + when current flows INTO the cell. */
+    if (chrg == 2) {
+        int corrected = mv;
+        int ima = battery_read_current_ma();
+        if (ima != INT32_MIN && ima > 0) {
+            int drop = (ima * BATT_INTERNAL_R_MOHM) / 1000;
+            if (drop > BATT_IR_CORR_MAX_MV) drop = BATT_IR_CORR_MAX_MV;
+            corrected = mv - drop;
+        }
+        return mv_to_percent(corrected);
+    }
+
+    /* Not Charging (or charger absent / I2C failure): treat as OCV. */
+    return mv_to_percent(mv);
+}
+
 extern "C" int battery_read_percent(void)
 {
     if (s_backend == BATT_BACKEND_BQ27220) {
-        uint16_t soc = 0;
-        if (bq27220_read_u16(BQ27220_REG_SOC, &soc) != 0) return -1;
-        if (soc > 100) soc = 100;
-        return (int)soc;
+        /* The BQ27220's StateOfCharge register is only meaningful after
+         * its Data Memory (Design Capacity, chemistry ID, terminate
+         * voltage, taper current, ...) has been programmed for the
+         * pack and the Impedance-Track algorithm has completed a full
+         * learning cycle. On the LilyGO T5 E-Paper S3 Pro the factory
+         * leaves the gauge with default DM values, and a few full
+         * discharge/charge cycles do NOT make it learn -- SoC stays
+         * pinned around 50 % regardless of actual cell voltage (e.g.
+         * 53 % reported at 4124 mV BATV / CHRG_STAT=Termination Done).
+         * Trust the gauge only as a voltmeter and derive percentage
+         * from the same LiPo discharge LUT used by the ADC backend.
+         * battery_read_mv() applies an EMA over recent samples so the
+         * displayed percentage does not lurch on each USB unplug.
+         *
+         * While the BQ25896 is actively charging the cell, terminal
+         * voltage runs ~150-250 mV above OCV (and is pinned at Vreg
+         * during CV taper), so feeding it straight into the OCV LUT
+         * makes a ~89 % cell display 100 % the instant USB is plugged
+         * in. bq27220_mv_to_displayed_percent() consults the charger's
+         * CHRG_STAT and applies an I*R_int correction during Fast
+         * Charge to keep the percentage close to true SoC. */
+        int mv = battery_read_mv();
+        return bq27220_mv_to_displayed_percent(mv);
     }
     if (s_backend == BATT_BACKEND_INA226) {
         int cell_mv = ina226_read_cell_mv();
@@ -776,6 +889,27 @@ extern "C" int battery_read_percent(void)
 
 extern "C" int battery_read_charging(void)
 {
+    /* When the BQ25896 charger is initialized it is the authoritative
+     * source for charge state: it reads VBUS power-good and the
+     * CHRG_STAT field directly from the chip that controls the FET.
+     * The BQ27220 Flags DSG bit is derived from current threshold
+     * comparisons in the gauge's algorithm and -- like its SoC
+     * register -- is unreliable when the Data Memory is left at
+     * factory defaults (the gauge can report DSG=0 while running on
+     * battery), which produced a sticky "+" charging glyph on the
+     * LilyGO T5 E-Paper S3 Pro after USB removal. */
+    if (s_bq25896_dev) {
+        uint8_t reg0b = 0;
+        if (bq25896_read_u8(BQ25896_REG_VBUS_STAT, &reg0b) == 0) {
+            /* CHRG_STAT: 0=Not Charging, 1=Pre-charge, 2=Fast Charge,
+             * 3=Charge Termination Done. Only 1 and 2 mean current is
+             * actually flowing into the cell. */
+            unsigned chrg = (reg0b >> BQ25896_REG0B_CHRG_STAT_SHIFT) & 0x03;
+            return (chrg == 1 || chrg == 2) ? 1 : 0;
+        }
+        /* I2C read failed -- fall through to backend-specific paths
+         * so we don't lose all charge-state visibility. */
+    }
     if (s_backend == BATT_BACKEND_BQ27220) {
         /* Flags register, bit 0 (DSG): 0 -> charging or full, 1 -> discharging.
          * BQ27220 datasheet, table 12-7. */

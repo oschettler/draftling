@@ -114,8 +114,13 @@ Two backends:
   routed through a BQ25896 charger + BQ27220YZFR coulomb counter at
   0x55 on the I2C bus shared with epdiy (TPS65185 / PCA9535) and
   GT911. main.cpp creates the bus and passes its handle in. Voltage
-  comes from the Voltage register (0x08, mV), and percentage comes
-  straight from StateOfCharge (0x2C, 0-100 %). Charge state is
+  GT911. main.cpp creates the bus and passes its handle in. Voltage
+  comes from the Voltage register (0x08, mV), and percentage is
+  derived from that voltage via the same LiPo discharge LUT used by
+  the ADC backend -- the gauge's StateOfCharge register (0x2C) is
+  ignored because the factory ships it with default Data Memory and
+  its Impedance-Track SoC stays pinned around 50 % even after
+  several full discharge/charge cycles. Charge state is
   derived from the Flags register (0x06): bit 0 (`DSG`) is 0 while
   charging or full and 1 while discharging.
 * **TI INA226 power monitor** over I2C

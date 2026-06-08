@@ -170,8 +170,10 @@
  * stays a no-op (BATT_ADC_PIN=-1); main.cpp instead calls
  * battery_init_bq27220(shared_i2c_bus) when
  * CONFIG_DRAFTLING_BATTERY_BQ27220 is set (defaulted y for these
- * models). The editor UI shows the StateOfCharge percentage in
- * the status bar via DRAFTLING_HAS_BATTERY. */
+ * models). The editor UI shows a voltage-derived battery percentage
+ * in the status bar via DRAFTLING_HAS_BATTERY (the BQ27220's own
+ * StateOfCharge register is unreliable without Data Memory
+ * programming, so the backend only uses its Voltage register). */
 #define BATT_ADC_PIN    -1
 #define BATT_EN_PIN     -1
 #define BATT_DIVIDER    1
