@@ -492,12 +492,22 @@ static uint32_t       s_open_watchdog_armed_ms = 0;
  * caused the watchdog to fire on the success path. */
 #define OPEN_WATCHDOG_MS        25000
 /* Shorter watchdog for reconnects to a device we already have a bond
- * for: a healthy reconnect to a known keyboard completes in well
- * under 5 s because services / CCCDs are cached, so 25 s is purely
- * give-up budget. Cutting it to 10 s lets the reconnect state
- * machine move on to the next phase (or to a scan) much sooner when
- * the bond is silently dead. */
-#define OPEN_WATCHDOG_BONDED_MS 10000
+ * for. Historically this was 10 s on the assumption that a healthy
+ * cached-services/CCCDs reconnect completes in well under 5 s, so any
+ * longer was pure give-up budget. In practice some keyboards (observed:
+ * NuPhy Air60 V2) take ~5 s just to renegotiate connection parameters
+ * after AUTH_CMPL on a reconnect, and HIDH service discovery / CCCD
+ * writes can run for another several seconds after that. With a 10 s
+ * budget the watchdog fired mid-discovery on a perfectly good link and
+ * forced us into the s_open_stuck_timer + esp_ble_gap_disconnect
+ * recovery path, which trips a LoadProhibited crash inside
+ * Bluedroid/HIDH cleanup on the half-built device record.
+ *
+ * Match OPEN_WATCHDOG_MS (25 s) so reconnects get the same headroom as
+ * first-pairs. We still fail fast against a silently-dead bond via the
+ * RECONN_KNOWN sweep that follows; this just stops the watchdog from
+ * killing slow-but-healthy reconnects. */
+#define OPEN_WATCHDOG_BONDED_MS 25000
 /* Time after the watchdog fires before we assume the open is wedged
  * inside Bluedroid and the HIDH subsystem itself needs restarting.
  *
