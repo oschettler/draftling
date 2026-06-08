@@ -1354,7 +1354,15 @@ static void editor_ui_move_visual(int direction)
     int cy = lv_obj_get_y(s_cursor);
     int ch = lv_obj_get_height(s_cursor);
     int gx = (s_visual_goal_x >= 0) ? s_visual_goal_x : cx;
-    int target_y = (direction < 0) ? cy - 1 : cy + ch;
+    /* LVGL's lv_label_get_letter_on() uses an inclusive bottom-edge
+     * test (pos.y <= line_y + letter_height), so a y exactly on the
+     * boundary between visual rows N and N+1 snaps to row N.  For
+     * Up we step one pixel above the cursor top (cy - 1), which
+     * lands strictly inside the previous row.  For Down we have to
+     * step *past* the cursor bottom (cy + ch + 1), not merely onto
+     * it -- otherwise lv_label_get_letter_on() would return a
+     * letter on the same visual row and the cursor would not move. */
+    int target_y = (direction < 0) ? cy - 1 : cy + ch + 1;
 
     /* Short-circuit at document boundaries so a Down press on the
      * very last visual row of the document does not scroll past
@@ -1414,7 +1422,7 @@ static void editor_ui_move_visual(int direction)
         }
         cy = lv_obj_get_y(s_cursor);
         ch = lv_obj_get_height(s_cursor);
-        target_y = (direction < 0) ? cy - 1 : cy + ch;
+        target_y = (direction < 0) ? cy - 1 : cy + ch + 1;
     }
 
     if (target_y < 0 || target_y >= EDITOR_H) {
