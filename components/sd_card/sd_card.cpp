@@ -97,18 +97,25 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
-    /* Cap the SPI clock at 10 MHz. SDSPI_HOST_DEFAULT() leaves
-     * max_freq_khz at SDMMC_FREQ_DEFAULT (20 MHz). On boards where the
-     * MicroSD slot shares its SPI bus with another peripheral (e.g.
-     * the SX1262 LoRa radio on the LilyGO T5 E-Paper S3 Pro) the
-     * resulting trace length and stub capacitance push older SDSC
-     * cards past their setup/hold budget, so the mount succeeds at
-     * the 400 kHz probe rate but the first 20 MHz data read times
-     * out with 0x107 (ESP_ERR_TIMEOUT) from sdmmc_read_sectors_dma.
-     * 10 MHz is well within the SDSPI spec for every card we have
-     * tested, and SDSPI is sequential so the editor's small reads
-     * see no measurable slowdown. */
-    host.max_freq_khz = SDMMC_FREQ_HIGHSPEED / 4;  /* 10 MHz */
+    /* Cap the SPI clock at 10 MHz for the first attempt, then step
+     * down on retries. SDSPI_HOST_DEFAULT() leaves max_freq_khz at
+     * SDMMC_FREQ_DEFAULT (20 MHz); on boards where the MicroSD slot
+     * shares its SPI bus with another peripheral (e.g. the SX1262
+     * LoRa radio on the LilyGO T5 E-Paper S3 Pro) the resulting
+     * trace length and stub capacitance push older SDSC cards past
+     * their setup/hold budget, so the mount succeeds at the 400 kHz
+     * probe rate but the first 20 MHz data read times out with
+     * 0x107 (ESP_ERR_TIMEOUT) from sdmmc_read_sectors_dma. 10 MHz is
+     * well within the SDSPI spec for every card we have tested, and
+     * SDSPI is sequential so the editor's small reads see no
+     * measurable slowdown. The retry steps below (4 MHz, 1 MHz) only
+     * matter when the 10 MHz attempt itself fails. */
+    static const int kRetryFreqKhz[] = {
+        SDMMC_FREQ_HIGHSPEED / 4,   /* 10 MHz */
+        4000,
+        1000,
+    };
+    host.max_freq_khz = kRetryFreqKhz[0];
 
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.gpio_cs   = (gpio_num_t)cs;
@@ -119,8 +126,47 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     mount_cfg.max_files              = 10;
     mount_cfg.allocation_unit_size   = 16 * 1024;
 
-    esp_err_t ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
-                                            &mount_cfg, &s_card);
+    /* Some SD cards (notably older SDSC ones, and the SanDisk Edge
+     * series we ship with the LilyGO T5 E-Paper S3 Pro) need a
+     * surprisingly long time after VBUS comes up before they will
+     * respond cleanly to CMD8 (SEND_IF_COND). On the LilyGO board
+     * VBUS is wired straight to the slot (no SD_EN gating), so the
+     * card is only just powered when sd_card_init_spi() runs and we
+     * routinely lose the first probe with
+     *   sdmmc_sd: sdmmc_init_sd_if_cond: send_if_cond (1) returned 0x108
+     *   vfs_fat_sdmmc: sdmmc_card_init failed (0x108)
+     * (0x108 = ESP_ERR_INVALID_RESPONSE -- the card echoed the wrong
+     * check pattern back in its R7 because it was still in its
+     * power-on ramp). A 100 ms settle plus a couple of mount
+     * retries -- each at a lower bus clock -- gets every card we
+     * have tested through reliably without slowing the happy path
+     * measurably. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    esp_err_t ret = ESP_FAIL;
+    const int attempts = sizeof(kRetryFreqKhz) / sizeof(kRetryFreqKhz[0]);
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        host.max_freq_khz = kRetryFreqKhz[attempt];
+        ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
+                                      &mount_cfg, &s_card);
+        if (ret == ESP_OK) {
+            if (attempt > 0) {
+                ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
+                              "at %d kHz", attempt + 1, host.max_freq_khz);
+            }
+            break;
+        }
+        ESP_LOGW(TAG, "SD/SPI mount attempt %d/%d at %d kHz failed: %s",
+                 attempt + 1, attempts, host.max_freq_khz,
+                 esp_err_to_name(ret));
+        s_card = NULL;
+        if (attempt + 1 < attempts) {
+            /* Back off progressively (200, 400 ms) -- enough for a
+             * slow card to finish its power-on initialisation
+             * sequence between tries. */
+            vTaskDelay(pdMS_TO_TICKS(200 * (attempt + 1)));
+        }
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
         if (s_spi_bus_owned) {
