@@ -193,6 +193,13 @@ extern "C" void display_full_refresh(void)
     display_flush();
 }
 
+extern "C" void display_request_full_refresh(void)
+{
+    /* No partial-refresh state machine on this backend; nothing to
+     * latch. The next display_flush() already pushes the full
+     * framebuffer. */
+}
+
 extern "C" uint8_t *display_get_buffer(void)
 {
     return s_disp_buf;

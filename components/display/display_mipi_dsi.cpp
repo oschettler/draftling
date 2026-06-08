@@ -293,6 +293,11 @@ extern "C" void display_full_refresh(void)
     /* No-op (no e-paper waveforms to clear). */
 }
 
+extern "C" void display_request_full_refresh(void)
+{
+    /* No-op: continuous scanout, nothing to latch. */
+}
+
 extern "C" uint8_t *display_get_buffer(void)
 {
     /* The legacy 1-bpp framebuffer is not exposed by this backend;
