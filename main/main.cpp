@@ -273,7 +273,7 @@ static void t5_lora_sleep(void)
     if (err != ESP_OK) {
         ESP_LOGD(TAG, "SX1262 spi_bus_add_device failed: %s",
                  esp_err_to_name(err));
-        return;
+        goto repark_cs;
     }
 
     /* GetStatus (opcode 0xC0) returns the chip mode + command status
@@ -282,40 +282,65 @@ static void t5_lora_sleep(void)
      * 0/7 == invalid/reserved). On a depopulated bus we'll read 0x00
      * or 0xFF here -- both invalid -- and bail out without spamming
      * the log. */
-    uint8_t gs_tx[2] = { 0xC0, 0x00 };
-    uint8_t gs_rx[2] = { 0xFF, 0xFF };
-    spi_transaction_t gs = {};
-    gs.length    = sizeof(gs_tx) * 8;
-    gs.tx_buffer = gs_tx;
-    gs.rx_buffer = gs_rx;
-    err = spi_device_polling_transmit(lora, &gs);
-    if (err != ESP_OK) {
-        ESP_LOGD(TAG, "SX1262 GetStatus transmit failed: %s",
-                 esp_err_to_name(err));
-        spi_bus_remove_device(lora);
-        return;
-    }
-    uint8_t chip_mode = (gs_rx[1] >> 4) & 0x07;
-    if (chip_mode == 0 || chip_mode == 7) {
-        ESP_LOGD(TAG, "SX1262 GetStatus=0x%02X (no chip response) -- "
-                 "skipping SetSleep", gs_rx[1]);
-        spi_bus_remove_device(lora);
-        return;
+    {
+        uint8_t gs_tx[2] = { 0xC0, 0x00 };
+        uint8_t gs_rx[2] = { 0xFF, 0xFF };
+        spi_transaction_t gs = {};
+        gs.length    = sizeof(gs_tx) * 8;
+        gs.tx_buffer = gs_tx;
+        gs.rx_buffer = gs_rx;
+        err = spi_device_polling_transmit(lora, &gs);
+        if (err != ESP_OK) {
+            ESP_LOGD(TAG, "SX1262 GetStatus transmit failed: %s",
+                     esp_err_to_name(err));
+            goto remove_device;
+        }
+        uint8_t chip_mode = (gs_rx[1] >> 4) & 0x07;
+        if (chip_mode == 0 || chip_mode == 7) {
+            ESP_LOGD(TAG, "SX1262 GetStatus=0x%02X (no chip response) -- "
+                     "skipping SetSleep", gs_rx[1]);
+            goto remove_device;
+        }
+
+        uint8_t tx[2] = { 0x84 /* SetSleep */, 0x00 /* cold start */ };
+        spi_transaction_t t = {};
+        t.length    = sizeof(tx) * 8;
+        t.tx_buffer = tx;
+        err = spi_device_polling_transmit(lora, &t);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "SX1262 entered sleep mode (was ChipMode=%u)",
+                     (unsigned)chip_mode);
+        } else {
+            ESP_LOGD(TAG, "SX1262 SetSleep transmit failed: %s",
+                     esp_err_to_name(err));
+        }
     }
 
-    uint8_t tx[2] = { 0x84 /* SetSleep */, 0x00 /* cold start */ };
-    spi_transaction_t t = {};
-    t.length    = sizeof(tx) * 8;
-    t.tx_buffer = tx;
-    err = spi_device_polling_transmit(lora, &t);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "SX1262 entered sleep mode (was ChipMode=%u)",
-                 (unsigned)chip_mode);
-    } else {
-        ESP_LOGD(TAG, "SX1262 SetSleep transmit failed: %s",
-                 esp_err_to_name(err));
-    }
+remove_device:
     spi_bus_remove_device(lora);
+
+repark_cs:
+    /* spi_bus_remove_device() releases the CS GPIO back to the GPIO
+     * matrix with no defined level. If the SX1262 CS is then left
+     * floating again the radio resumes snooping on subsequent SD
+     * traffic over the shared SPI3 bus -- exactly the
+     * "LilyGO T5S3-4.7-e-paper-PRO issue #3" we work around at SD
+     * mount time. Observed symptom: SD card mounts, multi-sector
+     * data-phase probe passes, but FatFs's first cluster-chain read
+     * a few hundred ms later returns 0x107 ESP_ERR_TIMEOUT or
+     * 0x108 ESP_ERR_INVALID_RESPONSE from sdmmc_read_sectors_dma.
+     * Re-pin LoRa CS HIGH as a plain GPIO output on every exit path
+     * (including the early bail-outs above for a depopulated /
+     * unresponsive radio) so the radio stays deselected for the rest
+     * of the active session. */
+    {
+        gpio_config_t lora_cs = {};
+        lora_cs.intr_type    = GPIO_INTR_DISABLE;
+        lora_cs.mode         = GPIO_MODE_OUTPUT;
+        lora_cs.pin_bit_mask = (1ULL << BOARD_LORA_CS_PIN);
+        gpio_config(&lora_cs);
+        gpio_set_level((gpio_num_t)BOARD_LORA_CS_PIN, 1);
+    }
 #endif
 }
 

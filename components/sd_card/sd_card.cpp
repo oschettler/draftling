@@ -97,6 +97,34 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
+    /* SPI data-phase clock retry ladder. We start at the SDSPI
+     * spec-default 20 MHz (SDMMC_FREQ_DEFAULT) and step down on any
+     * mount / post-mount probe failure.
+     *
+     * History: an earlier revision capped this at 4 MHz to work
+     * around a 968 MB SanDisk SU01G SDSC card that mounted at 10 MHz
+     * but then failed FatFs's first FAT/cluster-chain read with
+     * 0x108 ESP_ERR_INVALID_RESPONSE on the LilyGO T5 E-Paper S3
+     * Pro's shared SPI3 bus (the SX1262 LoRa radio sits on the same
+     * bus). The 4 MHz cap fixed that card but broke every healthy
+     * SDHC card -- a 16 GB SanDisk SD16G that ran fine at 20 MHz
+     * started returning 0x107 ESP_ERR_TIMEOUT from
+     * sdmmc_read_sectors_dma on the very first real read.
+     *
+     * The correct guard against the SU01G failure mode is the
+     * post-mount data-phase probe below (broadened to touch the
+     * FAT / cluster region a multi-GB FAT32 volume actually uses),
+     * not a global clock cap. Starting at 20 MHz lets healthy SDHC
+     * cards run at full speed, and the step-down ladder
+     * (10 → 4 → 2 → 1 MHz) catches the marginal SDSC cases. */
+    static const int kRetryFreqKhz[] = {
+        20000,
+        10000,
+        4000,
+        2000,
+        1000,
+    };
+    host.max_freq_khz = kRetryFreqKhz[0];
 
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.gpio_cs   = (gpio_num_t)cs;
@@ -107,8 +135,128 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     mount_cfg.max_files              = 10;
     mount_cfg.allocation_unit_size   = 16 * 1024;
 
-    esp_err_t ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
-                                            &mount_cfg, &s_card);
+    /* Some SD cards (notably older SDSC ones, and the SanDisk Edge
+     * series we ship with the LilyGO T5 E-Paper S3 Pro) need a
+     * surprisingly long time after VBUS comes up before they will
+     * respond cleanly to CMD8 (SEND_IF_COND). On the LilyGO board
+     * VBUS is wired straight to the slot (no SD_EN gating), so the
+     * card is only just powered when sd_card_init_spi() runs and we
+     * routinely lose the first probe with
+     *   sdmmc_sd: sdmmc_init_sd_if_cond: send_if_cond (1) returned 0x108
+     *   vfs_fat_sdmmc: sdmmc_card_init failed (0x108)
+     * (0x108 = ESP_ERR_INVALID_RESPONSE -- the card echoed the wrong
+     * check pattern back in its R7 because it was still in its
+     * power-on ramp). A 100 ms settle plus a couple of mount
+     * retries -- each at a lower bus clock -- gets every card we
+     * have tested through reliably without slowing the happy path
+     * measurably. */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    esp_err_t ret = ESP_FAIL;
+    const int attempts = sizeof(kRetryFreqKhz) / sizeof(kRetryFreqKhz[0]);
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        host.max_freq_khz = kRetryFreqKhz[attempt];
+        ret = esp_vfs_fat_sdspi_mount(s_mount, &host, &slot,
+                                      &mount_cfg, &s_card);
+        if (ret == ESP_OK) {
+            /* Mount uses the 400 kHz probe rate; the data-phase
+             * clock (host.max_freq_khz) is only exercised when real
+             * sectors are read. Old SDSC cards on the LilyGO T5
+             * shared SPI bus mount cleanly at 10 MHz but then return
+             * ESP_ERR_INVALID_RESPONSE / data-CRC errors from
+             * sdmmc_read_sectors_dma the moment FatFs touches the
+             * FAT / root-directory sectors (observed pattern:
+             * corrupted start-token "6d 5f ff ff ..." in
+             * sdspi_host; sector 0 alone reads cleanly because it is
+             * a small DMA that just happens to land in a good
+             * window). Stress the bus by reading a spread of
+             * sectors that overlaps the area FatFs will hit first
+             * (sector 0 BPB + a chunk likely covering the FAT and
+             * root dir on a sub-1 GB FAT16 volume). If any of them
+             * fail, unmount and step down. */
+            /* Single-sector probes spread across the volume. The
+             * higher offsets (16k, 64k, 256k) cover where FatFs's
+             * first FAT / root-dir / cluster-chain reads actually
+             * land on multi-GB FAT32 SDHC cards -- the original
+             * narrow probe (max sector 4096) only touched the
+             * reserved region and missed the area that fails. */
+            const uint32_t kProbeSectors[] = {
+                0, 1, 16, 64, 256, 1024, 4096,
+                16384, 65536, 262144,
+            };
+            /* Probe buffer sized for the 4-sector burst test below.
+             * Allocated on the heap (PSRAM is fine -- sdmmc handles
+             * the bounce buffer when DMA-incapable memory is passed)
+             * because main_task's stack is too tight to hold 2 KiB
+             * of scratch; an earlier revision that put `probe` on
+             * the stack caused
+             * "***ERROR*** A stack overflow in task main has been
+             * detected." right after sdspi_transaction probed the
+             * card. */
+            const size_t kProbeBufSize = 4 * 512;
+            uint8_t *probe = (uint8_t *)malloc(kProbeBufSize);
+            if (!probe) {
+                ESP_LOGW(TAG, "SD/SPI probe buffer alloc failed -- "
+                              "skipping data-phase verify at %d kHz",
+                         host.max_freq_khz);
+                break;
+            }
+            esp_err_t rerr = ESP_OK;
+            for (size_t i = 0;
+                 i < sizeof(kProbeSectors) / sizeof(kProbeSectors[0]);
+                 ++i) {
+                uint32_t sect = kProbeSectors[i];
+                if (sect >= s_card->csd.capacity) continue;
+                rerr = sdmmc_read_sectors(s_card, probe, sect, 1);
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "SD/SPI probe read sector %u at %d kHz "
+                                  "failed: %s",
+                             (unsigned)sect, host.max_freq_khz,
+                             esp_err_to_name(rerr));
+                    break;
+                }
+            }
+            /* Multi-sector burst probe. The SU01G symptom was a
+             * corrupted start-token only on burst transfers; a
+             * single-sector read at the same offset would succeed.
+             * A 4-sector read near sector 0 (BPB + reserved area)
+             * reliably reproduces that failure mode without
+             * depending on a particular FAT layout. */
+            if (rerr == ESP_OK && s_card->csd.capacity >= 4) {
+                rerr = sdmmc_read_sectors(s_card, probe, 0, 4);
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "SD/SPI 4-sector burst probe at %d kHz "
+                                  "failed: %s",
+                             host.max_freq_khz, esp_err_to_name(rerr));
+                }
+            }
+            free(probe);
+            if (rerr == ESP_OK) {
+                if (attempt > 0) {
+                    ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
+                                  "at %d kHz", attempt + 1, host.max_freq_khz);
+                }
+                break;
+            }
+            ESP_LOGW(TAG, "SD/SPI data-phase verify at %d kHz failed: %s "
+                          "-- unmounting and stepping down",
+                     host.max_freq_khz, esp_err_to_name(rerr));
+            esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+            s_card = NULL;
+            ret = rerr;
+        } else {
+            ESP_LOGW(TAG, "SD/SPI mount attempt %d/%d at %d kHz failed: %s",
+                     attempt + 1, attempts, host.max_freq_khz,
+                     esp_err_to_name(ret));
+            s_card = NULL;
+        }
+        if (attempt + 1 < attempts) {
+            /* Back off progressively (200, 400 ms) -- enough for a
+             * slow card to finish its power-on initialisation
+             * sequence between tries. */
+            vTaskDelay(pdMS_TO_TICKS(200 * (attempt + 1)));
+        }
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
         if (s_spi_bus_owned) {
