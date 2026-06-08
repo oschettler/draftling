@@ -155,13 +155,33 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
              * sectors are read. Old SDSC cards on the LilyGO T5
              * shared SPI bus mount cleanly at 10 MHz but then return
              * ESP_ERR_INVALID_RESPONSE / data-CRC errors from
-             * sdmmc_read_sectors_dma the moment FatFs touches sector
-             * 0 (observed pattern: corrupted start-token
-             * "6d 5f ff ff ..." in sdspi_host). Verify the bus
-             * actually works at the chosen clock by reading the
-             * first sector; if it fails, unmount and step down. */
+             * sdmmc_read_sectors_dma the moment FatFs touches the
+             * FAT / root-directory sectors (observed pattern:
+             * corrupted start-token "6d 5f ff ff ..." in
+             * sdspi_host; sector 0 alone reads cleanly because it is
+             * a small DMA that just happens to land in a good
+             * window). Stress the bus by reading a spread of
+             * sectors that overlaps the area FatFs will hit first
+             * (sector 0 BPB + a chunk likely covering the FAT and
+             * root dir on a sub-1 GB FAT16 volume). If any of them
+             * fail, unmount and step down. */
             uint8_t probe[512];
-            esp_err_t rerr = sdmmc_read_sectors(s_card, probe, 0, 1);
+            const uint32_t kProbeSectors[] = {0, 1, 16, 64, 256, 1024, 4096};
+            esp_err_t rerr = ESP_OK;
+            for (size_t i = 0;
+                 i < sizeof(kProbeSectors) / sizeof(kProbeSectors[0]);
+                 ++i) {
+                uint32_t sect = kProbeSectors[i];
+                if (sect >= s_card->csd.capacity) continue;
+                rerr = sdmmc_read_sectors(s_card, probe, sect, 1);
+                if (rerr != ESP_OK) {
+                    ESP_LOGW(TAG, "SD/SPI probe read sector %u at %d kHz "
+                                  "failed: %s",
+                             (unsigned)sect, host.max_freq_khz,
+                             esp_err_to_name(rerr));
+                    break;
+                }
+            }
             if (rerr == ESP_OK) {
                 if (attempt > 0) {
                     ESP_LOGW(TAG, "SD/SPI mount succeeded on attempt %d "
@@ -169,7 +189,7 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
                 }
                 break;
             }
-            ESP_LOGW(TAG, "SD/SPI sector-0 read at %d kHz failed: %s "
+            ESP_LOGW(TAG, "SD/SPI data-phase verify at %d kHz failed: %s "
                           "-- unmounting and stepping down",
                      host.max_freq_khz, esp_err_to_name(rerr));
             esp_vfs_fat_sdcard_unmount(s_mount, s_card);
