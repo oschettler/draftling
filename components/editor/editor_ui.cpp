@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
@@ -547,16 +548,15 @@ static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
 /* Line label pool */
 #define MAX_LINE_LABELS 24
 
-/* Maximum byte length of the rendered text for a single editor line.
- * Must be large enough to hold a full screen-width line in worst-case
- * UTF-8: Cyrillic / Greek / Hebrew use 2 bytes per glyph, CJK uses
- * 3 bytes, most emoji use 4 bytes. 1024 bytes comfortably covers any
- * soft-wrapped line that LVGL can layout within SCR_W on our
- * supported panels. Sizing this too small previously caused
- * multi-byte text (e.g. Cyrillic past ~127 characters) to be silently
- * truncated before reaching the label, so the text became invisible
- * while editor_get_line() still held the full content. */
-#define EDITOR_LINE_BUF_BYTES 1024
+/* A "line" here is one source paragraph (run between '\n's) which can
+ * be arbitrarily long, so the rendered text for a slot must NOT be
+ * capped to a fixed size. Earlier revisions used a 1024-byte buffer
+ * and silently dropped trailing UTF-8 codepoints once a single
+ * paragraph filled it -- e.g. a 569-Cyrillic-char paragraph fits in
+ * exactly 1023 bytes and the next typed character (any 2-byte glyph)
+ * was discarded by the codepoint trimmer. We now build the per-line
+ * display string into a growable std::string and cache it the same
+ * way, so the cap is bounded only by available heap. */
 static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
 
 /* Selection highlight rectangle pool (one per visible line) */
@@ -579,7 +579,7 @@ static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
  * with no active selection: only the slot whose text actually changed
  * (and the cursor bar / title bar) gets invalidated, so the panel can
  * run a fast partial-region waveform instead of a full refresh. */
-static char s_prev_line_text[MAX_LINE_LABELS][EDITOR_LINE_BUF_BYTES];
+static std::string s_prev_line_text[MAX_LINE_LABELS];
 static int  s_prev_line_type[MAX_LINE_LABELS];     /* md_line_type_t, -1 if cache empty */
 static int  s_prev_line_y[MAX_LINE_LABELS];        /* y_pos last used for this slot, -1 if cache empty */
 static int  s_prev_line_h[MAX_LINE_LABELS];        /* rendered_h last computed */
@@ -589,7 +589,7 @@ static bool s_prev_line_was_selected[MAX_LINE_LABELS]; /* line intersected the s
 static void invalidate_render_cache(void)
 {
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        s_prev_line_text[i][0]      = '\0';
+        s_prev_line_text[i].clear();
         s_prev_line_type[i]         = -1;
         s_prev_line_y[i]            = -1;
         s_prev_line_h[i]            = 0;
@@ -807,19 +807,6 @@ static size_t utf8_char_offset(const char *text, int n)
     return off;
 }
 
-/* Trim len so it does not split a UTF-8 codepoint. Walks back over
- * continuation bytes (0b10xxxxxx) until the byte immediately past the
- * cut is a start byte (or len becomes 0). Used wherever we truncate a
- * source string into a fixed-size buffer for rendering -- truncating
- * mid-sequence would feed LVGL an invalid UTF-8 fragment and cause
- * the trailing character to render as garbage or be dropped. */
-static size_t utf8_trim_to_codepoint(const char *text, size_t len)
-{
-    while (len > 0 && ((unsigned char)text[len] & 0xC0) == 0x80) {
-        len--;
-    }
-    return len;
-}
 
 extern "C" void editor_ui_refresh(void)
 {
@@ -867,7 +854,8 @@ extern "C" void editor_ui_refresh(void)
             if (md_is_code_fence(lt, ll)) in_code = !in_code;
         }
 
-        char line_buf[EDITOR_LINE_BUF_BYTES];
+        std::string line_buf;   /* reusable scratch for bullet/HR prefixing */
+        std::string tmp;        /* final rendered text for the current slot */
         int y_pos = 0;       /* running y position in editor content area */
         cur_y = -1;
         cur_x = -1;
@@ -908,24 +896,15 @@ extern "C" void editor_ui_refresh(void)
             size_t disp_len = mi.content_len;
             if (mi.type == MD_LINE_BULLET) {
                 int prefix = mi.indent_level * 2;
-                int n = snprintf(line_buf, sizeof(line_buf), "%*s* ", prefix, "");
-                if (n < 0) n = 0;
-                if ((size_t)n >= sizeof(line_buf)) n = (int)sizeof(line_buf) - 1;
-                size_t avail = sizeof(line_buf) - 1 - (size_t)n;
-                size_t copy_len = disp_len < avail ? disp_len : avail;
-                /* Don't split a UTF-8 codepoint at the truncation point. */
-                copy_len = utf8_trim_to_codepoint(disp_text, copy_len);
-                if (copy_len > 0) {
-                    memcpy(line_buf + n, disp_text, copy_len);
-                }
-                line_buf[n + copy_len] = '\0';
-                disp_text = line_buf;
-                disp_len = (size_t)n + copy_len;
+                line_buf.assign((size_t)prefix, ' ');
+                line_buf.append("* ");
+                line_buf.append(disp_text, disp_len);
+                disp_text = line_buf.data();
+                disp_len  = line_buf.size();
             } else if (mi.type == MD_LINE_HR) {
-                memset(line_buf, '-', 40);
-                line_buf[40] = '\0';
-                disp_text = line_buf;
-                disp_len = 40;
+                line_buf.assign(40, '-');
+                disp_text = line_buf.data();
+                disp_len  = line_buf.size();
             } else if (mi.type == MD_LINE_EMPTY) {
                 disp_text = " ";
                 disp_len = 1;
@@ -933,16 +912,9 @@ extern "C" void editor_ui_refresh(void)
 
             /* Build the final display string up-front so we can compare
              * against the cached previous content before touching any
-             * LVGL state. */
-            char tmp[EDITOR_LINE_BUF_BYTES];
-            size_t clen = disp_len < sizeof(tmp) - 1 ? disp_len : sizeof(tmp) - 1;
-            /* Don't split a UTF-8 codepoint when truncating: an
-             * orphaned continuation byte would cause LVGL to drop the
-             * trailing glyph and (depending on the font) the rest of
-             * the label as well. */
-            clen = utf8_trim_to_codepoint(disp_text, clen);
-            memcpy(tmp, disp_text, clen);
-            tmp[clen] = '\0';
+             * LVGL state. The std::string grows to fit, so paragraphs
+             * of arbitrary length render in full without truncation. */
+            tmp.assign(disp_text, disp_len);
 
             /* Determine whether this line intersects the active
              * selection (used both for the highlight branches below
@@ -975,7 +947,7 @@ extern "C" void editor_ui_refresh(void)
                             !s_prev_line_was_selected[i] &&
                             s_prev_line_type[i] == (int)mi.type &&
                             s_prev_line_y[i] == y_pos &&
-                            strcmp(s_prev_line_text[i], tmp) == 0;
+                            s_prev_line_text[i] == tmp;
 
             int line_h;
             int rendered_h;
@@ -1003,7 +975,7 @@ extern "C" void editor_ui_refresh(void)
                  * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
                 lv_obj_set_width(s_line_labels[i], SCR_W - 4);
                 lv_label_set_text_static(s_line_labels[i], "");
-                lv_label_set_text(s_line_labels[i], tmp);
+                lv_label_set_text(s_line_labels[i], tmp.c_str());
                 lv_obj_set_pos(s_line_labels[i], 2, y_pos);
 
                 /* Get the font for this line to compute correct line height */
@@ -1017,7 +989,7 @@ extern "C" void editor_ui_refresh(void)
                 if (rendered_h < line_h) rendered_h = line_h;
 
                 /* Update cache with what we just drew. */
-                memcpy(s_prev_line_text[i], tmp, clen + 1);
+                s_prev_line_text[i]    = tmp;
                 s_prev_line_type[i]    = (int)mi.type;
                 s_prev_line_y[i]       = y_pos;
                 s_prev_line_h[i]       = rendered_h;
@@ -1084,22 +1056,12 @@ extern "C" void editor_ui_refresh(void)
                             /* Single visual row: overlay label with
                              * only the selected substring in white
                              * on black background. */
-                            size_t byte_s = utf8_char_offset(tmp, disp_s);
-                            size_t byte_e = utf8_char_offset(tmp, disp_e);
-                            char sel_buf[EDITOR_LINE_BUF_BYTES];
-                            size_t sel_len = byte_e - byte_s;
-                            if (sel_len >= sizeof(sel_buf))
-                                sel_len = sizeof(sel_buf) - 1;
-                            /* tmp is already known-valid UTF-8 (we
-                             * trimmed it above), and byte_s/byte_e
-                             * land on codepoint boundaries because
-                             * they come from utf8_char_offset(); the
-                             * trim here only guards against the
-                             * sizeof(sel_buf)-1 cap landing inside a
-                             * multi-byte sequence. */
-                            sel_len = utf8_trim_to_codepoint(tmp + byte_s, sel_len);
-                            memcpy(sel_buf, tmp + byte_s, sel_len);
-                            sel_buf[sel_len] = '\0';
+                            size_t byte_s = utf8_char_offset(tmp.c_str(), disp_s);
+                            size_t byte_e = utf8_char_offset(tmp.c_str(), disp_e);
+                            if (byte_s > tmp.size()) byte_s = tmp.size();
+                            if (byte_e > tmp.size()) byte_e = tmp.size();
+                            if (byte_e < byte_s)     byte_e = byte_s;
+                            std::string sel_buf = tmp.substr(byte_s, byte_e - byte_s);
 
                             const lv_font_t *sf =
                                 lv_obj_get_style_text_font(
@@ -1107,7 +1069,7 @@ extern "C" void editor_ui_refresh(void)
                             lv_obj_set_style_text_font(
                                 s_sel_rects[i],
                                 sf ? sf : body_font(), 0);
-                            lv_label_set_text(s_sel_rects[i], sel_buf);
+                            lv_label_set_text(s_sel_rects[i], sel_buf.c_str());
                             lv_obj_set_pos(s_sel_rects[i],
                                            2 + sp.x, y_pos + sp.y);
                             lv_obj_move_foreground(s_sel_rects[i]);
@@ -1218,56 +1180,18 @@ static void ensure_cursor_visible(void)
  * colors and the initial selection highlight). */
 static void apply_list_selection_styles(lv_obj_t *list, int sel);
 static void update_list_highlight(lv_obj_t *list, int sel, int prev_sel);
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-/* The three activate-on-tap callbacks for the touchable lists.
- * They are defined further down with the rest of their respective
- * list code; forward-declared here so list_touch_attach can store
- * them as function pointers in the static touch contexts. */
-static void browser_activate_item(int row);
-static void menu_activate_item(int idx);
-static void settings_activate_item(int idx);
-#endif
 
-/* ---- Touch input ----
- *
- * Touch is gated on CONFIG_DRAFTLING_TOUCHSCREEN. When enabled we
- * register LVGL pointer-event handlers on:
- *   - the editor content area (s_cont_edit): tap moves the cursor,
- *     double-tap selects the word at the tap point, and vertical
- *     swipes scroll the document.
- *   - each list-row button in the main menu, settings menu, and
- *     file browser: a tap highlights the row (single click) and a
- *     second tap on the already-highlighted row activates it.
- *     This mirrors the keyboard flow (arrow keys then Enter) so a
- *     touch-only user can reach every command.
- *
- * The keyboard handlers are untouched and continue to work in
- * parallel; touch is purely additive. */
-
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-
-#include <cctype>
-#include <cstdlib>
-
-/* Treat as a "word" character: ASCII alnum / underscore, and any
- * UTF-8 continuation/start byte (>= 0x80). This makes word-select
- * work on Latin, Cyrillic, accented chars, etc. without needing a
- * full Unicode category table. */
-static bool touch_is_word_byte(unsigned char c)
-{
-    if (c >= 0x80) return true;
-    if (c == '_') return true;
-    if (c >= '0' && c <= '9') return true;
-    if (c >= 'a' && c <= 'z') return true;
-    if (c >= 'A' && c <= 'Z') return true;
-    return false;
-}
+/* ---- Pixel <-> document-offset helpers (used by both touch input
+ * and visual-line cursor navigation).  Always compiled so that the
+ * arrow-key handler can ask "which character is at pixel (x, y) of
+ * the rendered editor body?" regardless of whether the touchscreen
+ * driver is enabled. */
 
 /* Walk N UTF-8 codepoints into a buffer and return the resulting
  * byte offset, clamped to len. The display layer already laid the
  * codepoints out in monospaced glyphs, so this is the inverse of
  * what lv_label_get_letter_on() reports for our needs. */
-static int touch_utf8_skip(const char *s, int len, int n_cp)
+static int ui_utf8_skip_cp(const char *s, int len, int n_cp)
 {
     int i = 0;
     while (n_cp > 0 && i < len) {
@@ -1284,45 +1208,18 @@ static int touch_utf8_skip(const char *s, int len, int n_cp)
     return i;
 }
 
-/* Last tap state for software double-tap detection. LVGL fires
- * LV_EVENT_CLICKED on every release; we compare against the
- * previous one and promote consecutive close-in-time clicks to a
- * "double tap". */
-static uint32_t s_last_tap_ms = 0;
-static int      s_last_tap_x  = -1;
-static int      s_last_tap_y  = -1;
-#define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
-#define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
-
-/* Drag-to-scroll state. Touch panels here typically poll at 30-60 Hz
- * with small per-frame deltas; LVGL's built-in gesture detector needs
- * a fairly high velocity to fire, which makes "slow scroll a long
- * document" feel unresponsive. So we implement drag-scrolling
- * directly off LV_EVENT_PRESSED / _PRESSING / _RELEASED: every time
- * the finger has moved one full line height vertically, scroll the
- * document by one line and re-anchor. The accumulated drag distance
- * also lets us suppress the LV_EVENT_CLICKED that LVGL emits on
- * release after a drag, so a swipe never moves the cursor by
- * accident. */
-static bool s_drag_active     = false;
-static int  s_drag_start_x    = 0;
-static int  s_drag_start_y    = 0;
-static int  s_drag_anchor_y   = 0;
-static int  s_drag_total_dy   = 0;
-#define TOUCH_DRAG_SUPPRESS_PX 8   /* clicks within this radius still count as taps */
-
-/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+/* Convert a point (in s_cont_edit local coordinates) to a byte
  * offset within the editor's flat text buffer. Returns true on
- * success and fills *out_off; returns false if the tap landed on
+ * success and fills *out_off; returns false if the point landed on
  * empty space below the last rendered line. */
-static bool touch_point_to_offset(int x, int y, size_t *out_off)
+static bool ui_point_to_offset(int x, int y, size_t *out_off)
 {
     if (!out_off) return false;
 
-    /* Walk the per-slot render cache to find which line was tapped.
-     * The cache is kept in lock-step with the visible labels by
-     * editor_ui_refresh(), so s_prev_line_y[i] / s_prev_line_h[i]
-     * describe the layout the user actually sees. */
+    /* Walk the per-slot render cache to find which line contains
+     * the point. The cache is kept in lock-step with the visible
+     * labels by editor_ui_refresh(), so s_prev_line_y[i] /
+     * s_prev_line_h[i] describe the layout the user actually sees. */
     int slot = -1;
     for (int i = 0; i < MAX_LINE_LABELS; i++) {
         if (!s_prev_line_visible[i]) continue;
@@ -1332,7 +1229,7 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
         if (y >= y1 && y < y2) { slot = i; break; }
     }
     if (slot < 0) {
-        /* Tapped below the last visible line -- map to end-of-document. */
+        /* Point lies below the last visible line -- map to end-of-document. */
         size_t total = 0;
         (void)editor_get_text(&total);
         *out_off = total;
@@ -1397,7 +1294,7 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
     }
     case MD_LINE_HR:
     case MD_LINE_EMPTY:
-        /* Display content is synthetic; map every tap to the start
+        /* Display content is synthetic; map every point to the start
          * of the raw line so Enter/typing inserts there. */
         *out_off = line_off;
         return true;
@@ -1416,17 +1313,226 @@ static bool touch_point_to_offset(int x, int y, size_t *out_off)
         break;
     }
 
-    /* Clamp the display column to the rendered text length so a tap
-     * past end-of-line places the cursor right after the last char. */
+    /* Clamp the display column to the rendered text length so a
+     * point past end-of-line places the cursor right after the last char. */
     int content_cp = disp_char - disp_prefix_cp;
     if (content_cp < 0) content_cp = 0;
 
     /* Walk content_cp codepoints into mi.content to get the raw
      * byte offset inside the content span, then add the raw prefix. */
-    int byte_in_content = touch_utf8_skip(mi.content,
+    int byte_in_content = ui_utf8_skip_cp(mi.content,
                                           (int)mi.content_len, content_cp);
     *out_off = line_off + (size_t)raw_prefix_b + (size_t)byte_in_content;
     return true;
+}
+
+/* ---- Visual-line cursor movement ----
+ *
+ * The default editor_move_up()/_down() jump by *logical* lines,
+ * which on a long soft-wrapped paragraph skips the whole rendered
+ * block in one keystroke. The functions below instead step the
+ * cursor to the next/previous *visual* row, matching what most
+ * other editors do.
+ *
+ * s_visual_goal_x remembers the cursor's preferred x pixel across
+ * consecutive Up/Down presses so the column is preserved even when
+ * crossing shorter rows -- it is reset by handle_editor_key() on
+ * any non-vertical key. */
+static int s_visual_goal_x = -1;
+
+static void editor_ui_move_visual(int direction)
+{
+    /* direction: -1 = up, +1 = down */
+    if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = -1;
+        return;
+    }
+
+    int cx = lv_obj_get_x(s_cursor);
+    int cy = lv_obj_get_y(s_cursor);
+    int ch = lv_obj_get_height(s_cursor);
+    int gx = (s_visual_goal_x >= 0) ? s_visual_goal_x : cx;
+    /* LVGL's lv_label_get_letter_on() uses an inclusive bottom-edge
+     * test (pos.y <= line_y + letter_height), so a y exactly on the
+     * boundary between visual rows N and N+1 snaps to row N.  For
+     * Up we step one pixel above the cursor top (cy - 1), which
+     * lands strictly inside the previous row.  For Down we have to
+     * step *past* the cursor bottom (cy + ch + 1), not merely onto
+     * it -- otherwise lv_label_get_letter_on() would return a
+     * letter on the same visual row and the cursor would not move. */
+    int target_y = (direction < 0) ? cy - 1 : cy + ch + 1;
+
+    /* Short-circuit at document boundaries so a Down press on the
+     * very last visual row of the document does not scroll past
+     * end-of-text. We still need this check up front because the
+     * scroll fall-through below assumes there is another logical
+     * line to bring into view. */
+    {
+        int cur_line, cur_col;
+        editor_get_cursor_pos(&cur_line, &cur_col);
+        (void)cur_col;
+        int total = editor_get_line_count();
+        if (direction > 0 && cur_line >= total - 1) {
+            /* Last logical line: see if any visual row remains
+             * within the current label below the cursor. If not,
+             * stay put. */
+            if (target_y >= EDITOR_H) {
+                /* Conservative: at-or-past viewport bottom on the
+                 * last line -> nothing more to move to. */
+                return;
+            }
+        }
+        if (direction < 0 && cur_line == 0) {
+            /* First logical line: if the cursor is already on the
+             * first visual row (cy <= 0), there is no row above. */
+            if (cy <= 0) return;
+        }
+    }
+
+    /* If the target visual row is outside the rendered editor area,
+     * scroll one logical line and re-render so the row above/below
+     * becomes addressable via ui_point_to_offset(). */
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (target_y >= 0 && target_y < EDITOR_H) break;
+        int sc = editor_get_scroll_line();
+        if (direction < 0) {
+            if (sc <= 0) {
+                editor_move_up();
+                s_visual_goal_x = gx;
+                return;
+            }
+            editor_set_scroll_line(sc - 1);
+        } else {
+            int total = editor_get_line_count();
+            if (sc + 1 >= total) {
+                editor_move_down();
+                s_visual_goal_x = gx;
+                return;
+            }
+            editor_set_scroll_line(sc + 1);
+        }
+        editor_ui_refresh();
+        if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+            if (direction < 0) editor_move_up();
+            else               editor_move_down();
+            s_visual_goal_x = gx;
+            return;
+        }
+        cy = lv_obj_get_y(s_cursor);
+        ch = lv_obj_get_height(s_cursor);
+        target_y = (direction < 0) ? cy - 1 : cy + ch + 1;
+    }
+
+    if (target_y < 0 || target_y >= EDITOR_H) {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = gx;
+        return;
+    }
+
+    size_t off;
+    if (ui_point_to_offset(gx, target_y, &off)) {
+        editor_set_cursor(off);
+        s_visual_goal_x = gx;
+    } else {
+        if (direction < 0) editor_move_up();
+        else               editor_move_down();
+        s_visual_goal_x = gx;
+    }
+}
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+/* The three activate-on-tap callbacks for the touchable lists.
+ * They are defined further down with the rest of their respective
+ * list code; forward-declared here so list_touch_attach can store
+ * them as function pointers in the static touch contexts. */
+static void browser_activate_item(int row);
+static void menu_activate_item(int idx);
+static void settings_activate_item(int idx);
+#endif
+
+/* ---- Touch input ----
+ *
+ * Touch is gated on CONFIG_DRAFTLING_TOUCHSCREEN. When enabled we
+ * register LVGL pointer-event handlers on:
+ *   - the editor content area (s_cont_edit): tap moves the cursor,
+ *     double-tap selects the word at the tap point, and vertical
+ *     swipes scroll the document.
+ *   - each list-row button in the main menu, settings menu, and
+ *     file browser: a tap highlights the row (single click) and a
+ *     second tap on the already-highlighted row activates it.
+ *     This mirrors the keyboard flow (arrow keys then Enter) so a
+ *     touch-only user can reach every command.
+ *
+ * The keyboard handlers are untouched and continue to work in
+ * parallel; touch is purely additive. */
+
+#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+
+#include <cctype>
+#include <cstdlib>
+
+/* Treat as a "word" character: ASCII alnum / underscore, and any
+ * UTF-8 continuation/start byte (>= 0x80). This makes word-select
+ * work on Latin, Cyrillic, accented chars, etc. without needing a
+ * full Unicode category table. */
+static bool touch_is_word_byte(unsigned char c)
+{
+    if (c >= 0x80) return true;
+    if (c == '_') return true;
+    if (c >= '0' && c <= '9') return true;
+    if (c >= 'a' && c <= 'z') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    return false;
+}
+
+/* Walk N UTF-8 codepoints into a buffer and return the resulting
+ * byte offset, clamped to len. The display layer already laid the
+ * codepoints out in monospaced glyphs, so this is the inverse of
+ * what lv_label_get_letter_on() reports for our needs. */
+/* (ui_utf8_skip_cp / ui_point_to_offset are defined unconditionally
+ * above so visual-line cursor movement can use them too.) */
+
+/* Last tap state for software double-tap detection. LVGL fires
+ * LV_EVENT_CLICKED on every release; we compare against the
+ * previous one and promote consecutive close-in-time clicks to a
+ * "double tap". */
+static uint32_t s_last_tap_ms = 0;
+static int      s_last_tap_x  = -1;
+static int      s_last_tap_y  = -1;
+#define TOUCH_DOUBLE_TAP_MS   400  /* same as the LVGL default short-click streak */
+#define TOUCH_DOUBLE_TAP_PX    12  /* finger jitter tolerance */
+
+/* Drag-to-scroll state. Touch panels here typically poll at 30-60 Hz
+ * with small per-frame deltas; LVGL's built-in gesture detector needs
+ * a fairly high velocity to fire, which makes "slow scroll a long
+ * document" feel unresponsive. So we implement drag-scrolling
+ * directly off LV_EVENT_PRESSED / _PRESSING / _RELEASED: every time
+ * the finger has moved one full line height vertically, scroll the
+ * document by one line and re-anchor. The accumulated drag distance
+ * also lets us suppress the LV_EVENT_CLICKED that LVGL emits on
+ * release after a drag, so a swipe never moves the cursor by
+ * accident. */
+static bool s_drag_active     = false;
+static int  s_drag_start_x    = 0;
+static int  s_drag_start_y    = 0;
+static int  s_drag_anchor_y   = 0;
+static int  s_drag_total_dy   = 0;
+#define TOUCH_DRAG_SUPPRESS_PX 8   /* clicks within this radius still count as taps */
+
+/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+ * offset within the editor's flat text buffer. Returns true on
+ * success and fills *out_off; returns false if the tap landed on
+ * empty space below the last rendered line. */
+/* Convert a tap point (in s_cont_edit local coordinates) to a byte
+ * offset within the editor's flat text buffer. Implemented as a
+ * thin wrapper around ui_point_to_offset(), which is also reused
+ * by keyboard-driven visual-line cursor movement. */
+static bool touch_point_to_offset(int x, int y, size_t *out_off)
+{
+    return ui_point_to_offset(x, y, out_off);
 }
 
 /* Expand a single-tap byte offset into the selection range of the
@@ -3139,6 +3245,14 @@ static void handle_editor_key(const kb_event_t *ev)
             "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
     }
 
+    /* Forget the "preferred column" used by visual Up/Down navigation
+     * the moment the user presses anything else -- otherwise typing,
+     * Home/End, etc. would leave a stale goal_x that the next Up/Down
+     * would snap back to. */
+    if (ev->keycode != KB_KEY_UP && ev->keycode != KB_KEY_DOWN) {
+        s_visual_goal_x = -1;
+    }
+
     /* F1 opens the menu */
     if (ev->keycode == KB_KEY_F1) {
         show_menu();
@@ -3296,12 +3410,12 @@ static void handle_editor_key(const kb_event_t *ev)
     case KB_KEY_UP:
         if (shift) editor_set_selection_anchor();
         else editor_clear_selection();
-        editor_move_up();
+        editor_ui_move_visual(-1);
         break;
     case KB_KEY_DOWN:
         if (shift) editor_set_selection_anchor();
         else editor_clear_selection();
-        editor_move_down();
+        editor_ui_move_visual(+1);
         break;
     case KB_KEY_HOME:
         if (shift) editor_set_selection_anchor();
