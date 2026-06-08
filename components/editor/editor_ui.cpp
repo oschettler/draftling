@@ -420,6 +420,13 @@ static bool      s_menu_open    = false;
 static lv_timer_t *s_blink_timer = NULL;
 #endif
 static bool s_cursor_visible = true;
+/* True when editor_ui_refresh() positioned s_cursor inside the
+ * visible editor area on the last render. This is independent of
+ * LV_OBJ_FLAG_HIDDEN, which on LCD backends is also toggled by the
+ * blink timer (cursor_blink_cb) and would otherwise make visual
+ * Up/Down think the cursor is off-screen mid-blink and fall back
+ * to logical-line jumps. */
+static bool s_cursor_on_screen = false;
 static int  s_browser_sel    = 0;
 /* See s_menu_sel_prev. */
 static int  s_browser_sel_prev = -1;
@@ -1154,8 +1161,10 @@ extern "C" void editor_ui_refresh(void)
         lv_obj_set_pos(s_cursor, cur_x, cur_y);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         s_cursor_visible = true;
+        s_cursor_on_screen = true;
     } else if (s_cursor) {
         lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        s_cursor_on_screen = false;
     }
 
     update_title_bar();
@@ -1343,7 +1352,13 @@ static int s_visual_goal_x = -1;
 static void editor_ui_move_visual(int direction)
 {
     /* direction: -1 = up, +1 = down */
-    if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+    /* Use the render-time on-screen flag rather than LV_OBJ_FLAG_HIDDEN:
+     * on LCD backends the blink timer toggles the HIDDEN flag every
+     * ~500 ms, and reading it here would intermittently make the
+     * function think the cursor is off-screen and fall back to
+     * logical-line jumps (skipping multiple visual rows in a
+     * soft-wrapped paragraph and resetting s_visual_goal_x). */
+    if (!s_cursor || !s_cursor_on_screen) {
         if (direction < 0) editor_move_up();
         else               editor_move_down();
         s_visual_goal_x = -1;
@@ -1414,7 +1429,7 @@ static void editor_ui_move_visual(int direction)
             editor_set_scroll_line(sc + 1);
         }
         editor_ui_refresh();
-        if (!s_cursor || lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) {
+        if (!s_cursor || !s_cursor_on_screen) {
             if (direction < 0) editor_move_up();
             else               editor_move_down();
             s_visual_goal_x = gx;
