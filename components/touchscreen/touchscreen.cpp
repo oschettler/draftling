@@ -548,43 +548,20 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
-#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
-    /* Wake the GT911 from any prior sleep state (datasheet section
-     * 5.7). The previous run may have issued GT911_CMD_SLEEP (0x05
-     * to 0x8040) from touchscreen_sleep() right before deep sleep.
-     * On cold-boot wake the controller stays in low-power state and
-     * NACKs every I2C transaction until it sees either (a) a falling
-     * edge on RST or (b) the host driving INT HIGH for >5 ms.
-     *
-     * On the LilyGO T5 E-Paper S3 Pro / Pro Lite the RST line is
-     * routed through the TPS65185 / PCA9535 expander rather than a
-     * direct ESP-S3 GPIO (CONFIG_DRAFTLING_TOUCH_RST_GPIO=-1), so the
-     * reset path is unavailable here -- without an INT-pulse wake the
-     * subsequent i2c_master_probe() below fails at both 0x5D and 0x14
-     * and the touchscreen is silently dead until the next hard reset.
-     * On boards that do drive RST through an ESP GPIO (or have no
-     * pre-sleep teardown) the brief HIGH pulse is harmless: the
-     * controller just observes a moment of host-side idle on INT.
-     *
-     * Drive INT push-pull HIGH for 10 ms (>5 ms datasheet minimum
-     * with margin) and leave it asserted HIGH; the regular INT-as-
-     * input config immediately below releases the pin and lets the
-     * controller resume pulling it LOW on new touch frames. */
-    if (s_cfg.intr >= 0) {
-        gpio_config_t g = {};
-        g.intr_type    = GPIO_INTR_DISABLE;
-        g.mode         = GPIO_MODE_OUTPUT;
-        g.pin_bit_mask = (1ULL << s_cfg.intr);
-        gpio_config(&g);
-        gpio_set_level((gpio_num_t)s_cfg.intr, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-#endif
-
     /* INT line as plain input with pull-up. We do *not* attach a
      * GPIO ISR -- LVGL's read_cb polls the level cheaply and it is
      * easier to share the pin with the standby manager's EXT0 wake
-     * configuration when we are not contending for the GPIO IRQ. */
+     * configuration when we are not contending for the GPIO IRQ.
+     *
+     * For GT911 this doubles as a gentle wake-from-sleep: the chip,
+     * if it was put into low-power mode by a prior touchscreen_sleep()
+     * (cmd 0x05 to 0x8040 ahead of deep sleep), exits sleep when it
+     * sees INT held HIGH for >5 ms (datasheet section 5.7). When the
+     * chip is asleep it does not drive INT, so the host pull-up alone
+     * brings the line high and triggers the wake -- with no push-pull
+     * contention against the chip's own INT driver once it resumes
+     * normal scan mode. We then settle for ~10 ms before issuing any
+     * I2C transactions so a sleeping chip has time to come back. */
     if (s_cfg.intr >= 0) {
         gpio_config_t g = {};
         g.intr_type    = GPIO_INTR_DISABLE;
@@ -593,6 +570,9 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         g.pull_up_en   = GPIO_PULLUP_ENABLE;
         g.pull_down_en = GPIO_PULLDOWN_DISABLE;
         gpio_config(&g);
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+        vTaskDelay(pdMS_TO_TICKS(10));
+#endif
     }
 
     /* I2C master bus + device handle (ESP-IDF v5.x i2c_master API).
@@ -663,6 +643,30 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         s_owns_bus = false;
         return;
     }
+
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    /* Force the GT911 into normal coordinate-scan mode (cmd 0x00 at
+     * register 0x8040) and clear the buffer-ready status register
+     * (0x814E). This guarantees the controller is actively scanning
+     * regardless of any residual state from before:
+     *
+     *   * On a fresh cold boot from power-on the chip is already in
+     *     normal mode; this write is a benign no-op.
+     *   * On wake from deep sleep, touchscreen_sleep() wrote 0x05
+     *     (sleep) just before esp_deep_sleep_start(). The chip is
+     *     usually POR'd back to default state by epdiy's power-cycle
+     *     of the EPD rail during display_init() on the LilyGO T5
+     *     E-Paper S3 Pro (the GT911 RST line is routed through the
+     *     TPS65185 / PCA9535 expander), so I2C probes succeed --
+     *     but on some wakes the chip ends up in a state where it
+     *     ACKs reads yet never sets the buffer-ready bit. Writing
+     *     0x00 (Read coord state) here resumes coordinate scanning
+     *     definitively. Failure is logged but not fatal: the runtime
+     *     gt911_try_recover() path in poll_gt911() will retry if the
+     *     chip remains unresponsive. */
+    (void)gt911_write_reg(GT911_REG_COMMAND, 0x00);
+    (void)gt911_write_reg(GT911_REG_STATUS,  0x00);
+#endif
 
     /* Register LVGL pointer indev. lv_init() was already called by
      * draftling_lvgl_port_init(); we just attach the new device to the default
