@@ -316,6 +316,24 @@ static void t5_lora_sleep(void)
                  esp_err_to_name(err));
     }
     spi_bus_remove_device(lora);
+
+    /* spi_bus_remove_device() releases the CS GPIO back to the GPIO
+     * matrix with no defined level. If the SX1262 CS is then left
+     * floating again the radio resumes snooping on subsequent SD
+     * traffic over the shared SPI3 bus -- exactly the
+     * "LilyGO T5S3-4.7-e-paper-PRO issue #3" we work around at SD
+     * mount time. Observed symptom: SD card mounts, multi-sector
+     * data-phase probe passes, but FatFs's first cluster-chain read
+     * a few hundred ms later returns 0x108 ESP_ERR_INVALID_RESPONSE
+     * (sdmmc_read_sectors_dma). Re-pin LoRa CS HIGH as a plain GPIO
+     * output so the radio stays deselected for the rest of the
+     * active session. */
+    gpio_config_t lora_cs = {};
+    lora_cs.intr_type    = GPIO_INTR_DISABLE;
+    lora_cs.mode         = GPIO_MODE_OUTPUT;
+    lora_cs.pin_bit_mask = (1ULL << BOARD_LORA_CS_PIN);
+    gpio_config(&lora_cs);
+    gpio_set_level((gpio_num_t)BOARD_LORA_CS_PIN, 1);
 #endif
 }
 
