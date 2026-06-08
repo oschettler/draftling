@@ -23,8 +23,12 @@
  *       The caller passes in an already-created
  *       i2c_master_bus_handle_t (the bus is shared with epdiy + GT911,
  *       so the battery component must not own it). Voltage comes from
- *       the 16-bit Voltage register at 0x08 (mV) and the percentage
- *       comes from the StateOfCharge register at 0x2C (already 0-100).
+ *       the 16-bit Voltage register at 0x08 (mV); percentage is then
+ *       derived from that voltage via the same LiPo discharge LUT
+ *       used by the ADC backend, because the BQ27220's StateOfCharge
+ *       register at 0x2C ships with default Data Memory on the T5
+ *       Pro and reports a meaningless ~50 % regardless of actual
+ *       cell voltage, even after several discharge/charge cycles.
  */
 
 #include "battery.h"
@@ -755,10 +759,20 @@ extern "C" int battery_read_mv(void)
 extern "C" int battery_read_percent(void)
 {
     if (s_backend == BATT_BACKEND_BQ27220) {
-        uint16_t soc = 0;
-        if (bq27220_read_u16(BQ27220_REG_SOC, &soc) != 0) return -1;
-        if (soc > 100) soc = 100;
-        return (int)soc;
+        /* The BQ27220's StateOfCharge register is only meaningful after
+         * its Data Memory (Design Capacity, chemistry ID, terminate
+         * voltage, taper current, ...) has been programmed for the
+         * pack and the Impedance-Track algorithm has completed a full
+         * learning cycle. On the LilyGO T5 E-Paper S3 Pro the factory
+         * leaves the gauge with default DM values, and a few full
+         * discharge/charge cycles do NOT make it learn -- SoC stays
+         * pinned around 50 % regardless of actual cell voltage (e.g.
+         * 53 % reported at 4124 mV BATV / CHRG_STAT=Termination Done).
+         * Trust the gauge only as a voltmeter and derive percentage
+         * from the same LiPo discharge LUT used by the ADC backend. */
+        uint16_t mv = 0;
+        if (bq27220_read_u16(BQ27220_REG_VOLTAGE, &mv) != 0) return -1;
+        return mv_to_percent((int)mv);
     }
     if (s_backend == BATT_BACKEND_INA226) {
         int cell_mv = ina226_read_cell_mv();
