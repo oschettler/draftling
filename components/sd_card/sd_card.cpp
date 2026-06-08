@@ -97,22 +97,26 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
-    /* Cap the SPI clock at 10 MHz for the first attempt, then step
-     * down on retries. SDSPI_HOST_DEFAULT() leaves max_freq_khz at
-     * SDMMC_FREQ_DEFAULT (20 MHz); on boards where the MicroSD slot
-     * shares its SPI bus with another peripheral (e.g. the SX1262
-     * LoRa radio on the LilyGO T5 E-Paper S3 Pro) the resulting
-     * trace length and stub capacitance push older SDSC cards past
-     * their setup/hold budget, so the mount succeeds at the 400 kHz
-     * probe rate but the first 20 MHz data read times out with
-     * 0x107 (ESP_ERR_TIMEOUT) from sdmmc_read_sectors_dma. 10 MHz is
-     * well within the SDSPI spec for every card we have tested, and
-     * SDSPI is sequential so the editor's small reads see no
-     * measurable slowdown. The retry steps below (4 MHz, 1 MHz) only
-     * matter when the 10 MHz attempt itself fails. */
+    /* Cap the SPI data-phase clock conservatively. SDSPI_HOST_DEFAULT()
+     * leaves max_freq_khz at SDMMC_FREQ_DEFAULT (20 MHz), which fails
+     * outright on older SDSC cards on long / shared SPI buses (e.g.
+     * the SX1262 LoRa radio shares SPI3 with the MicroSD slot on the
+     * LilyGO T5 E-Paper S3 Pro). 10 MHz was the next obvious step
+     * down, but on the LilyGO board a 968 MB SanDisk SU01G mounts,
+     * passes a spread-out single-sector probe, then still fails
+     * FatFs's first FAT/cluster-chain read with
+     * 0x108 ESP_ERR_INVALID_RESPONSE -- the bus is right on the
+     * edge of marginal at 10 MHz and only fast multi-sector
+     * traffic exposes it.
+     *
+     * 4 MHz is well within the SDSPI spec for every card we have
+     * tested, leaves comfortable headroom on a shared bus, and is
+     * fast enough that the editor's small reads see no measurable
+     * slowdown. The retry steps below (2 MHz, 1 MHz) cover the
+     * worst-of-the-worst cards.  */
     static const int kRetryFreqKhz[] = {
-        SDMMC_FREQ_HIGHSPEED / 4,   /* 10 MHz */
         4000,
+        2000,
         1000,
     };
     host.max_freq_khz = kRetryFreqKhz[0];
