@@ -247,6 +247,26 @@ Public API: `editor_init()`, `editor_open_file()`, `editor_save_file()`,
 `editor_replace_range()`, `md_parse_line()`, and many
 cursor/selection/clipboard helpers.
 
+The editor stores text as **UTF-8** internally. `editor_open_file()`
+inspects the leading bytes of each file for a Unicode BOM and
+transcodes on the fly so that files saved from desktop editors render
+correctly:
+
+| BOM bytes          | Encoding   | Handling                          |
+|--------------------|------------|-----------------------------------|
+| `EF BB BF`         | UTF-8      | BOM stripped, rest stored as-is   |
+| `FF FE`            | UTF-16 LE  | Transcoded to UTF-8 via `transcode_utf16_to_utf8()` |
+| `FE FF`            | UTF-16 BE  | Transcoded to UTF-8 via `transcode_utf16_to_utf8()` |
+| (none)             | UTF-8      | Stored as-is                      |
+
+Without this conversion a UTF-16 file (Windows Notepad still defaults
+to "Unicode" = UTF-16 LE for many scripts) would arrive as alternating
+text bytes and `0x00`/`0x05` filler, and Hebrew / Cyrillic / CJK runs
+would render as random Latin-1 glyphs. The transcoder decodes UTF-16
+surrogate pairs into single supplementary-plane codepoints, replaces
+unpaired surrogates with U+FFFD, and silently drops the CR (U+000D)
+half of Windows CRLF line endings.
+
 Editor shortcuts include `Ctrl+F` (Find) and `Ctrl+H` (Find +
 Replace). Both open a modal overlay; in Find+Replace mode, `Tab`
 switches between the Find and Replace fields, `Enter` jumps to the
