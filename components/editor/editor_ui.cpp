@@ -3872,6 +3872,12 @@ static void apply_pending_connect_state(void)
         /* Keyboard just connected -- if we are on the BLE prompt screen,
          * return to whatever the user was doing before disconnect. */
         if (lv_scr_act() == s_scr_ble_prompt) {
+            /* Drop any stale touch indev state (in-progress press,
+             * wait-until-release, act_obj pinned to the prompt's
+             * Off button) before swapping screens, so the editor
+             * does not inherit a sticky press that would absorb
+             * the first tap. */
+            lv_indev_reset(NULL, NULL);
             if (editor_get_mode() == EDITOR_MODE_EDITING) {
                 /* Restore the editor -- file contents are still in
                  * the gap buffer; no need to close/reopen. */
@@ -3906,6 +3912,14 @@ static void apply_pending_connect_state(void)
             lv_label_set_text(s_ble_prompt_lbl,
                 "Keyboard disconnected.\nReconnecting...");
         }
+        /* Drop any stale touch indev state (in-progress press /
+         * gesture wait-until-release / act_obj pinned to a
+         * now-hidden editor widget) before swapping screens.
+         * Without this, a stray touch frame around the
+         * disconnect can leave the LVGL indev with
+         * wait_until_release set, which silently absorbs taps
+         * on the BLE prompt's "Off" button. */
+        lv_indev_reset(NULL, NULL);
         lv_scr_load(s_scr_ble_prompt);
     }
 }

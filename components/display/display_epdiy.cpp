@@ -126,6 +126,17 @@ static void backlight_pwm_init(int bl_pin)
 {
     if (bl_pin < 0 || s_bl_inited) return;
 
+    /* If we just woke from deep sleep, display_deep_sleep_prepare()
+     * latched this pad LOW via gpio_hold_en() + (caller's)
+     * gpio_deep_sleep_hold_en() so the LED stayed off through
+     * sleep. The latch survives the wake reset on ESP32-S3 and
+     * keeps the pad clamped LOW regardless of any GPIO matrix /
+     * LEDC routing we configure here, which is why the front-light
+     * stays dark after wake. Release the per-pin hold (no-op on a
+     * genuine cold boot) so ledc_channel_config below can drive
+     * the pin. */
+    gpio_hold_dis((gpio_num_t)bl_pin);
+
     ledc_timer_config_t t = {};
     t.speed_mode      = BL_LEDC_MODE;
     t.duty_resolution = BL_LEDC_DUTY_RES;

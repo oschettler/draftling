@@ -237,6 +237,89 @@ static esp_err_t gt911_write_reg(uint16_t reg, uint8_t val)
     return i2c_master_transmit(s_dev, packet, sizeof(packet), 50 /* ms */);
 }
 
+/* Number of consecutive I2C-failure responses from the GT911 before
+ * we assume the controller has re-POR'd (likely after an epdiy
+ * `epd_poweroff()` yanked its RST line via the shared TPS65185 /
+ * PCA9535 expander on the LilyGO T5 E-Paper S3 Pro) and try to
+ * rebind it. Small enough to recover within a few LVGL ticks
+ * (~30 ms at the default 10 ms tick), large enough to ride out
+ * benign bus contention with epdiy's own I2C traffic. */
+#define GT911_RECOVERY_FAIL_THRESHOLD 3
+
+static uint8_t s_gt911_consec_fail = 0;
+
+/* Re-probe the GT911 at both possible I2C addresses (0x5D and 0x14)
+ * and rebind the driver-NG device handle to whichever ACKs. Called
+ * from the poll path after several consecutive I2C failures.
+ *
+ * Background: on the LilyGO T5 E-Paper S3 Pro the GT911's RST line
+ * is routed through the TPS65185 / PCA9535 I2C expander used by
+ * epdiy. Each display_flush() does epd_poweron() + epd_poweroff();
+ * the latter can momentarily yank the expander outputs and the
+ * GT911 then re-POR's, picking an I2C address based on the INT
+ * level at that instant -- which on this board can land on the
+ * backup 0x14 instead of the configured 0x5D. With the I2C device
+ * still bound to 0x5D every subsequent register read NAKs and
+ * touch is silently dead. The original boot-time probe in
+ * touchscreen_init() does not run again, so we have to recover at
+ * runtime here. Returns true if a working address was (re)bound. */
+static bool gt911_try_recover(void)
+{
+    if (!s_bus) return false;
+
+    /* Always try both possible GT911 addresses, configured first.
+     * GT911 only ever lands on 0x5D or 0x14; if `configured` is
+     * something exotic we still try the two canonical addresses so
+     * recovery has a chance to succeed. */
+    uint8_t configured = s_cfg.i2c_addr;
+    uint8_t order[2] = { configured,
+                         static_cast<uint8_t>((configured == 0x14) ? 0x5D : 0x14) };
+
+    for (int i = 0; i < 2; i++) {
+        uint8_t addr = order[i];
+        if (i2c_master_probe(s_bus, addr, 50) != ESP_OK) continue;
+
+        if (addr == s_cfg.i2c_addr) {
+            /* Same address still answers -- controller did not
+             * drift; the failures were transient bus contention.
+             * Keep the existing device handle. */
+            ESP_LOGW(TAG, "GT911 recovered at 0x%02X after %u failures",
+                     addr, (unsigned)s_gt911_consec_fail);
+            return true;
+        }
+
+        /* Drift detected -- rebind to the new address. The window
+         * between updating s_dev / s_cfg.i2c_addr and removing the
+         * old handle is safe because gt911_try_recover() is only
+         * ever invoked from poll_gt911(), which runs under s_mux
+         * (held by indev_read_cb / touchscreen_read), and all
+         * other poll paths take the same mutex -- no other task
+         * can be poking the stale handle through s_cfg.i2c_addr. */
+        i2c_device_config_t dev_cfg = {};
+        dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+        dev_cfg.device_address  = addr;
+        dev_cfg.scl_speed_hz    = s_cfg.i2c_hz ? s_cfg.i2c_hz : 400000;
+        i2c_master_dev_handle_t newdev = NULL;
+        if (i2c_master_bus_add_device(s_bus, &dev_cfg, &newdev) != ESP_OK ||
+            !newdev) {
+            ESP_LOGW(TAG, "GT911 rebind add_device failed for 0x%02X", addr);
+            continue;
+        }
+        i2c_master_dev_handle_t old = s_dev;
+        s_dev = newdev;
+        s_cfg.i2c_addr = addr;
+        if (old) {
+            /* Best-effort removal of the stale handle; on driver-NG
+             * the bus survives this and stays shared with epdiy. */
+            (void)i2c_master_bus_rm_device(old);
+        }
+        ESP_LOGW(TAG, "GT911 drifted to 0x%02X (was 0x%02X); rebound",
+                 addr, configured);
+        return true;
+    }
+    return false;
+}
+
 static bool poll_gt911(int *out_x, int *out_y)
 {
     if (!s_dev) return false;
@@ -244,8 +327,15 @@ static bool poll_gt911(int *out_x, int *out_y)
     uint8_t status = 0;
     if (gt911_read_reg(GT911_REG_STATUS, &status, 1) != ESP_OK) {
         ESP_LOGD(TAG, "gt911 status read failed");
+        if (s_gt911_consec_fail < 0xFF) s_gt911_consec_fail++;
+        if (s_gt911_consec_fail >= GT911_RECOVERY_FAIL_THRESHOLD) {
+            if (gt911_try_recover()) {
+                s_gt911_consec_fail = 0;
+            }
+        }
         return false;
     }
+    s_gt911_consec_fail = 0;
 
     /* Buffer-ready bit (0x80) not set -> no new frame. The controller
      * sets this bit when it has populated 0x814F+ with fresh point
@@ -461,7 +551,17 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
     /* INT line as plain input with pull-up. We do *not* attach a
      * GPIO ISR -- LVGL's read_cb polls the level cheaply and it is
      * easier to share the pin with the standby manager's EXT0 wake
-     * configuration when we are not contending for the GPIO IRQ. */
+     * configuration when we are not contending for the GPIO IRQ.
+     *
+     * For GT911 this doubles as a gentle wake-from-sleep: the chip,
+     * if it was put into low-power mode by a prior touchscreen_sleep()
+     * (cmd 0x05 to 0x8040 ahead of deep sleep), exits sleep when it
+     * sees INT held HIGH for >5 ms (datasheet section 5.7). When the
+     * chip is asleep it does not drive INT, so the host pull-up alone
+     * brings the line high and triggers the wake -- with no push-pull
+     * contention against the chip's own INT driver once it resumes
+     * normal scan mode. We then settle for ~10 ms before issuing any
+     * I2C transactions so a sleeping chip has time to come back. */
     if (s_cfg.intr >= 0) {
         gpio_config_t g = {};
         g.intr_type    = GPIO_INTR_DISABLE;
@@ -470,6 +570,9 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         g.pull_up_en   = GPIO_PULLUP_ENABLE;
         g.pull_down_en = GPIO_PULLDOWN_DISABLE;
         gpio_config(&g);
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+        vTaskDelay(pdMS_TO_TICKS(10));
+#endif
     }
 
     /* I2C master bus + device handle (ESP-IDF v5.x i2c_master API).
@@ -540,6 +643,30 @@ extern "C" void touchscreen_init(const touchscreen_config_t *cfg)
         s_owns_bus = false;
         return;
     }
+
+#if defined(CONFIG_DRAFTLING_TOUCH_GT911)
+    /* Force the GT911 into normal coordinate-scan mode (cmd 0x00 at
+     * register 0x8040) and clear the buffer-ready status register
+     * (0x814E). This guarantees the controller is actively scanning
+     * regardless of any residual state from before:
+     *
+     *   * On a fresh cold boot from power-on the chip is already in
+     *     normal mode; this write is a benign no-op.
+     *   * On wake from deep sleep, touchscreen_sleep() wrote 0x05
+     *     (sleep) just before esp_deep_sleep_start(). The chip is
+     *     usually POR'd back to default state by epdiy's power-cycle
+     *     of the EPD rail during display_init() on the LilyGO T5
+     *     E-Paper S3 Pro (the GT911 RST line is routed through the
+     *     TPS65185 / PCA9535 expander), so I2C probes succeed --
+     *     but on some wakes the chip ends up in a state where it
+     *     ACKs reads yet never sets the buffer-ready bit. Writing
+     *     0x00 (Read coord state) here resumes coordinate scanning
+     *     definitively. Failure is logged but not fatal: the runtime
+     *     gt911_try_recover() path in poll_gt911() will retry if the
+     *     chip remains unresponsive. */
+    (void)gt911_write_reg(GT911_REG_COMMAND, 0x00);
+    (void)gt911_write_reg(GT911_REG_STATUS,  0x00);
+#endif
 
     /* Register LVGL pointer indev. lv_init() was already called by
      * draftling_lvgl_port_init(); we just attach the new device to the default
