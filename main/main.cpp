@@ -501,16 +501,25 @@ static void t5_isolate_unused_gpios(void)
  *   * rtc_gpio_isolate() on the spare RTC-IO pads (GPIO1..GPIO4)
  *     from t5_isolate_unused_gpios(). Isolation switches the pad
  *     to the RTC GPIO mux with both input and output buffers
- *     disabled, and that selection survives wake. GPIO3 (the
- *     GT911 TOUCH_INT) in particular has to come back to the
- *     digital GPIO mux before touchscreen_init() configures it as
- *     an input with pull-up, otherwise the INT line never reads
- *     a valid level and the touchscreen appears dead.
+ *     disabled, *and engages an RTC-domain pad hold* via
+ *     rtc_gpio_hold_en(). That selection AND the hold survive the
+ *     wake reset on ESP32-S3. The chip-wide gpio_deep_sleep_hold_dis()
+ *     above only releases *digital* pad holds (the ones armed by
+ *     gpio_hold_en()), and rtc_gpio_deinit() only flips the IO
+ *     mux back to the digital matrix -- neither of them clears the
+ *     RTC hold register. So we have to call rtc_gpio_hold_dis()
+ *     explicitly first, before rtc_gpio_deinit(), or the pad stays
+ *     clamped at its isolated level. GPIO3 (the GT911 TOUCH_INT)
+ *     in particular has to come back to a normal digital input
+ *     before touchscreen_init() configures it as an input with
+ *     pull-up, otherwise the INT line never reads a valid level
+ *     and the touchscreen appears dead after wake even though the
+ *     I2C side of the controller responds.
  *
- * Safe to call unconditionally on every boot: gpio_hold_dis on a
- * pad that was never latched is a no-op, and rtc_gpio_deinit on a
- * pad already in the digital mux just rewrites the (same) mux
- * selection. */
+ * Safe to call unconditionally on every boot: gpio_hold_dis /
+ * rtc_gpio_hold_dis on a pad that was never latched is a no-op,
+ * and rtc_gpio_deinit on a pad already in the digital mux just
+ * rewrites the (same) mux selection. */
 static void t5_release_held_gpios_after_wake(void)
 {
     gpio_deep_sleep_hold_dis();
@@ -524,6 +533,11 @@ static void t5_release_held_gpios_after_wake(void)
     for (size_t i = 0; i < sizeof(rtc_isolated) / sizeof(rtc_isolated[0]); ++i) {
         gpio_num_t g = (gpio_num_t)rtc_isolated[i];
         if (rtc_gpio_is_valid_gpio(g)) {
+            /* Release the RTC pad hold engaged by rtc_gpio_isolate()
+             * before flipping the mux back to the digital GPIO
+             * matrix; otherwise the pad stays clamped at its
+             * isolated level. */
+            (void)rtc_gpio_hold_dis(g);
             (void)rtc_gpio_deinit(g);
         }
     }
