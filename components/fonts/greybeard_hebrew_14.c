@@ -4,11 +4,7 @@
  * Opts: --font Greybeard-14px.ttf -r 0x590-0x5FF --size 14 --bpp 1 --format lvgl --no-compress --lv-fallback greybeard_14_he_next --lv-font-name greybeard_hebrew_14 -o /tmp/gen/greybeard_hebrew_14.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef GREYBEARD_HEBREW_14
 #define GREYBEARD_HEBREW_14 1

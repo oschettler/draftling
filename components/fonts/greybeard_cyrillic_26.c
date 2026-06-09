@@ -4,11 +4,7 @@
  * Opts: --font Greybeard-22px.ttf -r 0x400-0x4FF,0x20B4 --size 26 --bpp 1 --format lvgl --no-compress --lv-font-name greybeard_cyrillic_26 -o /tmp/gen/greybeard_cyrillic_26.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef GREYBEARD_CYRILLIC_26
 #define GREYBEARD_CYRILLIC_26 1

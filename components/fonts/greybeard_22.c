@@ -4,11 +4,7 @@
  * Opts: --font Greybeard-22px.ttf -r 0x20-0x7F,0xA0-0xFF,0x20AC,0x2116 --size 22 --bpp 1 --format lvgl --no-compress --lv-fallback greybeard_22_ext --lv-font-name greybeard_22 -o /tmp/gen/greybeard_22.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef GREYBEARD_22
 #define GREYBEARD_22 1

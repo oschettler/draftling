@@ -458,6 +458,32 @@ lv_font_conv \
   -o greybeard_14.c
 ```
 
+### Post-generation Fix-up
+
+`lv_font_conv` emits a boilerplate include block at the top of every
+generated `.c` file:
+
+```c
+#ifdef LV_LVGL_H_INCLUDE_SIMPLE
+#include "lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+```
+
+Under ESP-IDF the LVGL component is registered as `lvgl__lvgl` and the
+public header is exposed simply as `lvgl.h`; the `lvgl/lvgl.h` fallback
+path does not exist and breaks the build with
+`fatal error: lvgl/lvgl.h: No such file or directory`. After regenerating
+any font, replace that whole `#ifdef … #endif` block with a single line:
+
+```c
+#include "lvgl.h"
+```
+
+This matches the include style used elsewhere in the component
+(`components/fonts/greybeard.c`, `components/fonts/include/greybeard.h`).
+
 ### Unicode Ranges
 
 The base `greybeard_NN.c` files cover the always-on core ranges:

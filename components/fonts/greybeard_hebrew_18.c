@@ -4,11 +4,7 @@
  * Opts: --font Greybeard-18px.ttf -r 0x590-0x5FF --size 18 --bpp 1 --format lvgl --no-compress --lv-fallback greybeard_18_he_next --lv-font-name greybeard_hebrew_18 -o /tmp/gen/greybeard_hebrew_18.c
  ******************************************************************************/
 
-#ifdef LV_LVGL_H_INCLUDE_SIMPLE
 #include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
 
 #ifndef GREYBEARD_HEBREW_18
 #define GREYBEARD_HEBREW_18 1
