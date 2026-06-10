@@ -618,13 +618,12 @@ static volatile bool s_conn_update_pending = false;
  * on failure (in which case the pending flag is left clear so the
  * caller can retry later). */
 static esp_err_t request_conn_param_update(
-        const esp_ble_conn_update_params_t *up)
+        esp_ble_conn_update_params_t *up)
 {
     if (s_conn_update_pending) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = esp_ble_gap_update_conn_params(
-            (esp_ble_conn_update_params_t *)up);
+    esp_err_t err = esp_ble_gap_update_conn_params(up);
     if (err == ESP_OK) {
         s_conn_update_pending = true;
     }
