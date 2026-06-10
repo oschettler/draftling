@@ -584,6 +584,53 @@ static volatile bool s_open_in_flight = false;
 static uint16_t      s_cur_conn_int   = 0;
 static uint16_t      s_cur_conn_lat   = 0;
 
+/* Serializes esp_ble_gap_update_conn_params() requests. The BLE link
+ * layer can only have a single Connection Parameter Update Request in
+ * flight at a time; firing a second one while the first is still
+ * pending produces Bluedroid's "l2cble_start_conn_update, the last
+ * connection update command still pending" warning AND queues the
+ * second request in the controller. On the M5Stack Tab5 (ESP-Hosted
+ * BT controller running on the ESP32-C6 slave) the queued request
+ * eventually fires after the peer has already settled on the new
+ * parameters, the peer fails to answer it, and ~6 s later the
+ * controller reports UPDATE_CONN_PARAMS_EVT with status=16
+ * (ESP_BT_STATUS_TIMEOUT). The link layer's LL response timer then
+ * keeps running and drops the link ~30 s later with rsn=0x22
+ * (HCI_ERR_LMP_LL_RESPONSE_TIMEOUT), which manifests as the keyboard
+ * disconnecting a few seconds after every successful connect.
+ *
+ * The on-chip BT controller used by the LilyGO T5 absorbs the spam
+ * silently; the hosted ESP32-C6 firmware does not. Avoid generating
+ * overlapping requests on both targets.
+ *
+ * s_conn_update_pending is set right before each accepted call to
+ * esp_ble_gap_update_conn_params() and cleared on the matching
+ * ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT (or on disconnect). While set,
+ * further requests are skipped; the UPDATE_CONN_PARAMS_EVT handler
+ * re-evaluates whether another request is still needed once it has
+ * cleared the flag. */
+static volatile bool s_conn_update_pending = false;
+
+/* Wraps esp_ble_gap_update_conn_params() with the in-flight gate
+ * described above. Returns ESP_OK on success (request submitted),
+ * ESP_ERR_INVALID_STATE if skipped because another update is still
+ * pending, or the underlying error from esp_ble_gap_update_conn_params()
+ * on failure (in which case the pending flag is left clear so the
+ * caller can retry later). */
+static esp_err_t request_conn_param_update(
+        const esp_ble_conn_update_params_t *up)
+{
+    if (s_conn_update_pending) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = esp_ble_gap_update_conn_params(
+            (esp_ble_conn_update_params_t *)up);
+    if (err == ESP_OK) {
+        s_conn_update_pending = true;
+    }
+    return err;
+}
+
 /* Set by open_watchdog_cb() to tell the ESP_HIDH_OPEN_EVENT handler
  * (and connect_task post-return) to treat this connection attempt as
  * abandoned: close the device cleanly and resume the reconnect
@@ -984,11 +1031,22 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
                 up.max_int = s_cur_conn_int;
                 up.latency = s_cur_conn_lat;
                 up.timeout = SUPERVISION_TIMEOUT_STEADY_10MS;
-                esp_err_t uerr = esp_ble_gap_update_conn_params(&up);
-                ESP_LOGI(TAG,
-                         "Requesting steady supervision timeout %u "
-                         "(10 ms): %s",
-                         (unsigned)up.timeout, esp_err_to_name(uerr));
+                esp_err_t uerr = request_conn_param_update(&up);
+                if (uerr == ESP_ERR_INVALID_STATE) {
+                    /* Another update is already in flight; the
+                     * UPDATE_CONN_PARAMS_EVT handler will re-evaluate
+                     * once it completes and issue the steady-timeout
+                     * request itself. */
+                    ESP_LOGI(TAG,
+                             "Steady supervision timeout %u (10 ms): "
+                             "deferred (update in flight)",
+                             (unsigned)up.timeout);
+                } else {
+                    ESP_LOGI(TAG,
+                             "Requesting steady supervision timeout %u "
+                             "(10 ms): %s",
+                             (unsigned)up.timeout, esp_err_to_name(uerr));
+                }
             }
         } else {
             ESP_LOGE(TAG, "HID open failed: %d", param->open.status);
@@ -1006,6 +1064,11 @@ static void hidh_callback(void *handler_args, esp_event_base_t base,
          * connect that never reached OPEN. */
         open_watchdog_stop();
         s_open_in_flight = false;
+        /* Any pending Connection Parameter Update Request the
+         * controller was waiting on us for is implicitly cancelled
+         * by the link teardown; clear the gate so the next connection
+         * starts clean. */
+        s_conn_update_pending = false;
         s_connected  = false;
         s_connecting = false;
         s_hidh_dev   = NULL;
@@ -1381,6 +1444,12 @@ static void connect_task(void *arg)
      * supervision timeout to the FLOOR (during open) or relax it to
      * the STEADY target (after open). */
     s_open_in_flight = true;
+    /* Clear any leftover in-flight conn-param-update gate from a prior
+     * link that may have torn down before its UPDATE_CONN_PARAMS_EVT
+     * fired. Without this a stale "pending" flag would silently
+     * suppress the steady-supervision-timeout request on the new
+     * connection. */
+    s_conn_update_pending = false;
     /* Belt-and-braces: hint the controller to negotiate a generous
      * supervision timeout from the start. The keyboard may renegotiate
      * post-pairing, in which case the ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT
@@ -1806,6 +1875,14 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
          * We deliberately leave min_int / max_int / latency at what
          * the peer chose, to avoid regressing power or latency. */
         auto *p = &param->update_conn_params;
+        /* Clear the in-flight gate before logging / re-evaluating so
+         * the helper below will issue a fresh request if one is still
+         * needed. A status=ESP_BT_STATUS_TIMEOUT (16) result here
+         * means the peer never answered the previous request (this is
+         * exactly what we are trying to stop sending in the first
+         * place); clearing the gate either way is correct because the
+         * controller is no longer waiting on us. */
+        s_conn_update_pending = false;
         ESP_LOGI(TAG,
                  "Conn params updated: status=%d int=%u lat=%u sto=%u",
                  (int)p->status, (unsigned)p->conn_int,
@@ -1833,11 +1910,23 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             up.max_int = p->max_int;
             up.latency = p->latency;
             up.timeout = target_to;
-            esp_err_t uerr = esp_ble_gap_update_conn_params(&up);
-            ESP_LOGI(TAG,
-                     "Requesting supervision timeout %s to %u (10 ms): %s",
-                     s_open_in_flight ? "bump" : "relax",
-                     (unsigned)up.timeout, esp_err_to_name(uerr));
+            esp_err_t uerr = request_conn_param_update(&up);
+            if (uerr == ESP_ERR_INVALID_STATE) {
+                /* Should not happen -- we just cleared the gate -- but
+                 * keep the message distinct so it is obvious if a
+                 * future caller adds a racing path. */
+                ESP_LOGI(TAG,
+                         "Supervision timeout %s to %u (10 ms): "
+                         "deferred (update in flight)",
+                         s_open_in_flight ? "bump" : "relax",
+                         (unsigned)up.timeout);
+            } else {
+                ESP_LOGI(TAG,
+                         "Requesting supervision timeout %s to %u "
+                         "(10 ms): %s",
+                         s_open_in_flight ? "bump" : "relax",
+                         (unsigned)up.timeout, esp_err_to_name(uerr));
+            }
         }
         break;
     }
