@@ -79,11 +79,11 @@ screen into two equal-width vertical panes; **Ctrl+3** makes the left
 pane wider (2/3 of the width) and a second **Ctrl+3** flips the left
 pane to 1/3. **Ctrl+1** returns to a single full-width pane.
 
-Each pane selects its own file: while split, **Ctrl+O** opens the file
-browser for the unfocused pane, so the focused document stays visible
-while you pick the second file. **Ctrl+Tab** moves keyboard focus
-between the two panes; the focused pane shows the active cursor and
-receives all editing keys.
+Each pane opens a file for itself: while split, **Ctrl+O** opens the
+file browser for the focused pane, so the picked file loads into that
+pane while the other pane keeps its document. **Ctrl+Tab** moves
+keyboard focus between the two panes; the focused pane shows the active
+cursor and receives all editing keys.
 
 Opening the same file in both panes shares a single in-memory copy of
 the document (the panes are two views of the same buffer), so you can
