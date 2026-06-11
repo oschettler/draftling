@@ -2245,7 +2245,14 @@ extern "C" void editor_ui_show_file_browser(void)
         s_open_target_pane = 0;
     } else {
         /* Split: keep both documents open and target the unfocused pane
-         * so the picked file appears beside the focused one. */
+         * so the picked file appears beside the focused one. The
+         * documents stay open, so editor_close_file() (which also drops
+         * us out of editing mode) is intentionally skipped -- but the
+         * key dispatcher routes on the global editor mode, so we must
+         * still leave editing mode here or the browser screen would be
+         * shown while keys keep going to the editor handler, making the
+         * browser appear frozen. */
+        editor_set_mode(EDITOR_MODE_NORMAL);
         s_open_target_pane = (s_focus + 1) % s_pane_count;
     }
     refresh_file_list();
