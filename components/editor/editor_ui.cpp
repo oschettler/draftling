@@ -615,22 +615,33 @@ static lv_style_t s_style_quote;
 
 static void init_styles(void)
 {
+    /* base_dir AUTO: LVGL's style default is LTR, which makes
+     * LV_TEXT_ALIGN_AUTO always resolve to LEFT and breaks both the
+     * paragraph alignment and lv_label_get_letter_pos() cursor
+     * geometry for RTL text. AUTO detects the paragraph direction
+     * from the first strong character, so a line starting with
+     * Hebrew right-aligns (and keeps right alignment when Latin is
+     * mixed in), while LTR-starting lines stay left-aligned. */
     lv_style_init(&s_style_body);
     lv_style_set_text_font(&s_style_body, body_font());
     lv_style_set_text_color(&s_style_body, theme_fg());
     lv_style_set_pad_all(&s_style_body, 0);
+    lv_style_set_base_dir(&s_style_body, LV_BASE_DIR_AUTO);
 
     lv_style_init(&s_style_h1);
     lv_style_set_text_font(&s_style_h1, h1_font());
     lv_style_set_text_color(&s_style_h1, theme_fg());
+    lv_style_set_base_dir(&s_style_h1, LV_BASE_DIR_AUTO);
 
     lv_style_init(&s_style_h2);
     lv_style_set_text_font(&s_style_h2, h2_font());
     lv_style_set_text_color(&s_style_h2, theme_fg());
+    lv_style_set_base_dir(&s_style_h2, LV_BASE_DIR_AUTO);
 
     lv_style_init(&s_style_h3);
     lv_style_set_text_font(&s_style_h3, h3_font());
     lv_style_set_text_color(&s_style_h3, theme_fg());
+    lv_style_set_base_dir(&s_style_h3, LV_BASE_DIR_AUTO);
 
     lv_style_init(&s_style_code);
     lv_style_set_text_font(&s_style_code, body_font());
@@ -638,6 +649,7 @@ static void init_styles(void)
     lv_style_set_border_width(&s_style_code, 1);
     lv_style_set_border_color(&s_style_code, theme_fg());
     lv_style_set_pad_left(&s_style_code, 4);
+    lv_style_set_base_dir(&s_style_code, LV_BASE_DIR_AUTO);
 
     lv_style_init(&s_style_quote);
     lv_style_set_text_font(&s_style_quote, body_font());
@@ -646,6 +658,7 @@ static void init_styles(void)
     lv_style_set_border_width(&s_style_quote, 2);
     lv_style_set_border_color(&s_style_quote, theme_fg());
     lv_style_set_pad_left(&s_style_quote, 8);
+    lv_style_set_base_dir(&s_style_quote, LV_BASE_DIR_AUTO);
 
     recalc_layout();
 
@@ -814,6 +827,55 @@ static size_t utf8_char_offset(const char *text, int n)
     return off;
 }
 
+
+/* Scan UTF-8 text for the first STRONG directional codepoint,
+ * mirroring LVGL's auto base-direction detection. Returns +1 for
+ * strong LTR (Latin, Greek, Cyrillic), -1 for strong RTL (Hebrew,
+ * Arabic and their presentation forms), 0 if the text contains only
+ * direction-neutral characters (spaces, digits, punctuation). */
+static int utf8_first_strong_dir(const char *s, size_t len)
+{
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)s[i];
+        uint32_t cp;
+        size_t adv;
+        if (c < 0x80) {
+            cp = c; adv = 1;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < len) {
+            cp = ((uint32_t)(c & 0x1F) << 6) |
+                 ((unsigned char)s[i + 1] & 0x3F);
+            adv = 2;
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+            cp = ((uint32_t)(c & 0x0F) << 12) |
+                 (((unsigned char)s[i + 1] & 0x3F) << 6) |
+                 ((unsigned char)s[i + 2] & 0x3F);
+            adv = 3;
+        } else if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+            cp = ((uint32_t)(c & 0x07) << 18) |
+                 (((unsigned char)s[i + 1] & 0x3F) << 12) |
+                 (((unsigned char)s[i + 2] & 0x3F) << 6) |
+                 ((unsigned char)s[i + 3] & 0x3F);
+            adv = 4;
+        } else {
+            cp = c; adv = 1;
+        }
+        i += adv;
+        /* Strong LTR */
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')) return 1;
+        if (cp >= 0x00C0 && cp <= 0x024F) return 1;  /* Latin Extended */
+        if (cp >= 0x0370 && cp <= 0x03FF) return 1;  /* Greek */
+        if (cp >= 0x0400 && cp <= 0x04FF) return 1;  /* Cyrillic */
+        /* Strong RTL */
+        if (cp >= 0x0590 && cp <= 0x05FF) return -1; /* Hebrew */
+        if (cp >= 0x0600 && cp <= 0x06FF) return -1; /* Arabic */
+        if (cp >= 0x0700 && cp <= 0x074F) return -1; /* Syriac */
+        if (cp >= 0x0750 && cp <= 0x077F) return -1; /* Arabic Supplement */
+        if (cp >= 0xFB1D && cp <= 0xFEFF) return -1; /* Hebrew + Arabic
+                                                        Presentation Forms */
+    }
+    return 0;
+}
 
 extern "C" void editor_ui_refresh(void)
 {
@@ -1139,6 +1201,18 @@ extern "C" void editor_ui_refresh(void)
                 cur_x = 2 + lpos.x;
                 cur_y = y_pos + lpos.y;
                 cur_h = line_h;
+
+                /* A line with no strong directional character (empty
+                 * or whitespace-only) detects as LTR and parks the
+                 * cursor at the left edge. If the user has switched
+                 * to an RTL keyboard layout, the first typed
+                 * character will right-align the paragraph, so show
+                 * the cursor at the right edge it is about to type
+                 * from. */
+                if (kb_layout_is_rtl() &&
+                    utf8_first_strong_dir(tmp.c_str(), tmp.size()) == 0) {
+                    cur_x = SCR_W - 4;
+                }
             }
 
             y_pos += rendered_h;
@@ -1278,7 +1352,9 @@ static bool ui_point_to_offset(int x, int y, size_t *out_off)
         lv_point_t p;
         p.x = x_in_label;
         p.y = y_in_label;
-        disp_char = (int)lv_label_get_letter_on(s_line_labels[slot], &p, false);
+        /* bidi=true so taps on RTL/mixed lines map through LVGL's
+         * visual->logical reordering instead of the raw byte order. */
+        disp_char = (int)lv_label_get_letter_on(s_line_labels[slot], &p, true);
     }
     if (disp_char < 0) disp_char = 0;
 
@@ -3260,46 +3336,7 @@ static bool cursor_line_is_rtl(void)
     size_t ll = 0;
     const char *lt = editor_get_line(line, &ll);
     if (!lt) return false;
-    size_t i = 0;
-    while (i < ll) {
-        unsigned char c = (unsigned char)lt[i];
-        uint32_t cp;
-        size_t adv;
-        if (c < 0x80) {
-            cp = c; adv = 1;
-        } else if ((c & 0xE0) == 0xC0 && i + 1 < ll) {
-            cp = ((uint32_t)(c & 0x1F) << 6) |
-                 ((unsigned char)lt[i + 1] & 0x3F);
-            adv = 2;
-        } else if ((c & 0xF0) == 0xE0 && i + 2 < ll) {
-            cp = ((uint32_t)(c & 0x0F) << 12) |
-                 (((unsigned char)lt[i + 1] & 0x3F) << 6) |
-                 ((unsigned char)lt[i + 2] & 0x3F);
-            adv = 3;
-        } else if ((c & 0xF8) == 0xF0 && i + 3 < ll) {
-            cp = ((uint32_t)(c & 0x07) << 18) |
-                 (((unsigned char)lt[i + 1] & 0x3F) << 12) |
-                 (((unsigned char)lt[i + 2] & 0x3F) << 6) |
-                 ((unsigned char)lt[i + 3] & 0x3F);
-            adv = 4;
-        } else {
-            cp = c; adv = 1;
-        }
-        i += adv;
-        /* Strong LTR */
-        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')) return false;
-        if (cp >= 0x00C0 && cp <= 0x024F) return false;  /* Latin Extended */
-        if (cp >= 0x0370 && cp <= 0x03FF) return false;  /* Greek */
-        if (cp >= 0x0400 && cp <= 0x04FF) return false;  /* Cyrillic */
-        /* Strong RTL */
-        if (cp >= 0x0590 && cp <= 0x05FF) return true;   /* Hebrew */
-        if (cp >= 0x0600 && cp <= 0x06FF) return true;   /* Arabic */
-        if (cp >= 0x0700 && cp <= 0x074F) return true;   /* Syriac */
-        if (cp >= 0x0750 && cp <= 0x077F) return true;   /* Arabic Supplement */
-        if (cp >= 0xFB1D && cp <= 0xFEFF) return true;   /* Hebrew + Arabic
-                                                            Presentation Forms */
-    }
-    return false;
+    return utf8_first_strong_dir(lt, ll) < 0;
 }
 
 static void handle_editor_key(const kb_event_t *ev)
