@@ -1270,7 +1270,9 @@ static bool ui_point_to_offset(int x, int y, size_t *out_off)
     if (y_in_label < 0) y_in_label = 0;
 
     /* lv_label_get_letter_on returns a codepoint index into the
-     * displayed text (BIDI-aware, but our content is LTR-only). */
+     * displayed text. LVGL's BIDI reordering (LV_USE_BIDI) is enabled
+     * so Hebrew text renders right-to-left; for pure LTR content this
+     * lookup is a no-op. */
     int disp_char = 0;
     if (s_line_labels[slot]) {
         lv_point_t p;
@@ -3240,6 +3242,66 @@ struct ClipGuard {
 };
 #endif /* CONFIG_DRAFTLING_DISPLAY_EPD */
 
+/* Return true when the line containing the cursor is rendered
+ * right-to-left.  We mirror LVGL's auto base-direction detection
+ * (CONFIG_LV_BIDI_BASE_DIR_DEF_AUTO): scan the raw line UTF-8 and
+ * return based on the first STRONG directional codepoint -- strong
+ * RTL (Hebrew, Arabic, Hebrew/Arabic presentation forms) makes the
+ * paragraph RTL; strong LTR (Latin, Greek, Cyrillic) makes it LTR;
+ * neutrals (punctuation, spaces, digits, markdown markers) are
+ * skipped.  Used to flip the Left / Right arrow keys on RTL lines
+ * so that the visual right arrow moves the cursor to the visual
+ * right (which is logically backward in an RTL paragraph). */
+static bool cursor_line_is_rtl(void)
+{
+    int line, col;
+    editor_get_cursor_pos(&line, &col);
+    (void)col;
+    size_t ll = 0;
+    const char *lt = editor_get_line(line, &ll);
+    if (!lt) return false;
+    size_t i = 0;
+    while (i < ll) {
+        unsigned char c = (unsigned char)lt[i];
+        uint32_t cp;
+        size_t adv;
+        if (c < 0x80) {
+            cp = c; adv = 1;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < ll) {
+            cp = ((uint32_t)(c & 0x1F) << 6) |
+                 ((unsigned char)lt[i + 1] & 0x3F);
+            adv = 2;
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < ll) {
+            cp = ((uint32_t)(c & 0x0F) << 12) |
+                 (((unsigned char)lt[i + 1] & 0x3F) << 6) |
+                 ((unsigned char)lt[i + 2] & 0x3F);
+            adv = 3;
+        } else if ((c & 0xF8) == 0xF0 && i + 3 < ll) {
+            cp = ((uint32_t)(c & 0x07) << 18) |
+                 (((unsigned char)lt[i + 1] & 0x3F) << 12) |
+                 (((unsigned char)lt[i + 2] & 0x3F) << 6) |
+                 ((unsigned char)lt[i + 3] & 0x3F);
+            adv = 4;
+        } else {
+            cp = c; adv = 1;
+        }
+        i += adv;
+        /* Strong LTR */
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z')) return false;
+        if (cp >= 0x00C0 && cp <= 0x024F) return false;  /* Latin Extended */
+        if (cp >= 0x0370 && cp <= 0x03FF) return false;  /* Greek */
+        if (cp >= 0x0400 && cp <= 0x04FF) return false;  /* Cyrillic */
+        /* Strong RTL */
+        if (cp >= 0x0590 && cp <= 0x05FF) return true;   /* Hebrew */
+        if (cp >= 0x0600 && cp <= 0x06FF) return true;   /* Arabic */
+        if (cp >= 0x0700 && cp <= 0x074F) return true;   /* Syriac */
+        if (cp >= 0x0750 && cp <= 0x077F) return true;   /* Arabic Supplement */
+        if (cp >= 0xFB1D && cp <= 0xFEFF) return true;   /* Hebrew + Arabic
+                                                            Presentation Forms */
+    }
+    return false;
+}
+
 static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
@@ -3380,13 +3442,21 @@ static void handle_editor_key(const kb_event_t *ev)
 #endif
         default: break;
         }
-        /* Ctrl+arrow / Ctrl+Home / Ctrl+End for word/doc movement */
-        if (ev->keycode == KB_KEY_LEFT) {
+        /* Ctrl+arrow / Ctrl+Home / Ctrl+End for word/doc movement.
+         * On RTL paragraphs the Left / Right arrows are swapped so
+         * that the visual right arrow walks the cursor to the visual
+         * right (which is the logical previous word in an RTL line). */
+        int word_kc = ev->keycode;
+        if ((word_kc == KB_KEY_LEFT || word_kc == KB_KEY_RIGHT) &&
+            cursor_line_is_rtl()) {
+            word_kc = (word_kc == KB_KEY_LEFT) ? KB_KEY_RIGHT : KB_KEY_LEFT;
+        }
+        if (word_kc == KB_KEY_LEFT) {
             if (shift) editor_set_selection_anchor();
             else editor_clear_selection();
             editor_move_word_left();
         }
-        if (ev->keycode == KB_KEY_RIGHT) {
+        if (word_kc == KB_KEY_RIGHT) {
             if (shift) editor_set_selection_anchor();
             else editor_clear_selection();
             editor_move_word_right();
@@ -3407,7 +3477,19 @@ static void handle_editor_key(const kb_event_t *ev)
     }
 
     /* Special keys */
-    switch (ev->keycode) {
+    /* Flip Left / Right semantics on RTL paragraphs so the visual
+     * right arrow always advances the cursor to the visual right.
+     * In an RTL line that means moving logically backward, and vice
+     * versa. The other cases (Up / Down / Home / End / etc.) are
+     * unaffected because Home / End already map to logical line
+     * boundaries which coincide with the correct visual edges in
+     * either direction. */
+    int nav_kc = ev->keycode;
+    if ((nav_kc == KB_KEY_LEFT || nav_kc == KB_KEY_RIGHT) &&
+        cursor_line_is_rtl()) {
+        nav_kc = (nav_kc == KB_KEY_LEFT) ? KB_KEY_RIGHT : KB_KEY_LEFT;
+    }
+    switch (nav_kc) {
     case KB_KEY_LEFT:
         if (shift) { editor_set_selection_anchor(); editor_move_left(); }
         else if (editor_selection_active()) {
@@ -4777,6 +4859,10 @@ static void rebuild_screens_for_theme(void)
 
 extern "C" void editor_ui_init(void)
 {
+    /* Chain optional Greybeard font subsets (Cyrillic / Hebrew) into
+     * the base font's fallback slot before any text is rendered. */
+    greybeard_init();
+
     load_font_size_from_nvs();
 #if defined(CONFIG_DRAFTLING_DISPLAY_COLOR)
     load_theme_from_nvs();

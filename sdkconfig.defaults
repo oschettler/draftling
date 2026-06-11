@@ -19,6 +19,16 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # The editor UI uses custom Greybeard fonts exclusively.
 CONFIG_LV_FONT_MONTSERRAT_14=y
 
+# Enable LVGL's bidirectional text engine so Hebrew (and other RTL
+# scripts) render right-to-left while we continue to store text in
+# logical order. The base direction is left as AUTO so a paragraph is
+# rendered RTL only when its first strong character is RTL, keeping
+# English / Cyrillic paragraphs untouched. The cost is ~3-4 KB of
+# code; the runtime impact is limited to paragraphs that contain
+# Hebrew characters. Required by CONFIG_KB_LAYOUT_ENABLE_HE.
+CONFIG_LV_USE_BIDI=y
+CONFIG_LV_BIDI_BASE_DIR_DEF_AUTO=y
+
 # Route LVGL's internal allocator through PSRAM. Without this LVGL keeps
 # a 64 KB TLSF pool as a static array in internal DRAM (.bss) that is
 # permanently subtracted from the budget shared with WiFi static RX

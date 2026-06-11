@@ -25,6 +25,9 @@ typedef enum {
 #ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     KB_LAYOUT_FR,
 #endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_HE
+    KB_LAYOUT_HE,
+#endif
     KB_LAYOUT_COUNT,
 } kb_layout_id_t;
 

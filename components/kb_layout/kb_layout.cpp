@@ -352,6 +352,132 @@ static const char *UA_SHIFT[] = {
 };
 #endif /* CONFIG_KB_LAYOUT_ENABLE_UA */
 
+#ifdef CONFIG_KB_LAYOUT_ENABLE_HE
+/* ------------------------------------------------------------------ */
+/* Hebrew (Israeli standard, SI 1452-2)                               */
+/* ------------------------------------------------------------------ */
+/* Hebrew has no case, so all 22 base letters appear in the unshifted
+ * layer only. Shifted letter keys produce Latin uppercase letters in
+ * the SI 1452-2 standard, which is convenient when mixing English
+ * acronyms into Hebrew prose.
+ *
+ * Hebrew text is stored in logical (typing) order in our buffer; the
+ * visual right-to-left ordering is handled by LVGL's bidirectional
+ * text engine (LV_USE_BIDI). The bracket / parenthesis pairs are
+ * visually swapped on the keytop in the standard so that opening
+ * and closing characters read "naturally" inside an RTL run:
+ *   [ key -> ]   ] key -> [
+ *   shift-9 -> )    shift-0 -> (
+ *
+ * Hebrew letter UTF-8 encoding: U+05D0..U+05EA -> 0xD7 0x90..0xAA
+ */
+
+static const char *HE_NORMAL[] = {
+    /* 04 a */ "\xD7\xA9",   /* shin     U+05E9 */
+    /* 05 b */ "\xD7\xA0",   /* nun      U+05E0 */
+    /* 06 c */ "\xD7\x91",   /* bet      U+05D1 */
+    /* 07 d */ "\xD7\x92",   /* gimel    U+05D2 */
+    /* 08 e */ "\xD7\xA7",   /* qof      U+05E7 */
+    /* 09 f */ "\xD7\x9B",   /* kaf      U+05DB */
+    /* 0A g */ "\xD7\xA2",   /* ayin     U+05E2 */
+    /* 0B h */ "\xD7\x99",   /* yod      U+05D9 */
+    /* 0C i */ "\xD7\x9F",   /* final nun U+05DF */
+    /* 0D j */ "\xD7\x97",   /* het      U+05D7 */
+    /* 0E k */ "\xD7\x9C",   /* lamed    U+05DC */
+    /* 0F l */ "\xD7\x9A",   /* final kaf U+05DA */
+    /* 10 m */ "\xD7\xA6",   /* tsadi    U+05E6 */
+    /* 11 n */ "\xD7\x9E",   /* mem      U+05DE */
+    /* 12 o */ "\xD7\x9D",   /* final mem U+05DD */
+    /* 13 p */ "\xD7\xA4",   /* pe       U+05E4 */
+    /* 14 q */ "/",
+    /* 15 r */ "\xD7\xA8",   /* resh     U+05E8 */
+    /* 16 s */ "\xD7\x93",   /* dalet    U+05D3 */
+    /* 17 t */ "\xD7\x90",   /* alef     U+05D0 */
+    /* 18 u */ "\xD7\x95",   /* vav      U+05D5 */
+    /* 19 v */ "\xD7\x94",   /* he       U+05D4 */
+    /* 1A w */ "'",
+    /* 1B x */ "\xD7\xA1",   /* samekh   U+05E1 */
+    /* 1C y */ "\xD7\x98",   /* tet      U+05D8 */
+    /* 1D z */ "\xD7\x96",   /* zayin    U+05D6 */
+    /* 1E 1 */ "1",
+    /* 1F 2 */ "2",
+    /* 20 3 */ "3",
+    /* 21 4 */ "4",
+    /* 22 5 */ "5",
+    /* 23 6 */ "6",
+    /* 24 7 */ "7",
+    /* 25 8 */ "8",
+    /* 26 9 */ "9",
+    /* 27 0 */ "0",
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D - */ "-",
+    /* 2E = */ "=",
+    /* 2F [ */ "]",          /* visual swap for RTL */
+    /* 30 ] */ "[",          /* visual swap for RTL */
+    /* 31 \ */ "\\",
+    /* 32   */ NULL,
+    /* 33 ; */ "\xD7\xA3",   /* final pe U+05E3 */
+    /* 34 ' */ ",",
+    /* 35 ` */ ";",
+    /* 36 , */ "\xD7\xAA",   /* tav      U+05EA */
+    /* 37 . */ "\xD7\xA5",   /* final tsadi U+05E5 */
+    /* 38 / */ ".",
+};
+
+static const char *HE_SHIFT[] = {
+    /* Shifted letter keys produce Latin uppercase per SI 1452-2 */
+    /* 04 A */ "A",
+    /* 05 B */ "B",
+    /* 06 C */ "C",
+    /* 07 D */ "D",
+    /* 08 E */ "E",
+    /* 09 F */ "F",
+    /* 0A G */ "G",
+    /* 0B H */ "H",
+    /* 0C I */ "I",
+    /* 0D J */ "J",
+    /* 0E K */ "K",
+    /* 0F L */ "L",
+    /* 10 M */ "M",
+    /* 11 N */ "N",
+    /* 12 O */ "O",
+    /* 13 P */ "P",
+    /* 14 Q */ "Q",
+    /* 15 R */ "R",
+    /* 16 S */ "S",
+    /* 17 T */ "T",
+    /* 18 U */ "U",
+    /* 19 V */ "V",
+    /* 1A W */ "W",
+    /* 1B X */ "X",
+    /* 1C Y */ "Y",
+    /* 1D Z */ "Z",
+    /* 1E 1 */ "!",
+    /* 1F 2 */ "@",
+    /* 20 3 */ "#",
+    /* 21 4 */ "$",
+    /* 22 5 */ "%",
+    /* 23 6 */ "^",
+    /* 24 7 */ "&",
+    /* 25 8 */ "*",
+    /* 26 9 */ ")",          /* swapped vs US for RTL */
+    /* 27 0 */ "(",          /* swapped vs US for RTL */
+    /* 28-2C */ NULL, NULL, NULL, NULL, " ",
+    /* 2D */ "_",
+    /* 2E */ "+",
+    /* 2F */ "}",
+    /* 30 */ "{",
+    /* 31 */ "|",
+    /* 32 */ NULL,
+    /* 33 */ ":",
+    /* 34 */ "\x22",
+    /* 35 */ "~",
+    /* 36 */ ">",
+    /* 37 */ "<",
+    /* 38 */ "?",
+};
+#endif /* CONFIG_KB_LAYOUT_ENABLE_HE */
+
 /* ------------------------------------------------------------------ */
 /* Layout table structure                                             */
 /* ------------------------------------------------------------------ */
@@ -378,6 +504,9 @@ static const layout_table_t s_layouts[KB_LAYOUT_COUNT] = {
 #ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     [KB_LAYOUT_FR] = { FR_NORMAL, FR_SHIFT, FR_ALTGR,  ARRAY_SIZE(FR_NORMAL) },
 #endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_HE
+    [KB_LAYOUT_HE] = { HE_NORMAL, HE_SHIFT, NULL,      ARRAY_SIZE(HE_NORMAL) },
+#endif
 };
 
 static const char *s_layout_names[KB_LAYOUT_COUNT] = {
@@ -392,6 +521,9 @@ static const char *s_layout_names[KB_LAYOUT_COUNT] = {
 #endif
 #ifdef CONFIG_KB_LAYOUT_ENABLE_FR
     [KB_LAYOUT_FR] = "FR",
+#endif
+#ifdef CONFIG_KB_LAYOUT_ENABLE_HE
+    [KB_LAYOUT_HE] = "HE",
 #endif
 };
 

@@ -24,4 +24,14 @@ config KB_LAYOUT_ENABLE_FR
     help
         Enable the French AZERTY keyboard layout with accents.
 
+config KB_LAYOUT_ENABLE_HE
+    bool "Hebrew (Israeli standard)"
+    default n
+    help
+        Enable the Hebrew (Israeli standard SI 1452) keyboard layout.
+        Enabling this option also pulls the Hebrew glyph range
+        (U+0590..U+05FF) of the Greybeard font into the firmware.
+        Hebrew typing is right-to-left; LVGL's bidirectional text
+        engine (LV_USE_BIDI) handles the visual reordering.
+
 endmenu

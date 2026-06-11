@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <esp_log.h>
@@ -237,13 +238,108 @@ extern "C" void editor_save_meta(void)
     sd_card_write_file(meta, body, (size_t)n);
 }
 
+/* Append one Unicode codepoint as UTF-8 into dst[*dpos..dst_cap).
+ * Returns false if the codepoint does not fit. Codepoints in the
+ * UTF-16 surrogate range (0xD800..0xDFFF) and codepoints above
+ * 0x10FFFF are mapped to U+FFFD so callers do not need to filter. */
+static bool append_utf8_cp(char *dst, size_t dst_cap, size_t *dpos, uint32_t cp)
+{
+    if (cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;
+    if (cp > 0x10FFFF) cp = 0xFFFD;
+
+    size_t need;
+    if      (cp < 0x80)    need = 1;
+    else if (cp < 0x800)   need = 2;
+    else if (cp < 0x10000) need = 3;
+    else                   need = 4;
+
+    if (*dpos + need > dst_cap) return false;
+
+    char *p = dst + *dpos;
+    switch (need) {
+    case 1:
+        p[0] = (char)cp;
+        break;
+    case 2:
+        p[0] = (char)(0xC0 | (cp >> 6));
+        p[1] = (char)(0x80 | (cp & 0x3F));
+        break;
+    case 3:
+        p[0] = (char)(0xE0 | (cp >> 12));
+        p[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        p[2] = (char)(0x80 | (cp & 0x3F));
+        break;
+    case 4:
+        p[0] = (char)(0xF0 | (cp >> 18));
+        p[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        p[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        p[3] = (char)(0x80 | (cp & 0x3F));
+        break;
+    }
+    *dpos += need;
+    return true;
+}
+
+/* Transcode a UTF-16 buffer (LE if little_endian, BE otherwise) into
+ * UTF-8 directly into s_buf. Surrogate pairs are decoded; unpaired
+ * surrogates are emitted as U+FFFD. Returns the number of UTF-8 bytes
+ * written, or (size_t)-1 if the output would not fit. */
+static size_t transcode_utf16_to_utf8(const uint8_t *src, size_t src_len,
+                                      bool little_endian,
+                                      char *dst, size_t dst_cap)
+{
+    size_t i = 0;
+    size_t out = 0;
+    /* Round odd trailing byte off — we cannot decode half a code unit. */
+    if (src_len & 1) src_len--;
+
+    while (i + 1 < src_len) {
+        uint16_t u = little_endian
+            ? (uint16_t)(src[i] | (src[i + 1] << 8))
+            : (uint16_t)((src[i] << 8) | src[i + 1]);
+        i += 2;
+
+        uint32_t cp;
+        if (u >= 0xD800 && u <= 0xDBFF && i + 1 < src_len) {
+            /* High surrogate — combine with the following low surrogate. */
+            uint16_t lo = little_endian
+                ? (uint16_t)(src[i] | (src[i + 1] << 8))
+                : (uint16_t)((src[i] << 8) | src[i + 1]);
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000u + ((uint32_t)(u - 0xD800) << 10)
+                              + (uint32_t)(lo - 0xDC00);
+                i += 2;
+            } else {
+                cp = 0xFFFD;        /* lone high surrogate */
+            }
+        } else if (u >= 0xDC00 && u <= 0xDFFF) {
+            cp = 0xFFFD;            /* lone low surrogate */
+        } else {
+            cp = u;
+        }
+
+        /* Drop UTF-16 line-separator and the rare CR (U+000D) that
+         * Windows files use ahead of LF — the editor stores LF-only
+         * lines. We leave the LF itself in place. */
+        if (cp == 0x000D) continue;
+
+        if (!append_utf8_cp(dst, dst_cap, &out, cp)) {
+            return (size_t)-1;
+        }
+    }
+    return out;
+}
+
 extern "C" esp_err_t editor_open_file(const char *path)
 {
     /* Cheap size pre-check: avoid loading hundreds of KB into a
      * temporary heap allocation just to discover that the file does
-     * not fit in the editor buffer. */
+     * not fit in the editor buffer. UTF-16 sources expand by at most
+     * 1.5x when transcoded to UTF-8 (BMP chars: 2 -> up to 3 bytes;
+     * surrogate pairs: 4 -> 4 bytes), so we still want a generous
+     * upper bound here. */
     long fsize = sd_card_file_size(path);
-    if (fsize >= 0 && (size_t)fsize > s_buf_size - 64) {
+    if (fsize >= 0 && (size_t)fsize > (s_buf_size - 64) * 2 / 3) {
         ESP_LOGW(TAG, "Refusing to open %s: %ld bytes > editor buffer (%u KB)",
                  path, fsize, (unsigned)(s_buf_size / 1024));
         return ESP_ERR_NO_MEM;
@@ -254,10 +350,34 @@ extern "C" esp_err_t editor_open_file(const char *path)
     esp_err_t ret = sd_card_read_file(path, &data, &len);
     if (ret != ESP_OK) return ret;
 
-    if (len > s_buf_size - 64) { free(data); return ESP_ERR_NO_MEM; }
-
-    memcpy(s_buf, data, len);
-    s_gap_start = len;
+    /* Detect a Unicode BOM and transcode if needed. The editor stores
+     * text as UTF-8 internally; files saved as UTF-16 (common on
+     * Windows -- Notepad still writes UTF-16 LE for "Unicode") would
+     * otherwise be interpreted as random Latin-1 / continuation bytes
+     * and render as garbage. */
+    const uint8_t *u = (const uint8_t *)data;
+    size_t written;
+    if (len >= 2 && u[0] == 0xFF && u[1] == 0xFE) {
+        /* UTF-16 LE BOM */
+        written = transcode_utf16_to_utf8(u + 2, len - 2, true,
+                                          s_buf, s_buf_size - 64);
+        if (written == (size_t)-1) { free(data); return ESP_ERR_NO_MEM; }
+    } else if (len >= 2 && u[0] == 0xFE && u[1] == 0xFF) {
+        /* UTF-16 BE BOM */
+        written = transcode_utf16_to_utf8(u + 2, len - 2, false,
+                                          s_buf, s_buf_size - 64);
+        if (written == (size_t)-1) { free(data); return ESP_ERR_NO_MEM; }
+    } else {
+        /* Plain UTF-8 (with or without an optional UTF-8 BOM). Strip a
+         * leading EF BB BF so it does not show up as a stray glyph at
+         * the top of the buffer. */
+        size_t off = 0;
+        if (len >= 3 && u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) off = 3;
+        if (len - off > s_buf_size - 64) { free(data); return ESP_ERR_NO_MEM; }
+        memcpy(s_buf, data + off, len - off);
+        written = len - off;
+    }
+    s_gap_start = written;
     s_gap_end   = s_buf_size;
     free(data);
 
@@ -273,7 +393,8 @@ extern "C" esp_err_t editor_open_file(const char *path)
      * sidecar (no-op if the file was never opened before). */
     editor_load_meta();
 
-    ESP_LOGI(TAG, "Opened: %s (%zu bytes)", path, len);
+    ESP_LOGI(TAG, "Opened: %s (%zu bytes on disk, %zu stored)",
+             path, len, s_gap_start);
     return ESP_OK;
 }
 
