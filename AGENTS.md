@@ -277,6 +277,39 @@ The keyboard layout is cycled with `Ctrl+L` or, equivalently, with
 `Win+Space` (the GUI modifier plus HID keycode 0x2C); both call
 `kb_layout_next()` from `handle_editor_key()`.
 
+The editor UI supports a vertical (left/right) **split screen** built
+on the multi-document engine. `editor_ui.cpp` wraps the per-pane UI
+state (container, cursor, logo, line-label / selection-rect arrays,
+render caches, bound `editor_doc_t`, and pane geometry x / w / y / h)
+in a `pane_t` struct held in a fixed `s_panes[EDITOR_MAX_PANES]`
+(EDITOR_MAX_PANES = 2) pool, mirroring the `editor_doc_t` aliasing
+pattern in `editor.cpp`: macros alias the historical widget globals
+(`s_cont_edit`, `s_cursor`, ...) to `s_rp->...` where `s_rp` is the
+currently rendered pane. `pane_bind()` / `pane_bind_focus()` point
+`s_rp` and the engine's active document at a pane before drawing or
+handling a key. `editor_ui_refresh()` loops the active panes
+(unfocused first, focused last) calling `refresh_active_pane()` for
+each, then updates the title / battery once. The split layout is
+driven by `split_mode_t` (SPLIT_NONE, SPLIT_HALF, SPLIT_LEFT_2_3,
+SPLIT_LEFT_1_3); `recalc_pane_geometry()` keeps both panes full-height
+and only varies x / width (1 px divider via `s_pane_divider`).
+Shortcuts: `Ctrl+1` single pane (`SPLIT_NONE`), `Ctrl+2` equal split
+(`SPLIT_HALF`), `Ctrl+3` left-2/3 then toggling to left-1/3
+(`editor_ui_cycle_wide_split()`), `Ctrl+Tab` move focus between panes
+(`editor_ui_focus_other_pane()`). Digit HID keycodes (1 = 0x1E,
+2 = 0x1F, 3 = 0x20) and `KB_KEY_TAB` are matched before the a..z Ctrl
+switch in `handle_editor_key()`. While split, the file browser
+(`Ctrl+O`) targets the unfocused pane via `open_into_pane()`; opening
+the same path in both panes shares one refcounted buffer (two views of
+one document). Enabling a split acquires a fresh untitled document
+into pane 1; collapsing keeps it open in the background. The split
+mode persists in NVS (`editor` namespace, key `split`) via
+`save_split_to_nvs()` / `load_split_from_nvs()` and is restored at the
+end of `editor_ui_init()` (only the layout is restored, not the open
+documents, matching the existing boot-to-file-browser behavior).
+Auto-save, the standby pre-sleep callback, and `Ctrl+G` git-sync all
+iterate every open document via `editor_doc_foreach()`.
+
 `Esc` in the editor leaves to the file browser. When the document has
 unsaved changes it instead opens a small modal overlay (`s_exit_panel`,
 handled by `handle_exit_prompt_key()`) offering three choices --

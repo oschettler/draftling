@@ -80,18 +80,21 @@ static const char *FONT_SIZE_LABELS[FONT_SIZE_COUNT] = { "11 px", "14 px", "16 p
 /* NVS namespace/key for font size */
 #define NVS_NS_EDITOR   "editor"
 #define NVS_KEY_FONTSZ  "fontsz"
+#define NVS_KEY_SPLIT   "split"
 
 /* Current body font size in pixels (default 11) */
 static int s_font_size = 11;
 
 /* Derived layout values -- recomputed when font size changes */
 static int s_line_h       = 11;
-static int s_visible_lines = 0;   /* computed after s_line_h is set */
 static int s_char_w       = 6;
 
-/* Accessor macros that used to be compile-time constants */
+/* Accessor macros that used to be compile-time constants.
+ * VISIBLE_LINES is derived from the *current* pane's content height
+ * (s_rp->h) so it stays correct whether the editor is showing one
+ * full-height pane or two half-height split panes. */
 #define LINE_H        s_line_h
-#define VISIBLE_LINES s_visible_lines
+#define VISIBLE_LINES (s_line_h > 0 ? (s_rp->h / s_line_h) : 1)
 #define CHAR_W        s_char_w
 
 /* Forward declaration (defined below) */
@@ -344,7 +347,6 @@ static void recalc_layout(void)
     const lv_font_t *bf = body_font();
     s_line_h = lv_font_get_line_height(bf);
     s_char_w = char_width_for_font(bf);
-    s_visible_lines = EDITOR_H / s_line_h;
 }
 
 /* Return the index into FONT_SIZE_OPTIONS for the given pixel size.
@@ -380,16 +382,23 @@ static void save_font_size_to_nvs(void)
     }
 }
 
-/* LVGL objects */
+/* LVGL objects.
+ *
+ * The per-document editor widgets (content container, cursor bar,
+ * "draftling" placeholder, line-label / selection-rectangle pools and
+ * their render caches) live in the pane_t pool defined further below
+ * and are reached through file-scope aliasing macros (s_cont_edit,
+ * s_cursor, s_img_logo, s_line_labels, ...). Everything that is shared
+ * across panes (the screen, title / status bars, file browser) stays a
+ * real global here. */
 static lv_obj_t *s_scr       = NULL;
 static lv_obj_t *s_lbl_title = NULL;
-static lv_obj_t *s_cont_edit = NULL;
 static lv_obj_t *s_lbl_status= NULL;
-static lv_obj_t *s_cursor    = NULL;
 static lv_obj_t *s_scr_browser = NULL;
 static lv_obj_t *s_list_files  = NULL;
 static lv_obj_t *s_lbl_br_status = NULL;
-static lv_obj_t *s_img_logo    = NULL;
+/* Divider line between the two editor panes (split mode only). */
+static lv_obj_t *s_pane_divider = NULL;
 
 /* One-shot LVGL timer that restores the status bar to its standard
  * text 3 seconds after a transient message (e.g. "File too large")
@@ -421,13 +430,13 @@ static bool      s_menu_open    = false;
 static lv_timer_t *s_blink_timer = NULL;
 #endif
 static bool s_cursor_visible = true;
-/* True when editor_ui_refresh() positioned s_cursor inside the
- * visible editor area on the last render. This is independent of
- * LV_OBJ_FLAG_HIDDEN, which on LCD backends is also toggled by the
+/* True when editor_ui_refresh() positioned the cursor inside the
+ * visible editor area on the last render. Per-pane (stored in pane_t)
+ * and reached through the s_cursor_on_screen alias. This is independent
+ * of LV_OBJ_FLAG_HIDDEN, which on LCD backends is also toggled by the
  * blink timer (cursor_blink_cb) and would otherwise make visual
  * Up/Down think the cursor is off-screen mid-blink and fall back
  * to logical-line jumps. */
-static bool s_cursor_on_screen = false;
 static int  s_browser_sel    = 0;
 /* See s_menu_sel_prev. */
 static int  s_browser_sel_prev = -1;
@@ -593,34 +602,99 @@ static const char *TIMEOUT_LABELS[]     = { "Off", "5 min", "10 min",
  * was discarded by the codepoint trimmer. We now build the per-line
  * display string into a growable std::string and cache it the same
  * way, so the cap is bounded only by available heap. */
-static lv_obj_t *s_line_labels[MAX_LINE_LABELS] = {NULL};
-
-/* Selection highlight rectangle pool (one per visible line) */
-static lv_obj_t *s_sel_rects[MAX_LINE_LABELS] = {NULL};
-
-/* Per-slot render cache.  The editor body is by far the largest part
- * of the screen, and on every keystroke editor_ui_refresh() is called
- * which previously rewrote the text and style of every visible line.
- * Each lv_label_set_text / lv_obj_remove_style_all / lv_obj_set_pos
- * invalidates the corresponding LVGL area, so the union of dirty
- * rectangles ended up covering nearly the whole editor area.  On the
- * e-paper backends that crosses the >75% "huge area" threshold in
- * the display driver and triggers a slow full-screen e-paper refresh
- * on every keystroke (and on every menu navigation step, which used a
- * similar full-rebuild pattern).
+/* ---- Editor panes ----
  *
- * The cache below records what we last drew into each slot so we can
- * skip the LVGL mutations whenever the visible content is unchanged.
- * The fast-path covers the common case of typing or moving the cursor
- * with no active selection: only the slot whose text actually changed
- * (and the cursor bar / title bar) gets invalidated, so the panel can
- * run a fast partial-region waveform instead of a full refresh. */
-static std::string s_prev_line_text[MAX_LINE_LABELS];
-static int  s_prev_line_type[MAX_LINE_LABELS];     /* md_line_type_t, -1 if cache empty */
-static int  s_prev_line_y[MAX_LINE_LABELS];        /* y_pos last used for this slot, -1 if cache empty */
-static int  s_prev_line_h[MAX_LINE_LABELS];        /* rendered_h last computed */
-static bool s_prev_line_visible[MAX_LINE_LABELS];  /* slot was visible (not hidden) */
-static bool s_prev_line_was_selected[MAX_LINE_LABELS]; /* line intersected the selection */
+ * The editor body can be shown as one pane (the historical default) or
+ * split into two side-by-side (left / right) panes, each bound to its
+ * own editor_doc_t. Every per-document widget and render-cache slot
+ * lives in a pane_t. The large body of rendering, cursor, selection and
+ * touch code below was written against file-scope globals (s_cont_edit,
+ * s_cursor, s_line_labels[], s_prev_line_*[], ...). Rather than thread
+ * a pane pointer through dozens of helpers, those names are #defined as
+ * aliases onto the fields of the "current" pane s_rp -- mirroring the
+ * editor_doc_t aliasing trick in editor.cpp. Code that operates on a
+ * specific pane binds it first with pane_bind().
+ *
+ * Each pane keeps its own MAX_LINE_LABELS-slot label / selection pools
+ * and per-slot render cache. A split layout halves each pane's width
+ * but keeps the full editor height, and each pane wraps text to its
+ * own (narrower) width.
+ *
+ * The per-slot render cache lets editor_ui_refresh() skip LVGL
+ * mutations whenever a slot's visible text / style / position are
+ * unchanged, which keeps the e-paper dirty region small enough for a
+ * fast partial refresh instead of a full-screen flash. */
+#define EDITOR_MAX_PANES 2
+
+typedef struct {
+    lv_obj_t   *cont;      /* per-pane content container */
+    lv_obj_t   *cursor;    /* thin vertical cursor bar */
+    lv_obj_t   *logo;      /* "draftling" placeholder when the doc is empty */
+    lv_obj_t   *line_labels[MAX_LINE_LABELS];
+    lv_obj_t   *sel_rects[MAX_LINE_LABELS];
+    std::string prev_line_text[MAX_LINE_LABELS];
+    int  prev_line_type[MAX_LINE_LABELS];    /* md_line_type_t, -1 if cache empty */
+    int  prev_line_y[MAX_LINE_LABELS];       /* y_pos last used, -1 if cache empty */
+    int  prev_line_h[MAX_LINE_LABELS];       /* rendered_h last computed */
+    bool prev_line_visible[MAX_LINE_LABELS]; /* slot was visible (not hidden) */
+    bool prev_line_was_selected[MAX_LINE_LABELS]; /* line intersected the selection */
+    editor_doc_t *doc;     /* bound document (NULL until acquired) */
+    int  x;                /* content-area left (screen x) */
+    int  w;                /* content-area width */
+    int  y;                /* content-area top (screen y) */
+    int  h;                /* content-area height */
+    bool cursor_on_screen; /* last refresh placed the cursor in view */
+} pane_t;
+
+static pane_t  s_panes[EDITOR_MAX_PANES];
+static pane_t *s_rp          = &s_panes[0];  /* current render / active pane */
+static int     s_pane_count  = 1;            /* 1 = single, 2 = split */
+static int     s_focus       = 0;            /* focused pane index (0..count-1) */
+
+/* Split layout: single pane, or a vertical (left / right) split with
+ * the left pane occupying 1/2, 2/3 or 1/3 of the usable width. Driven
+ * by the Ctrl+1 / Ctrl+2 / Ctrl+3 shortcuts. */
+typedef enum {
+    SPLIT_NONE = 0,   /* single pane (full width) */
+    SPLIT_HALF,       /* two panes, left = 1/2 */
+    SPLIT_LEFT_2_3,   /* two panes, left = 2/3 */
+    SPLIT_LEFT_1_3,   /* two panes, left = 1/3 */
+} split_mode_t;
+static split_mode_t s_split_mode = SPLIT_NONE;
+
+/* Which pane a file-browser "open" / "new" action should load into.
+ * Set by editor_ui_show_file_browser(): in single-pane mode this is
+ * pane 0 (replace the current document); while split it is the
+ * unfocused pane, so opening a second file places it beside the
+ * focused one. */
+static int     s_open_target_pane = 0;
+
+/* Alias the historical per-document globals onto the current pane. */
+#define s_cont_edit              (s_rp->cont)
+#define s_cursor                 (s_rp->cursor)
+#define s_img_logo               (s_rp->logo)
+#define s_line_labels            (s_rp->line_labels)
+#define s_sel_rects              (s_rp->sel_rects)
+#define s_prev_line_text         (s_rp->prev_line_text)
+#define s_prev_line_type         (s_rp->prev_line_type)
+#define s_prev_line_y            (s_rp->prev_line_y)
+#define s_prev_line_h            (s_rp->prev_line_h)
+#define s_prev_line_visible      (s_rp->prev_line_visible)
+#define s_prev_line_was_selected (s_rp->prev_line_was_selected)
+#define s_cursor_on_screen       (s_rp->cursor_on_screen)
+
+/* Bind pane idx as the current pane: point the aliasing macros at it
+ * and make its document the engine's active document. */
+static void pane_bind(int idx)
+{
+    if (idx < 0) idx = 0;
+    if (idx >= EDITOR_MAX_PANES) idx = EDITOR_MAX_PANES - 1;
+    s_rp = &s_panes[idx];
+    if (s_rp->doc) editor_set_active(s_rp->doc);
+}
+
+/* Bind the focused pane (the one that receives keyboard input). */
+static void pane_bind_focus(void) { pane_bind(s_focus); }
 
 static void invalidate_render_cache(void)
 {
@@ -631,6 +705,88 @@ static void invalidate_render_cache(void)
         s_prev_line_h[i]            = 0;
         s_prev_line_visible[i]      = false;
         s_prev_line_was_selected[i] = false;
+    }
+}
+
+/* Wipe every pane's render cache (used on theme rebuild / font change
+ * where all panes' labels were recreated). */
+static void invalidate_all_render_caches(void)
+{
+    pane_t *save = s_rp;
+    for (int p = 0; p < EDITOR_MAX_PANES; p++) {
+        s_rp = &s_panes[p];
+        invalidate_render_cache();
+    }
+    s_rp = save;
+}
+
+/* Recompute each pane's content-area rectangle from the current split
+ * state. The editor body occupies [EDITOR_Y, EDITOR_Y + EDITOR_H). A
+ * single pane fills it entirely; a vertical split places two panes
+ * side by side (left / right) with a 1 px vertical divider between
+ * them. Both panes keep the full editor height; only their width and
+ * x-offset differ, so each pane wraps text to its own narrower width.
+ * The left pane's share of the usable width is set by s_split_mode. */
+static void recalc_pane_geometry(void)
+{
+    if (s_pane_count <= 1) {
+        s_panes[0].x = 0;
+        s_panes[0].w = SCR_W;
+        s_panes[0].y = EDITOR_Y;
+        s_panes[0].h = EDITOR_H;
+        s_panes[1].x = 0;
+        s_panes[1].w = 0;
+        s_panes[1].y = EDITOR_Y;
+        s_panes[1].h = EDITOR_H;
+        return;
+    }
+    int total = SCR_W - 1;             /* 1 px reserved for the divider */
+    int left_w;
+    switch (s_split_mode) {
+    case SPLIT_LEFT_2_3: left_w = (total * 2) / 3; break;
+    case SPLIT_LEFT_1_3: left_w = total / 3;       break;
+    case SPLIT_HALF:
+    default:             left_w = total / 2;       break;
+    }
+    if (left_w < 1) left_w = 1;
+    if (left_w > total - 1) left_w = total - 1;
+    int right_w = total - left_w;
+    s_panes[0].x = 0;
+    s_panes[0].w = left_w;
+    s_panes[0].y = EDITOR_Y;
+    s_panes[0].h = EDITOR_H;
+    s_panes[1].x = left_w + 1;
+    s_panes[1].w = right_w;
+    s_panes[1].y = EDITOR_Y;
+    s_panes[1].h = EDITOR_H;
+}
+
+/* Apply the current split geometry to the (already created) pane
+ * containers and the divider line. Hides inactive panes / the divider
+ * in single-pane mode. */
+static void layout_panes(void)
+{
+    recalc_pane_geometry();
+    for (int p = 0; p < EDITOR_MAX_PANES; p++) {
+        if (!s_panes[p].cont) continue;
+        if (p < s_pane_count) {
+            lv_obj_set_pos(s_panes[p].cont, s_panes[p].x, s_panes[p].y);
+            lv_obj_set_size(s_panes[p].cont, s_panes[p].w, s_panes[p].h);
+            lv_obj_remove_flag(s_panes[p].cont, LV_OBJ_FLAG_HIDDEN);
+            if (s_panes[p].logo)
+                lv_obj_set_width(s_panes[p].logo, s_panes[p].w);
+        } else {
+            lv_obj_add_flag(s_panes[p].cont, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (s_pane_divider) {
+        if (s_pane_count > 1) {
+            lv_obj_set_pos(s_pane_divider, s_panes[0].x + s_panes[0].w, EDITOR_Y);
+            lv_obj_set_size(s_pane_divider, 1, EDITOR_H);
+            lv_obj_remove_flag(s_pane_divider, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_pane_divider, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -699,8 +855,11 @@ static void init_styles(void)
 static void cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
+    /* Blink only the focused pane's caret, and only while the refresh
+     * code actually placed it on-screen (s_cursor_on_screen). */
+    pane_bind_focus();
     s_cursor_visible = !s_cursor_visible;
-    if (s_cursor) {
+    if (s_cursor && s_cursor_on_screen) {
         if (s_cursor_visible) lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
     }
@@ -942,10 +1101,13 @@ static int utf8_first_strong_dir(const char *s, size_t len)
     return 0;
 }
 
-extern "C" void editor_ui_refresh(void)
+/* Render the currently-bound pane (s_rp) for its bound document. The
+ * caller binds the pane (pane_bind) and decides whether this pane shows
+ * the cursor (draw_cursor is true only for the focused pane). The
+ * shared title / battery widgets are refreshed once by the
+ * editor_ui_refresh() wrapper, not here. */
+static void refresh_active_pane(bool draw_cursor)
 {
-    if (editor_get_mode() != EDITOR_MODE_EDITING) return;
-
     /* Show logo when no file is loaded and buffer is empty */
     size_t text_len = 0;
     const char *flat_text = editor_get_text(&text_len);
@@ -997,7 +1159,7 @@ extern "C" void editor_ui_refresh(void)
 
         for (int i = 0; i < MAX_LINE_LABELS; i++) {
             int line_idx = scroll + i;
-            if (line_idx >= total || y_pos >= EDITOR_H) {
+            if (line_idx >= total || y_pos >= s_rp->h) {
                 /* Only invalidate the slot when its visible state
                  * actually changes; otherwise lv_obj_add_flag()
                  * dirties the previous label rectangle on every
@@ -1099,7 +1261,7 @@ extern "C" void editor_ui_refresh(void)
                 /* Create or reuse label */
                 if (!s_line_labels[i]) {
                     s_line_labels[i] = lv_label_create(s_cont_edit);
-                    lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+                    lv_obj_set_width(s_line_labels[i], s_rp->w - 4);
                     lv_label_set_long_mode(s_line_labels[i], LV_LABEL_LONG_WRAP);
                 }
                 lv_obj_remove_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
@@ -1107,7 +1269,7 @@ extern "C" void editor_ui_refresh(void)
                 lv_obj_add_style(s_line_labels[i], style_for_type(mi.type), 0);
                 /* Re-apply width after style reset (remove_style_all clears it)
                  * so that LV_LABEL_LONG_WRAP can wrap at the correct boundary. */
-                lv_obj_set_width(s_line_labels[i], SCR_W - 4);
+                lv_obj_set_width(s_line_labels[i], s_rp->w - 4);
                 lv_label_set_text_static(s_line_labels[i], "");
                 lv_label_set_text(s_line_labels[i], tmp.c_str());
                 lv_obj_set_pos(s_line_labels[i], 2, y_pos);
@@ -1276,7 +1438,7 @@ extern "C" void editor_ui_refresh(void)
                  * from. */
                 if (kb_layout_is_rtl() &&
                     utf8_first_strong_dir(tmp.c_str(), tmp.size()) == 0) {
-                    cur_x = SCR_W - 4;
+                    cur_x = s_rp->w - 4;
                 }
             }
 
@@ -1287,15 +1449,16 @@ extern "C" void editor_ui_refresh(void)
          * pushed it off-screen, increment scroll and re-render.
          * Use cur_y + cur_h to ensure the full cursor row is visible. */
         if (cur_line >= scroll && scroll < cur_line &&
-            (cur_y < 0 || cur_y + cur_h > EDITOR_H)) {
+            (cur_y < 0 || cur_y + cur_h > s_rp->h)) {
             editor_set_scroll_line(scroll + 1);
             continue;
         }
         break;
     }
 
-    /* Update cursor position */
-    if (cur_y >= 0 && cur_y + cur_h <= EDITOR_H && s_cursor) {
+    /* Update cursor position. Only the focused pane shows a caret; an
+     * unfocused pane keeps its cursor hidden. */
+    if (draw_cursor && cur_y >= 0 && cur_y + cur_h <= s_rp->h && s_cursor) {
         lv_obj_set_size(s_cursor, 2, cur_h);
         lv_obj_set_pos(s_cursor, cur_x, cur_y);
         lv_obj_remove_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
@@ -1305,6 +1468,23 @@ extern "C" void editor_ui_refresh(void)
         lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         s_cursor_on_screen = false;
     }
+}
+
+/* Public refresh entry point: render every visible pane for its bound
+ * document, then refresh the shared title / battery widgets once. The
+ * focused pane is rendered last so the engine's active document is left
+ * pointing at it for subsequent key handling. */
+extern "C" void editor_ui_refresh(void)
+{
+    if (editor_get_mode() != EDITOR_MODE_EDITING) return;
+
+    for (int p = 0; p < s_pane_count; p++) {
+        if (p == s_focus) continue;     /* focused pane drawn last */
+        pane_bind(p);
+        refresh_active_pane(false);
+    }
+    pane_bind_focus();
+    refresh_active_pane(true);
 
     update_title_bar();
     sync_battery_labels();
@@ -1537,7 +1717,7 @@ static void editor_ui_move_visual(int direction)
             /* Last logical line: see if any visual row remains
              * within the current label below the cursor. If not,
              * stay put. */
-            if (target_y >= EDITOR_H) {
+            if (target_y >= s_rp->h) {
                 /* Conservative: at-or-past viewport bottom on the
                  * last line -> nothing more to move to. */
                 return;
@@ -1554,7 +1734,7 @@ static void editor_ui_move_visual(int direction)
      * scroll one logical line and re-render so the row above/below
      * becomes addressable via ui_point_to_offset(). */
     for (int attempt = 0; attempt < 2; attempt++) {
-        if (target_y >= 0 && target_y < EDITOR_H) break;
+        if (target_y >= 0 && target_y < s_rp->h) break;
         int sc = editor_get_scroll_line();
         if (direction < 0) {
             if (sc <= 0) {
@@ -1584,7 +1764,7 @@ static void editor_ui_move_visual(int direction)
         target_y = (direction < 0) ? cy - 1 : cy + ch + 1;
     }
 
-    if (target_y < 0 || target_y >= EDITOR_H) {
+    if (target_y < 0 || target_y >= s_rp->h) {
         if (direction < 0) editor_move_up();
         else               editor_move_down();
         s_visual_goal_x = gx;
@@ -1732,6 +1912,14 @@ static void editor_touch_event_cb(lv_event_t *e)
     }
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
 
+    /* Focus follows touch: bind the tapped pane (its index was stored
+     * in the container's user_data at creation) so all drag / caret
+     * logic below operates on that pane's document. */
+    int pane_idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (pane_idx < 0 || pane_idx >= s_pane_count) pane_idx = s_focus;
+    s_focus = pane_idx;
+    pane_bind_focus();
+
     lv_event_code_t code = lv_event_get_code(e);
 
     /* --- Drag-to-scroll ---
@@ -1809,11 +1997,10 @@ static void editor_touch_event_cb(lv_event_t *e)
         lv_point_t pt;
         lv_indev_get_point(indev, &pt);
 
-        /* Translate screen-space point into s_cont_edit-local
-         * coordinates. The editor area starts at y=EDITOR_Y and
-         * occupies the full screen width starting at x=0. */
-        int lx = pt.x;
-        int ly = pt.y - EDITOR_Y;
+        /* Translate screen-space point into pane-local coordinates.
+         * The pane's content area starts at (s_rp->x, s_rp->y). */
+        int lx = pt.x - s_rp->x;
+        int ly = pt.y - s_rp->y;
         if (ly < 0) return;
 
         uint32_t now = lv_tick_get();
@@ -2050,7 +2237,17 @@ static void refresh_file_list(void)
 
 extern "C" void editor_ui_show_file_browser(void)
 {
-    editor_close_file();
+    if (s_pane_count <= 1) {
+        /* Single-pane: opening a file replaces the current document, so
+         * close it now (historical behavior; the buffer is reloaded
+         * from disk when a file is picked). */
+        editor_close_file();
+        s_open_target_pane = 0;
+    } else {
+        /* Split: keep both documents open and target the unfocused pane
+         * so the picked file appears beside the focused one. */
+        s_open_target_pane = (s_focus + 1) % s_pane_count;
+    }
     refresh_file_list();
 
     /* The Wi-Fi connection state is conveyed by the Wi-Fi icon; the
@@ -3386,8 +3583,8 @@ static void capture_typing_pre_state(typing_pre_state_t *out)
     out->valid       = true;
     out->line        = line;
     out->col         = col;
-    out->cur_x       = lv_obj_get_x(s_cursor);
-    out->cur_y       = EDITOR_Y + lv_obj_get_y(s_cursor);
+    out->cur_x       = s_rp->x + lv_obj_get_x(s_cursor);
+    out->cur_y       = s_rp->y + lv_obj_get_y(s_cursor);
     out->cur_h       = lv_obj_get_height(s_cursor);
     out->modified    = editor_is_modified();
     out->line_chars  = chars;
@@ -3435,10 +3632,10 @@ static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
     int max_w      = pre_w > post_w ? pre_w : post_w;
     /* Bail if the line text wraps -- rendered_h would exceed line_h
      * and the dirty area covers multiple visual rows. */
-    if (2 + max_w + 4 > SCR_W) return false;
+    if (2 + max_w + 4 > s_rp->w) return false;
 
-    int post_cur_x = lv_obj_get_x(s_cursor);
-    int post_cur_y = EDITOR_Y + lv_obj_get_y(s_cursor);
+    int post_cur_x = s_rp->x + lv_obj_get_x(s_cursor);
+    int post_cur_y = s_rp->y + lv_obj_get_y(s_cursor);
     int post_cur_h = lv_obj_get_height(s_cursor);
     /* Cursor moved to a different visual row -> the row geometry
      * changed (wrap or scroll), refresh the whole dirty bbox. */
@@ -3449,7 +3646,7 @@ static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
      * line content (max of pre/post text width), plus the cursor's
      * own 2 px width on the right side. */
     int x_min = pre->cur_x < post_cur_x ? pre->cur_x : post_cur_x;
-    int x_text_end = 2 + max_w;
+    int x_text_end = s_rp->x + 2 + max_w;
     int x_cur_end  = (pre->cur_x > post_cur_x ? pre->cur_x : post_cur_x) + 2;
     int x_max = x_text_end > x_cur_end ? x_text_end : x_cur_end;
 
@@ -3459,8 +3656,8 @@ static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
      * included. */
     x_min -= 4;
     x_max += 4;
-    if (x_min < 0) x_min = 0;
-    if (x_max > SCR_W) x_max = SCR_W;
+    if (x_min < s_rp->x) x_min = s_rp->x;
+    if (x_max > s_rp->x + s_rp->w) x_max = s_rp->x + s_rp->w;
     if (x_max <= x_min) return false;
 
     display_set_partial_clip(x_min, pre->cur_y, x_max - x_min, pre->cur_h);
@@ -3510,10 +3707,139 @@ static bool cursor_line_is_rtl(void)
     return utf8_first_strong_dir(lt, ll) < 0;
 }
 
+/* ---- Split-screen control ----
+ *
+ * The editor shows one pane by default. The split is driven entirely
+ * by three shortcuts:
+ *   Ctrl+1  single pane (full width)
+ *   Ctrl+2  two equal-width panes (left = 1/2)
+ *   Ctrl+3  two panes with the left = 2/3; pressing Ctrl+3 again
+ *           flips the left pane to 1/3 (and back).
+ * Enabling a split for the first time acquires a fresh, empty untitled
+ * document into pane 1; collapsing back to a single pane keeps pane 1's
+ * document open in the background so re-splitting restores it. Each
+ * pane independently selects a file (the unfocused pane is targeted by
+ * the file browser); opening the same path in both panes shares one
+ * refcounted buffer so the two editors view / edit the same file. */
+static void save_split_to_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, NVS_KEY_SPLIT, (uint8_t)s_split_mode);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void load_split_from_nvs(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS_EDITOR, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, NVS_KEY_SPLIT, &v) == ESP_OK &&
+            v <= (uint8_t)SPLIT_LEFT_1_3) {
+            s_split_mode = (split_mode_t)v;
+        }
+        nvs_close(h);
+    }
+}
+
+static void editor_ui_apply_split_mode(split_mode_t mode)
+{
+    bool want_split = (mode != SPLIT_NONE);
+
+    if (want_split && !s_panes[1].doc) {
+        editor_doc_t *d = editor_doc_acquire(NULL); /* empty untitled */
+        if (!d) {
+            editor_ui_set_status("Cannot split: no free document");
+            pane_bind_focus();
+            return;
+        }
+        s_panes[1].doc = d;
+    }
+
+    s_split_mode = mode;
+    s_pane_count = want_split ? 2 : 1;
+    if (!want_split) s_focus = 0;
+    if (s_focus >= s_pane_count) s_focus = s_pane_count - 1;
+
+    save_split_to_nvs();
+
+    layout_panes();
+    invalidate_all_render_caches();
+    pane_bind_focus();
+    ensure_cursor_visible();
+    editor_ui_refresh();
+}
+
+/* Ctrl+3: enter / cycle the asymmetric split. First press (from single
+ * or equal split) makes the left pane 2/3; a subsequent Ctrl+3 toggles
+ * the left pane between 2/3 and 1/3. */
+static void editor_ui_cycle_wide_split(void)
+{
+    split_mode_t next = (s_split_mode == SPLIT_LEFT_2_3)
+                            ? SPLIT_LEFT_1_3 : SPLIT_LEFT_2_3;
+    editor_ui_apply_split_mode(next);
+}
+
+/* Ctrl+Tab: move keyboard focus to the other pane (only meaningful
+ * while split). */
+static void editor_ui_focus_other_pane(void)
+{
+    if (s_pane_count < 2) return;
+    s_focus = (s_focus + 1) % s_pane_count;
+    pane_bind_focus();
+    ensure_cursor_visible();
+    editor_ui_refresh();
+}
+
+/* Open `path` (NULL / empty = a new untitled document) into pane
+ * `target` through the document pool. A path already open in the other
+ * pane shares the same refcounted buffer. Releases whatever document
+ * the target pane held previously. Returns the acquired document, or
+ * NULL on failure (the target pane is left unchanged and the previously
+ * active document is restored). */
+static editor_doc_t *open_into_pane(int target, const char *path)
+{
+    if (target < 0 || target >= EDITOR_MAX_PANES) return NULL;
+    editor_doc_t *prev = s_panes[target].doc;
+    editor_doc_t *d = editor_doc_acquire(path);
+    if (!d) {
+        if (prev) editor_set_active(prev);
+        return NULL;
+    }
+    if (d == prev) {
+        /* Re-acquired the document this pane already holds: acquire
+         * bumped its refcount, so drop the extra reference to keep the
+         * count balanced. */
+        editor_doc_release(d);
+    } else if (prev) {
+        editor_doc_release(prev);
+    }
+    s_panes[target].doc = d;
+    editor_set_active(d);
+    return d;
+}
+
+/* editor_doc_foreach callback: save a document's body if it has unsaved
+ * changes and a path. Used by the Ctrl+G "save before git sync" path so
+ * every open pane's edits reach disk before the sync task runs. */
+static void save_modified_doc_cb(editor_doc_t *doc, void *ctx)
+{
+    (void)ctx;
+    if (editor_doc_is_modified(doc) && editor_doc_get_path(doc)) {
+        editor_doc_save(doc);
+    }
+}
+
 static void handle_editor_key(const kb_event_t *ev)
 {
     bool ctrl  = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
     bool shift = (ev->modifier & (KB_MOD_LSHIFT | KB_MOD_RSHIFT)) != 0;
+
+    /* All editing acts on the focused pane's document; make sure the
+     * engine's active doc and the widget aliases point at it. */
+    pane_bind_focus();
 
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* Snapshot before-edit state for the partial-refresh fast path,
@@ -3558,11 +3884,42 @@ static void handle_editor_key(const kb_event_t *ev)
         if (ev->keycode >= 0x04 && ev->keycode <= 0x1D) {
             ch = 'a' + (ev->keycode - 0x04);
         }
+
+        /* Ctrl+1 / Ctrl+2 / Ctrl+3 control the split layout. HID
+         * keycodes: 1 = 0x1E, 2 = 0x1F, 3 = 0x20. Handled by keycode
+         * (not layout translation) so they work in any layout. */
+        if (ev->keycode == 0x1E) {            /* Ctrl+1: single pane */
+            editor_ui_apply_split_mode(SPLIT_NONE);
+            return;
+        }
+        if (ev->keycode == 0x1F) {            /* Ctrl+2: equal split */
+            editor_ui_apply_split_mode(SPLIT_HALF);
+            return;
+        }
+        if (ev->keycode == 0x20) {            /* Ctrl+3: 2/3 <-> 1/3 */
+            editor_ui_cycle_wide_split();
+            return;
+        }
+        if (ev->keycode == KB_KEY_TAB) {      /* Ctrl+Tab: switch pane */
+            editor_ui_focus_other_pane();
+            return;
+        }
+
         switch (ch) {
         case 's':
             show_save_prompt();
             break;
-        case 'n': editor_new_file(); break;
+        case 'n':
+            /* New empty document in the focused pane. In single-pane
+             * mode this is the historical "replace current doc"
+             * behavior; while split it only affects the focused pane. */
+            if (s_pane_count <= 1) {
+                editor_new_file();
+                s_panes[0].doc = editor_get_active();
+            } else {
+                open_into_pane(s_focus, NULL);
+            }
+            break;
         case 'o': editor_ui_show_file_browser(); return;
         case 'c':
             if (editor_copy())
@@ -3594,11 +3951,12 @@ static void handle_editor_key(const kb_event_t *ev)
             show_search_prompt(true);
             return;
         case 'g':
-            /* Auto-save the current file so the sync task picks up
-             * the latest edits (it reads from disk). */
-            if (editor_is_modified() && editor_get_file_path()) {
-                editor_save_file();
-            }
+            /* Auto-save every open document (both panes when split) so
+             * the sync task picks up the latest edits (it reads from
+             * disk). editor_doc_save() leaves the active doc untouched,
+             * but rebind focus defensively. */
+            editor_doc_foreach(save_modified_doc_cb, NULL);
+            pane_bind_focus();
             if (git_sync_is_configured() && wifi_manager_is_connected()) {
                 if (git_sync_start(GIT_SYNC_BOTH) == ESP_OK) {
                     editor_ui_set_status("Git: syncing...");
@@ -3825,23 +4183,42 @@ static void browser_activate_item(int row)
     char path[512];
     snprintf(path, sizeof(path), "%s/%s",
              sd_card_get_mount_point(), s_browser_entries[idx].name);
-    editor_init();
-    esp_err_t oerr = editor_open_file(path);
-    if (oerr == ESP_ERR_NO_MEM) {
-        /* File too large for the editor buffer. Stay on the file
-         * browser and tell the user how big the limit is. The limit
-         * is sized at boot from available PSRAM (see editor_init),
-         * and is also surfaced read-only in F1 -> Settings. */
-        char msg[96];
-        snprintf(msg, sizeof(msg),
-                 "File too large (limit %u KB)",
-                 (unsigned)(editor_get_max_doc_size() / 1024));
-        editor_ui_set_status(msg);
-        return;
-    }
-    if (oerr != ESP_OK) {
-        editor_ui_set_status("Open failed");
-        return;
+
+    if (s_pane_count <= 1) {
+        editor_init();
+        esp_err_t oerr = editor_open_file(path);
+        if (oerr == ESP_ERR_NO_MEM) {
+            /* File too large for the editor buffer. Stay on the file
+             * browser and tell the user how big the limit is. The limit
+             * is sized at boot from available PSRAM (see editor_init),
+             * and is also surfaced read-only in F1 -> Settings. */
+            char msg[96];
+            snprintf(msg, sizeof(msg),
+                     "File too large (limit %u KB)",
+                     (unsigned)(editor_get_max_doc_size() / 1024));
+            editor_ui_set_status(msg);
+            return;
+        }
+        if (oerr != ESP_OK) {
+            editor_ui_set_status("Open failed");
+            return;
+        }
+        /* Keep pane 0's document handle current (editor_open_file may
+         * have acted on the active doc). */
+        s_panes[0].doc = editor_get_active();
+    } else {
+        /* Split: load the file into the target (unfocused) pane through
+         * the document pool, sharing the buffer if the same path is
+         * already open in the other pane. */
+        int tp = (s_open_target_pane >= 0 && s_open_target_pane < s_pane_count)
+                     ? s_open_target_pane : (s_focus + 1) % s_pane_count;
+        editor_doc_t *d = open_into_pane(tp, path);
+        if (!d) {
+            editor_ui_set_status("Open failed");
+            return;
+        }
+        s_focus = tp;
+        pane_bind_focus();
     }
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* Wipe the framebuffer before drawing the freshly-opened file
@@ -4434,66 +4811,93 @@ static void build_screens(void)
     lv_obj_set_style_radius(hline, 0, 0);
     lv_obj_set_style_pad_all(hline, 0, 0);
 
-    /* Editor content area */
-    s_cont_edit = lv_obj_create(s_scr);
-    lv_obj_set_pos(s_cont_edit, 0, EDITOR_Y);
-    lv_obj_set_size(s_cont_edit, SCR_W, EDITOR_H);
-    lv_obj_set_style_bg_opa(s_cont_edit, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_cont_edit, 0, 0);
-    lv_obj_set_style_pad_all(s_cont_edit, 0, 0);
-    lv_obj_set_style_radius(s_cont_edit, 0, 0);
-    lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
+    /* Editor content area -- one container per pane. Both panes are
+     * created up-front; layout_panes() positions/sizes them and hides
+     * the second one while the editor is in single-pane mode. Each
+     * pane's per-document widgets (logo, selection overlays, cursor)
+     * are created into its own container by binding the pane first. */
+    for (int p = 0; p < EDITOR_MAX_PANES; p++) {
+        pane_bind(p);
+
+        s_cont_edit = lv_obj_create(s_scr);
+        lv_obj_set_pos(s_cont_edit, 0, EDITOR_Y);
+        lv_obj_set_size(s_cont_edit, SCR_W, EDITOR_H);
+        lv_obj_set_style_bg_opa(s_cont_edit, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_cont_edit, 0, 0);
+        lv_obj_set_style_pad_all(s_cont_edit, 0, 0);
+        lv_obj_set_style_radius(s_cont_edit, 0, 0);
+        lv_obj_remove_flag(s_cont_edit, LV_OBJ_FLAG_SCROLLABLE);
 
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-    /* Route LVGL pointer events (tap, double-tap, drag-to-scroll,
-     * swipe gesture) on the editor area to editor_touch_event_cb.
-     * The container is CLICKABLE so it receives press / pressing /
-     * released / clicked / gesture events from the indev. Using
-     * LV_EVENT_ALL is simpler than registering each subtype and
-     * lets editor_touch_event_cb filter by code. */
-    lv_obj_add_flag(s_cont_edit, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
-                        LV_EVENT_ALL, NULL);
+        /* Route LVGL pointer events (tap, double-tap, drag-to-scroll,
+         * swipe gesture) on the editor area to editor_touch_event_cb.
+         * The container is CLICKABLE so it receives press / pressing /
+         * released / clicked / gesture events from the indev. Using
+         * LV_EVENT_ALL is simpler than registering each subtype and
+         * lets editor_touch_event_cb filter by code. The pane index is
+         * stored in user_data so the callback can focus the tapped
+         * pane. */
+        lv_obj_add_flag(s_cont_edit, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_cont_edit, editor_touch_event_cb,
+                            LV_EVENT_ALL, (void *)(intptr_t)p);
 #endif
 
-    /* "draftling" text label shown when no file is open */
-    s_img_logo = lv_label_create(s_cont_edit);
-    lv_obj_set_width(s_img_logo, SCR_W);
-    lv_obj_set_style_text_font(s_img_logo, FONT_18, 0);
-    lv_obj_set_style_text_color(s_img_logo, lv_color_make(0x80, 0x80, 0x80), 0);
-    lv_obj_set_style_text_align(s_img_logo, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(s_img_logo, "draftling");
-    lv_obj_set_pos(s_img_logo, 0,
-                   (EDITOR_H - lv_font_get_line_height(FONT_18)) / 2);
-    lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
+        /* "draftling" text label shown when no file is open */
+        s_img_logo = lv_label_create(s_cont_edit);
+        lv_obj_set_width(s_img_logo, SCR_W);
+        lv_obj_set_style_text_font(s_img_logo, FONT_18, 0);
+        lv_obj_set_style_text_color(s_img_logo, lv_color_make(0x80, 0x80, 0x80), 0);
+        lv_obj_set_style_text_align(s_img_logo, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(s_img_logo, "draftling");
+        lv_obj_set_pos(s_img_logo, 0,
+                       (EDITOR_H - lv_font_get_line_height(FONT_18)) / 2);
+        lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
 
-    /* Selection overlay labels (created before cursor and line labels
-     * so their initial z-order is behind text; partial-selection code
-     * calls lv_obj_move_foreground() to bring them on top).  These
-     * display the selected text in white on a black background for
-     * proper inversion on the monochrome e-paper display. */
-    for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        s_sel_rects[i] = lv_label_create(s_cont_edit);
-        lv_obj_set_style_bg_color(s_sel_rects[i],
-                                  theme_fg(), 0);
-        lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
-        lv_obj_set_style_text_color(s_sel_rects[i],
-                                    theme_bg(), 0);
-        lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
-        lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
-        lv_obj_set_style_pad_all(s_sel_rects[i], 0, 0);
-        lv_label_set_text(s_sel_rects[i], "");
-        lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+        /* Selection overlay labels (created before cursor and line
+         * labels so their initial z-order is behind text;
+         * partial-selection code calls lv_obj_move_foreground() to
+         * bring them on top). These display the selected text in white
+         * on a black background for proper inversion on the monochrome
+         * e-paper display. */
+        for (int i = 0; i < MAX_LINE_LABELS; i++) {
+            s_sel_rects[i] = lv_label_create(s_cont_edit);
+            lv_obj_set_style_bg_color(s_sel_rects[i],
+                                      theme_fg(), 0);
+            lv_obj_set_style_bg_opa(s_sel_rects[i], LV_OPA_COVER, 0);
+            lv_obj_set_style_text_color(s_sel_rects[i],
+                                        theme_bg(), 0);
+            lv_obj_set_style_border_width(s_sel_rects[i], 0, 0);
+            lv_obj_set_style_radius(s_sel_rects[i], 0, 0);
+            lv_obj_set_style_pad_all(s_sel_rects[i], 0, 0);
+            lv_label_set_text(s_sel_rects[i], "");
+            lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+        }
+
+        /* Cursor (thin vertical bar) */
+        s_cursor = lv_obj_create(s_cont_edit);
+        lv_obj_set_size(s_cursor, 2, LINE_H);
+        lv_obj_set_style_bg_color(s_cursor, theme_fg(), 0);
+        lv_obj_set_style_bg_opa(s_cursor, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_cursor, 0, 0);
+        lv_obj_set_style_radius(s_cursor, 0, 0);
+        lv_obj_set_style_pad_all(s_cursor, 0, 0);
     }
+    pane_bind_focus();
 
-    /* Cursor (thin vertical bar) */
-    s_cursor = lv_obj_create(s_cont_edit);
-    lv_obj_set_size(s_cursor, 2, LINE_H);
-    lv_obj_set_style_bg_color(s_cursor, theme_fg(), 0);
-    lv_obj_set_style_bg_opa(s_cursor, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_cursor, 0, 0);
-    lv_obj_set_style_radius(s_cursor, 0, 0);
-    lv_obj_set_style_pad_all(s_cursor, 0, 0);
+    /* Vertical divider drawn between the two panes when split. */
+    s_pane_divider = lv_obj_create(s_scr);
+    lv_obj_set_size(s_pane_divider, 1, EDITOR_H);
+    lv_obj_set_pos(s_pane_divider, SCR_W / 2, EDITOR_Y);
+    lv_obj_set_style_bg_color(s_pane_divider, theme_fg(), 0);
+    lv_obj_set_style_bg_opa(s_pane_divider, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_pane_divider, 0, 0);
+    lv_obj_set_style_radius(s_pane_divider, 0, 0);
+    lv_obj_set_style_pad_all(s_pane_divider, 0, 0);
+    lv_obj_add_flag(s_pane_divider, LV_OBJ_FLAG_HIDDEN);
+
+    /* Apply the current split geometry (positions/sizes both panes and
+     * the divider; hides pane 1 + the divider in single-pane mode). */
+    layout_panes();
 
     /* Status bar */
     lv_obj_t *sline = lv_obj_create(s_scr);
@@ -5024,9 +5428,24 @@ static void teardown_screens(void)
     if (s_scr)            { lv_obj_delete(s_scr);            s_scr            = NULL; }
 
     /* NULL every child-widget pointer so any stale reference
-     * crashes deterministically instead of touching freed memory. */
-    s_lbl_title = s_cont_edit = s_lbl_status = s_cursor = NULL;
-    s_img_logo = s_img_wifi = s_img_br_wifi = NULL;
+     * crashes deterministically instead of touching freed memory.
+     * The per-pane widgets (container, cursor, logo, line / selection
+     * label pools) are cleared for every pane. */
+    s_lbl_title = s_lbl_status = NULL;
+    s_img_wifi = s_img_br_wifi = NULL;
+    s_pane_divider = NULL;
+    {
+        pane_t *save_rp = s_rp;
+        for (int p = 0; p < EDITOR_MAX_PANES; p++) {
+            s_rp = &s_panes[p];
+            s_cont_edit = s_cursor = s_img_logo = NULL;
+            for (int i = 0; i < MAX_LINE_LABELS; i++) {
+                s_line_labels[i] = NULL;
+                s_sel_rects[i]   = NULL;
+            }
+        }
+        s_rp = save_rp;
+    }
     s_list_files = s_lbl_br_status = NULL;
 #if defined(DRAFTLING_HAS_BATT_INDICATOR)
     s_lbl_dev_batt = s_lbl_br_dev_batt = NULL;
@@ -5043,10 +5462,6 @@ static void teardown_screens(void)
     s_search_find_hdr = s_search_find_lbl = NULL;
     s_search_repl_hdr = s_search_repl_lbl = NULL;
     s_search_cur = s_search_help_lbl = NULL;
-    for (int i = 0; i < MAX_LINE_LABELS; i++) {
-        s_line_labels[i] = NULL;
-        s_sel_rects[i]   = NULL;
-    }
 
     /* Reset every "open" / transient flag so a fresh build starts
      * from a clean state. The persistent document, NVS-backed font
@@ -5063,8 +5478,9 @@ static void teardown_screens(void)
     s_search_replace_mode     = false;
 
     /* The editor render cache references the deleted line labels;
-     * wipe it so the next refresh re-creates fresh slots. */
-    invalidate_render_cache();
+     * wipe every pane's cache so the next refresh re-creates fresh
+     * slots. */
+    invalidate_all_render_caches();
 }
 #endif /* CONFIG_DRAFTLING_DISPLAY_COLOR */
 
@@ -5134,6 +5550,11 @@ extern "C" void editor_ui_init(void)
     /* Editor init */
     editor_init();
 
+    /* Bind the engine's primary document to pane 0 so the pane pool
+     * owns it from the start (split mode acquires a second document
+     * into pane 1 on demand). */
+    s_panes[0].doc = editor_get_active();
+
     /* Key-event drain timer -- runs every 20 ms (50 Hz) to process
      * queued keyboard events in a batch. This decouples BLE input
      * from the LVGL render cycle so fast typing never drops keys.
@@ -5142,6 +5563,17 @@ extern "C" void editor_ui_init(void)
     s_key_drain_timer = lv_timer_create(key_drain_cb, KEY_DRAIN_PERIOD_MS, NULL);
 
     build_screens();
+
+    /* Restore the split layout persisted across reboot / deep sleep.
+     * The documents themselves are not auto-reopened (the boot flow
+     * shows the file browser), but the saved split mode is materialized
+     * so the editor screen comes up in the same layout the user left. */
+    load_split_from_nvs();
+    if (s_split_mode != SPLIT_NONE) {
+        split_mode_t m = s_split_mode;
+        s_split_mode = SPLIT_NONE;     /* force apply to run the enable path */
+        editor_ui_apply_split_mode(m);
+    }
 
     ESP_LOGI(TAG, "Editor UI initialized");
 }

@@ -66,7 +66,30 @@ development boards with reflective LCD, e-paper or color LCD displays.
 | Ctrl+B | Cycle backlight / front-light brightness (boards with a controllable backlight) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
+| Ctrl+1 | Single-pane mode (full-width editor) |
+| Ctrl+2 | Split screen into two equal-width panes |
+| Ctrl+3 | Split with the left pane at 2/3 width; press again to toggle the left pane to 1/3 |
+| Ctrl+Tab | Move keyboard focus to the other pane (when split) |
 | Escape | Switch to file browser. With unsaved changes, a dialog offers Save and exit / Exit without saving / Cancel (Up/Down + Enter to choose) |
+
+## Split-screen Editing
+
+The editor can show two documents side by side. **Ctrl+2** divides the
+screen into two equal-width vertical panes; **Ctrl+3** makes the left
+pane wider (2/3 of the width) and a second **Ctrl+3** flips the left
+pane to 1/3. **Ctrl+1** returns to a single full-width pane.
+
+Each pane selects its own file: while split, **Ctrl+O** opens the file
+browser for the unfocused pane, so the focused document stays visible
+while you pick the second file. **Ctrl+Tab** moves keyboard focus
+between the two panes; the focused pane shows the active cursor and
+receives all editing keys.
+
+Opening the same file in both panes shares a single in-memory copy of
+the document (the panes are two views of the same buffer), so you can
+edit or read two parts of one file at once and edits in one pane are
+reflected in the other. The current split layout is remembered across
+reboot and deep sleep.
 
 ## Touch Operations
 
