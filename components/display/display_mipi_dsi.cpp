@@ -142,7 +142,14 @@ static void dsi_blit(int x1, int y1, int x2, int y2, const void *buf)
 {
     esp_lcd_panel_draw_bitmap(s_panel, x1, y1, x2, y2, buf);
     if (s_draw_done) {
-        xSemaphoreTake(s_draw_done, pdMS_TO_TICKS(MDSI_DRAW_TIMEOUT_MS));
+        if (xSemaphoreTake(s_draw_done, pdMS_TO_TICKS(MDSI_DRAW_TIMEOUT_MS)) != pdTRUE) {
+            /* The draw-done callback never fired within the timeout.
+             * Proceed anyway (the next draw may still recover), but log
+             * it: a recurring warning here points at a stalled DMA2D /
+             * DPI engine rather than a source-buffer reuse hazard. */
+            ESP_LOGW(TAG, "draw_bitmap timeout (%d ms) waiting for DMA2D",
+                     MDSI_DRAW_TIMEOUT_MS);
+        }
     }
 }
 
