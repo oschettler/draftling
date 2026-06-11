@@ -680,6 +680,28 @@ static bool s_editor_screen_active = false;
  * focused pane, so each panel opens a file for itself. */
 static int     s_open_target_pane = 0;
 
+/* In-pane file selector (split mode only).
+ *
+ * In single-pane mode the file browser is the full-screen s_scr_browser
+ * (an lv_list named s_list_files). While the editor is split, opening a
+ * file should not blank both panes; instead a compact file selector is
+ * overlaid on just the focused pane so the other pane keeps showing its
+ * document. s_inpane_list / s_inpane_hdr are that overlay (siblings of
+ * the pane containers on s_scr, raised to the foreground while open).
+ *
+ * s_browser_list is the list the shared browser logic (refresh_file_list,
+ * browser_activate_item, handle_browser_key) currently operates on: it
+ * normally aliases s_list_files and is repointed at s_inpane_list while
+ * the in-pane selector is open. */
+static lv_obj_t *s_inpane_list = NULL;
+static lv_obj_t *s_inpane_hdr  = NULL;
+static lv_obj_t *s_browser_list = NULL;
+static bool      s_inpane_browser_open = false;
+
+/* Defined further down with the rest of the file-browser code. */
+static void show_inpane_browser(void);
+static void close_inpane_browser(void);
+
 /* Alias the historical per-document globals onto the current pane. */
 #define s_cont_edit              (s_rp->cont)
 #define s_cursor                 (s_rp->cursor)
@@ -866,6 +888,9 @@ static void init_styles(void)
 static void cursor_blink_cb(lv_timer_t *timer)
 {
     (void)timer;
+    /* The in-pane file selector covers the focused pane; suppress the
+     * caret blink (which rebinds to the focused pane) while it is up. */
+    if (s_inpane_browser_open) return;
     /* Blink only the focused pane's caret, and only while the refresh
      * code actually placed it on-screen (s_cursor_on_screen). */
     pane_bind_focus();
@@ -1495,7 +1520,12 @@ extern "C" void editor_ui_refresh(void)
         refresh_active_pane(false);
     }
     pane_bind_focus();
-    refresh_active_pane(true);
+    /* While the in-pane file selector overlays the focused pane, that
+     * pane is hidden behind the opaque list -- skip its (wasted) draw
+     * but still leave the active doc bound to it. */
+    if (!s_inpane_browser_open) {
+        refresh_active_pane(true);
+    }
 
     update_title_bar();
     sync_battery_labels();
@@ -2173,9 +2203,9 @@ static void refresh_file_list(void)
      * editor, and also preserves selection across a Git-sync refresh
      * that added or removed files. */
     char remembered_name[sizeof(s_browser_entries[0].name)] = {0};
-    if (s_list_files && s_browser_sel >= 0 &&
-        s_browser_sel < (int)lv_obj_get_child_count(s_list_files)) {
-        lv_obj_t *cur_btn = lv_obj_get_child(s_list_files, s_browser_sel);
+    if (s_browser_list && s_browser_sel >= 0 &&
+        s_browser_sel < (int)lv_obj_get_child_count(s_browser_list)) {
+        lv_obj_t *cur_btn = lv_obj_get_child(s_browser_list, s_browser_sel);
         if (cur_btn) {
             int cur_idx = (int)(intptr_t)lv_obj_get_user_data(cur_btn);
             if (cur_idx >= 0 && cur_idx < s_browser_count) {
@@ -2190,7 +2220,7 @@ static void refresh_file_list(void)
     if (s_browser_count < 0) s_browser_count = 0;
 
     /* Filter to show only .md files and directories */
-    lv_obj_clean(s_list_files);
+    lv_obj_clean(s_browser_list);
 
     int restored_row = -1;
     int row = 0;
@@ -2207,7 +2237,7 @@ static void refresh_file_list(void)
                 snprintf(label, sizeof(label), "[DIR] %.255s", name);
             else
                 snprintf(label, sizeof(label), "  %.255s", name);
-            lv_obj_t *btn = lv_list_add_btn(s_list_files, NULL, label);
+            lv_obj_t *btn = lv_list_add_btn(s_browser_list, NULL, label);
             lv_obj_set_user_data(btn, (void *)(intptr_t)i);
             if (remembered_name[0] && strcmp(name, remembered_name) == 0) {
                 restored_row = row;
@@ -2217,7 +2247,7 @@ static void refresh_file_list(void)
     }
     s_browser_sel = (restored_row >= 0) ? restored_row : 0;
     /* Clamp in case the list shrank below the saved selection. */
-    int new_count = (int)lv_obj_get_child_count(s_list_files);
+    int new_count = (int)lv_obj_get_child_count(s_browser_list);
     if (s_browser_sel >= new_count)
         s_browser_sel = (new_count > 0) ? new_count - 1 : 0;
     /* List was rebuilt -- no item carries a highlight yet, so the
@@ -2228,7 +2258,7 @@ static void refresh_file_list(void)
      * row so list buttons render with theme_fg() text on theme_bg(),
      * not the LVGL default greys that would be near-invisible on a
      * black background. Mirror what refresh_menu_items() does. */
-    apply_list_selection_styles(s_list_files, s_browser_sel);
+    apply_list_selection_styles(s_browser_list, s_browser_sel);
     s_browser_sel_prev = s_browser_sel;
 
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
@@ -2240,7 +2270,7 @@ static void refresh_file_list(void)
     s_browser_touch_ctx.p_sel      = &s_browser_sel;
     s_browser_touch_ctx.p_sel_prev = &s_browser_sel_prev;
     s_browser_touch_ctx.activate   = browser_activate_item;
-    list_touch_attach(s_list_files, &s_browser_touch_ctx);
+    list_touch_attach(s_browser_list, &s_browser_touch_ctx);
 #endif
 
     sync_battery_labels();
@@ -2248,24 +2278,27 @@ static void refresh_file_list(void)
 
 extern "C" void editor_ui_show_file_browser(void)
 {
+    if (s_pane_count > 1) {
+        /* Split: overlay a compact file selector on just the focused
+         * pane, keeping the other pane's document on screen. The editor
+         * screen stays active; the in-pane selector flag (checked first
+         * in process_key_event) reroutes keys to the browser handler. */
+        show_inpane_browser();
+        return;
+    }
+
     /* Mark the browser as the active screen up front so key routing and
      * refresh gating switch over immediately, regardless of the focused
      * pane's per-document editor mode (see s_editor_screen_active). */
     s_editor_screen_active = false;
 
-    if (s_pane_count <= 1) {
-        /* Single-pane: opening a file replaces the current document, so
-         * close it now (historical behavior; the buffer is reloaded
-         * from disk when a file is picked). */
-        editor_close_file();
-        s_open_target_pane = 0;
-    } else {
-        /* Split: keep both documents open and target the focused pane,
-         * so each panel opens a file for itself -- focus a pane, press
-         * Ctrl+O, and the picked file loads into that same pane while the
-         * other pane keeps its document. */
-        s_open_target_pane = s_focus;
-    }
+    /* Single-pane: opening a file replaces the current document, so
+     * close it now (historical behavior; the buffer is reloaded
+     * from disk when a file is picked). */
+    editor_close_file();
+    s_open_target_pane = 0;
+    /* Operate on the full-screen browser list. */
+    s_browser_list = s_list_files;
     refresh_file_list();
 
     /* The Wi-Fi connection state is conveyed by the Wi-Fi icon; the
@@ -4215,12 +4248,77 @@ static void handle_editor_key(const kb_event_t *ev)
      * on the M5Stack PaperS3 backend. */
 }
 
+/* Overlay a compact file selector on the focused pane (split mode).
+ * The overlay widgets live on s_scr as siblings of the pane containers;
+ * they are positioned over the focused pane's rectangle and raised to
+ * the foreground so they cover that pane's text while the other pane
+ * keeps rendering its document. */
+static void show_inpane_browser(void)
+{
+    if (!s_inpane_list || !s_inpane_hdr) return;
+
+    /* Track the live split geometry so the overlay matches the focused
+     * pane even after a Ctrl+2 / Ctrl+3 width change. */
+    recalc_pane_geometry();
+    int px = s_panes[s_focus].x;
+    int pw = s_panes[s_focus].w;
+    int py = s_panes[s_focus].y;
+    int ph = s_panes[s_focus].h;
+    int hdr_h = lv_font_get_line_height(FONT_11) + 2;
+    if (hdr_h > ph) hdr_h = 0;
+
+    lv_obj_set_pos(s_inpane_hdr, px + 2, py);
+    lv_obj_set_width(s_inpane_hdr, (pw > 4) ? pw - 4 : pw);
+    lv_obj_set_pos(s_inpane_list, px, py + hdr_h);
+    lv_obj_set_size(s_inpane_list, pw, ph - hdr_h);
+
+    /* Target the focused pane and operate the shared browser logic on
+     * the in-pane list. */
+    s_open_target_pane = s_focus;
+    s_browser_list = s_inpane_list;
+    s_browser_sel = 0;
+    s_browser_sel_prev = -1;
+    refresh_file_list();
+
+    lv_obj_remove_flag(s_inpane_hdr, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_inpane_list, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_inpane_hdr);
+    lv_obj_move_foreground(s_inpane_list);
+
+    s_inpane_browser_open = true;
+    /* The editor screen stays active (the other pane keeps rendering);
+     * keystrokes are rerouted by the s_inpane_browser_open check in
+     * process_key_event. */
+    editor_ui_set_status("Open into pane - Up/Down Enter  N:new  Esc:cancel");
+}
+
+/* Dismiss the in-pane file selector and restore the full-screen list
+ * as the active browser list. Safe to call when no overlay is open.
+ * Does NOT repaint the editor; the caller decides whether to load a
+ * document and then refresh. */
+static void close_inpane_browser(void)
+{
+    if (!s_inpane_browser_open) return;
+    s_inpane_browser_open = false;
+    if (s_inpane_list) lv_obj_add_flag(s_inpane_list, LV_OBJ_FLAG_HIDDEN);
+    if (s_inpane_hdr)  lv_obj_add_flag(s_inpane_hdr, LV_OBJ_FLAG_HIDDEN);
+    s_browser_list = s_list_files;
+
+    /* The focused pane was skipped while the overlay covered it (and
+     * may now hold a freshly-opened document). Wipe its render cache so
+     * the next editor_ui_refresh() repaints every line from scratch. */
+    pane_t *save = s_rp;
+    s_rp = &s_panes[s_focus];
+    invalidate_render_cache();
+    s_rp = save;
+}
+
 /* Open the file (or descend into the directory) selected by the
  * given row index in the file browser. Shared between the Enter-key
  * handler and the touchscreen tap-to-activate path. */
 static void browser_activate_item(int row)
 {
-    lv_obj_t *btn = lv_obj_get_child(s_list_files, row);
+    lv_obj_t *btn = lv_obj_get_child(s_browser_list, row);
     if (!btn) return;
     int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
     if (idx < 0 || idx >= s_browser_count) return;
@@ -4282,6 +4380,11 @@ static void browser_activate_item(int row)
      * metadata sidecar; make sure the cursor is on screen before
      * the first refresh in case the saved scroll line is out of date. */
     ensure_cursor_visible();
+    /* If the in-pane (split) selector was driving this open, dismiss
+     * the overlay and restore the full-screen list as the active
+     * browser list before repainting the editor. No-op in single-pane
+     * mode. */
+    close_inpane_browser();
     editor_ui_show_editor();
 }
 
@@ -4360,7 +4463,7 @@ static void handle_browser_key(const kb_event_t *ev)
     const char *br_t = kb_layout_translate(ev->keycode, ev->modifier);
     char ch = (br_t && br_t[0] && !br_t[1]) ? br_t[0] : 0;
 
-    uint32_t child_count = lv_obj_get_child_count(s_list_files);
+    uint32_t child_count = lv_obj_get_child_count(s_browser_list);
     if (child_count == 0) {
         if (ch == 'n' || ch == 'N') {
             editor_new_file();
@@ -4399,8 +4502,51 @@ static void handle_browser_key(const kb_event_t *ev)
     /* Highlight selected item -- restyle only the items whose state
      * changed (previous and current selection) so the LVGL dirty
      * region stays small enough for a partial e-paper refresh. */
-    update_list_highlight(s_list_files, s_browser_sel, s_browser_sel_prev);
+    update_list_highlight(s_browser_list, s_browser_sel, s_browser_sel_prev);
     s_browser_sel_prev = s_browser_sel;
+}
+
+/* Key handler for the in-pane (split-mode) file selector. Esc cancels
+ * the pick (the pane keeps its current document); F1 cancels and opens
+ * the menu; N creates a new untitled document in the focused pane;
+ * every other key (Up/Down/Enter, Ctrl+G/W/B) is delegated to the
+ * shared browser handler, which now operates on the in-pane list and
+ * loads the picked file into the focused pane via browser_activate_item
+ * (split branch) -> open_into_pane(). */
+static void handle_inpane_browser_key(const kb_event_t *ev)
+{
+    bool ctrl = (ev->modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+
+    if (ev->keycode == KB_KEY_ESCAPE) {
+        close_inpane_browser();
+        editor_ui_show_editor();
+        return;
+    }
+    if (ev->keycode == KB_KEY_F1) {
+        close_inpane_browser();
+        show_menu();
+        return;
+    }
+
+    if (!ctrl) {
+        const char *t = kb_layout_translate(ev->keycode, ev->modifier);
+        char ch = (t && t[0] && !t[1]) ? t[0] : 0;
+        if (ch == 'n' || ch == 'N') {
+            /* New untitled document in the focused pane (not a global
+             * replace -- that is the single-pane behavior). */
+            if (!open_into_pane(s_focus, NULL)) {
+                editor_ui_set_status("New failed");
+                return;
+            }
+            s_open_target_pane = s_focus;
+            close_inpane_browser();
+            ensure_cursor_visible();
+            editor_ui_show_editor();
+            return;
+        }
+    }
+
+    handle_browser_key(ev);
 }
 
 /* Process a single key event (must be called with LVGL lock held). */
@@ -4424,6 +4570,11 @@ static void process_key_event(const kb_event_t *ev)
         handle_settings_key(e);
     } else if (s_menu_open) {
         handle_menu_key(e);
+    } else if (s_inpane_browser_open) {
+        /* Split-mode in-pane file selector overlays the editor screen
+         * (s_editor_screen_active stays true), so it must be checked
+         * before handle_editor_key. */
+        handle_inpane_browser_key(e);
     } else if (s_editor_screen_active) {
         handle_editor_key(e);
     } else {
@@ -5041,7 +5192,30 @@ static void build_screens(void)
      * of the black screen and white-on-white text is invisible). */
     lv_obj_set_style_bg_color(s_list_files, theme_bg(), 0);
 
-    /* File browser status bar */
+    /* The shared browser logic operates on s_browser_list; in the
+     * default (single-pane) case that is the full-screen list. */
+    s_browser_list = s_list_files;
+
+    /* In-pane file selector overlay (split mode). Parented to the main
+     * editor screen as siblings of the pane containers so they can be
+     * positioned over the focused pane and raised to the foreground;
+     * created hidden and positioned on demand by show_inpane_browser(). */
+    s_inpane_hdr = lv_label_create(s_scr);
+    lv_obj_set_style_text_font(s_inpane_hdr, FONT_11, 0);
+    lv_obj_set_style_text_color(s_inpane_hdr, theme_fg(), 0);
+    lv_obj_set_style_bg_color(s_inpane_hdr, theme_bg(), 0);
+    lv_obj_set_style_bg_opa(s_inpane_hdr, LV_OPA_COVER, 0);
+    lv_label_set_text(s_inpane_hdr, "Open into pane");
+    lv_obj_add_flag(s_inpane_hdr, LV_OBJ_FLAG_HIDDEN);
+
+    s_inpane_list = lv_list_create(s_scr);
+    lv_obj_set_style_border_width(s_inpane_list, 0, 0);
+    lv_obj_set_style_radius(s_inpane_list, 0, 0);
+    lv_obj_set_style_pad_all(s_inpane_list, 0, 0);
+    lv_obj_set_style_text_font(s_inpane_list, FONT_14, 0);
+    lv_obj_set_style_bg_color(s_inpane_list, theme_bg(), 0);
+    lv_obj_set_style_bg_opa(s_inpane_list, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_inpane_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *br_sline = lv_obj_create(s_scr_browser);
     lv_obj_set_size(br_sline, SCR_W, 1);
     lv_obj_set_pos(br_sline, 0, SCR_H - STATUS_H);
@@ -5496,6 +5670,9 @@ static void teardown_screens(void)
         s_rp = save_rp;
     }
     s_list_files = s_lbl_br_status = NULL;
+    s_inpane_list = s_inpane_hdr = NULL;
+    s_browser_list = NULL;
+    s_inpane_browser_open = false;
 #if defined(DRAFTLING_HAS_BATT_INDICATOR)
     s_lbl_dev_batt = s_lbl_br_dev_batt = NULL;
     s_lbl_ble_dev_batt = NULL;
