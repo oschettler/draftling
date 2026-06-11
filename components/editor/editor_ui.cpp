@@ -3840,13 +3840,11 @@ static editor_doc_t *open_into_pane(int target, const char *path)
         prev = NULL;
         d = editor_doc_acquire(path);
         if (!d) {
-            /* Open still failed (e.g. file too large / read error). The
-             * target pane is now empty; restore a valid active document
-             * so the engine is never left without one. */
-            editor_doc_t *fallback = (s_pane_count > 1)
-                                         ? s_panes[(target + 1) % EDITOR_MAX_PANES].doc
-                                         : NULL;
-            if (fallback) editor_set_active(fallback);
+            /* Open still failed (e.g. file too large / read error).
+             * The target pane is now empty. editor_doc_acquire() already
+             * restored a valid active document (pick_any_active) on the
+             * open-failure path, so the engine is never left without
+             * one. */
             return NULL;
         }
         s_panes[target].doc = d;
