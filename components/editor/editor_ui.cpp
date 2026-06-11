@@ -662,6 +662,18 @@ typedef enum {
 } split_mode_t;
 static split_mode_t s_split_mode = SPLIT_NONE;
 
+/* True while the editor screen is the active top-level screen, false
+ * while the file browser is. This is the authoritative source for
+ * key-event routing and refresh gating. It must NOT be derived from
+ * editor_get_mode(): the editor "mode" is a per-document property
+ * (editor.cpp aliases it onto the active document), and the active
+ * document is re-bound to the focused pane on every cursor blink and
+ * refresh. Reading the per-document mode to decide which screen we are
+ * on therefore breaks in split mode -- the focused pane can carry an
+ * EDITING mode while the browser is on screen, leaving keystrokes
+ * routed to the (hidden) editor and the browser apparently frozen. */
+static bool s_editor_screen_active = false;
+
 /* Which pane a file-browser "open" / "new" action should load into.
  * Set by editor_ui_show_file_browser(): in single-pane mode this is
  * pane 0 (replace the current document); while split it is the
@@ -1476,7 +1488,7 @@ static void refresh_active_pane(bool draw_cursor)
  * pointing at it for subsequent key handling. */
 extern "C" void editor_ui_refresh(void)
 {
-    if (editor_get_mode() != EDITOR_MODE_EDITING) return;
+    if (!s_editor_screen_active) return;
 
     for (int p = 0; p < s_pane_count; p++) {
         if (p == s_focus) continue;     /* focused pane drawn last */
@@ -1910,7 +1922,7 @@ static void editor_touch_event_cb(lv_event_t *e)
         s_exit_open) {
         return;
     }
-    if (editor_get_mode() != EDITOR_MODE_EDITING) return;
+    if (!s_editor_screen_active) return;
 
     /* Focus follows touch: bind the tapped pane (its index was stored
      * in the container's user_data at creation) so all drag / caret
@@ -2237,6 +2249,11 @@ static void refresh_file_list(void)
 
 extern "C" void editor_ui_show_file_browser(void)
 {
+    /* Mark the browser as the active screen up front so key routing and
+     * refresh gating switch over immediately, regardless of the focused
+     * pane's per-document editor mode (see s_editor_screen_active). */
+    s_editor_screen_active = false;
+
     if (s_pane_count <= 1) {
         /* Single-pane: opening a file replaces the current document, so
          * close it now (historical behavior; the buffer is reloaded
@@ -2245,14 +2262,7 @@ extern "C" void editor_ui_show_file_browser(void)
         s_open_target_pane = 0;
     } else {
         /* Split: keep both documents open and target the unfocused pane
-         * so the picked file appears beside the focused one. The
-         * documents stay open, so editor_close_file() (which also drops
-         * us out of editing mode) is intentionally skipped -- but the
-         * key dispatcher routes on the global editor mode, so we must
-         * still leave editing mode here or the browser screen would be
-         * shown while keys keep going to the editor handler, making the
-         * browser appear frozen. */
-        editor_set_mode(EDITOR_MODE_NORMAL);
+         * so the picked file appears beside the focused one. */
         s_open_target_pane = (s_focus + 1) % s_pane_count;
     }
     refresh_file_list();
@@ -2270,6 +2280,7 @@ extern "C" void editor_ui_show_file_browser(void)
 
 extern "C" void editor_ui_show_editor(void)
 {
+    s_editor_screen_active = true;
     editor_set_mode(EDITOR_MODE_EDITING);
     sync_battery_labels();
     lv_scr_load(s_scr);
@@ -2574,7 +2585,7 @@ static void show_menu(void)
 static void close_menu(void)
 {
     s_menu_open = false;
-    if (editor_get_mode() == EDITOR_MODE_EDITING)
+    if (s_editor_screen_active)
         editor_ui_show_editor();
     else
         editor_ui_show_file_browser();
@@ -3804,13 +3815,44 @@ static void editor_ui_focus_other_pane(void)
  * `target` through the document pool. A path already open in the other
  * pane shares the same refcounted buffer. Releases whatever document
  * the target pane held previously. Returns the acquired document, or
- * NULL on failure (the target pane is left unchanged and the previously
- * active document is restored). */
+ * NULL on failure. On failure the engine is left with a valid active
+ * document; the target pane keeps its previous document when a slot was
+ * available, or is emptied if its previous document had to be released
+ * first to make room (pool-exhausted retry path). */
 static editor_doc_t *open_into_pane(int target, const char *path)
 {
     if (target < 0 || target >= EDITOR_MAX_PANES) return NULL;
     editor_doc_t *prev = s_panes[target].doc;
     editor_doc_t *d = editor_doc_acquire(path);
+    if (!d && prev) {
+        /* The document pool is exhausted. With EDITOR_MAX_DOCS == 2 this
+         * happens whenever both panes already hold distinct documents
+         * and the user asks to open a third path into one of them: the
+         * acquire above needs a free slot before this pane's previous
+         * document is released. Release the target pane's previous
+         * document first to free its slot, then retry the acquire. The
+         * other pane's document is untouched. (If the requested path is
+         * already open in the other pane, the first acquire would have
+         * succeeded via the shared-buffer fast path and we never get
+         * here.) */
+        s_panes[target].doc = NULL;
+        editor_doc_release(prev);
+        prev = NULL;
+        d = editor_doc_acquire(path);
+        if (!d) {
+            /* Open still failed (e.g. file too large / read error). The
+             * target pane is now empty; restore a valid active document
+             * so the engine is never left without one. */
+            editor_doc_t *fallback = (s_pane_count > 1)
+                                         ? s_panes[(target + 1) % EDITOR_MAX_PANES].doc
+                                         : NULL;
+            if (fallback) editor_set_active(fallback);
+            return NULL;
+        }
+        s_panes[target].doc = d;
+        editor_set_active(d);
+        return d;
+    }
     if (!d) {
         if (prev) editor_set_active(prev);
         return NULL;
@@ -4382,7 +4424,7 @@ static void process_key_event(const kb_event_t *ev)
         handle_settings_key(e);
     } else if (s_menu_open) {
         handle_menu_key(e);
-    } else if (editor_get_mode() == EDITOR_MODE_EDITING) {
+    } else if (s_editor_screen_active) {
         handle_editor_key(e);
     } else {
         handle_browser_key(e);
@@ -4550,7 +4592,7 @@ static void apply_pending_connect_state(void)
              * does not inherit a sticky press that would absorb
              * the first tap. */
             lv_indev_reset(NULL, NULL);
-            if (editor_get_mode() == EDITOR_MODE_EDITING) {
+            if (s_editor_screen_active) {
                 /* Restore the editor -- file contents are still in
                  * the gap buffer; no need to close/reopen. */
                 lv_scr_load(s_scr);
@@ -4744,7 +4786,7 @@ static void git_sync_cb(git_sync_state_t state, const char *message)
                  message ? message : "sync complete");
         /* If a file is currently open in the editor, reload it from disk
          * so the user sees any changes that were pulled from the remote. */
-        if (editor_get_mode() == EDITOR_MODE_EDITING && editor_get_file_path()) {
+        if (s_editor_screen_active && editor_get_file_path()) {
             const char *path = editor_get_file_path();
             esp_err_t rerr = editor_open_file(path);
             if (rerr == ESP_ERR_NO_MEM) {
