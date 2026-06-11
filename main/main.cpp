@@ -431,6 +431,7 @@ static void t5_disable_radios_at_boot(void)
     t5_gps_sleep();
 }
 
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 /* Sweep a hard-coded list of GPIOs that are not wired to any
  * peripheral on the T5 (per the LilyGO factory schematic) and
  * isolate them so they don't leak through floating inputs in deep
@@ -438,7 +439,11 @@ static void t5_disable_radios_at_boot(void)
  * rtc_gpio_isolate() is the documented low-power state for those.
  * Non-RTC pins are released to high-Z via gpio_reset_pin -- the
  * pad's analog input is already off in deep sleep, so a high-Z
- * output is the lowest-leakage state available. */
+ * output is the lowest-leakage state available.
+ *
+ * Only the original Pro variant uses the deep-sleep path that
+ * calls into these helpers; the H752 build has its own teardown
+ * and would warn-as-unused if these were compiled in. */
 static void t5_isolate_unused_gpios(void)
 {
     /* ESP32-S3 RTC-IO range is GPIO0..GPIO21. Skip pins that are
@@ -543,6 +548,7 @@ static void t5_release_held_gpios_after_wake(void)
         }
     }
 }
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO */
 
 #if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 static void pre_sleep_t5_deinit(void)

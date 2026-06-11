@@ -28,4 +28,10 @@ idf_component_register(
 
 if(CONFIG_DRAFTLING_DISPLAY_H752_EPD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE USE_BIT_BANG_I2C=1)
+    # Vendored third-party sources (FastEPD by BitBank) leave some
+    # ESP-IDF struct fields default-initialized (e.g. the newer
+    # esp_lcd_i80_bus_config_t::sram_trans_align), which trips
+    # -Wmissing-field-initializers. Silence it for this component
+    # only so upstream warnings stay visible elsewhere.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-missing-field-initializers)
 endif()
