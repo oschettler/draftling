@@ -299,7 +299,8 @@ Shortcuts: `Ctrl+1` single pane (`SPLIT_NONE`), `Ctrl+2` equal split
 (`editor_ui_focus_other_pane()`). Digit HID keycodes (1 = 0x1E,
 2 = 0x1F, 3 = 0x20) and `KB_KEY_TAB` are matched before the a..z Ctrl
 switch in `handle_editor_key()`. While split, the file browser
-(`Ctrl+O`) targets the unfocused pane via `open_into_pane()`; opening
+(`Ctrl+O`) targets the focused pane via `open_into_pane()`, so each
+panel opens a file for itself (focus a pane, then `Ctrl+O`); opening
 the same path in both panes shares one refcounted buffer (two views of
 one document). Enabling a split acquires a fresh untitled document
 into pane 1; collapsing keeps it open in the background. The split

@@ -677,8 +677,7 @@ static bool s_editor_screen_active = false;
 /* Which pane a file-browser "open" / "new" action should load into.
  * Set by editor_ui_show_file_browser(): in single-pane mode this is
  * pane 0 (replace the current document); while split it is the
- * unfocused pane, so opening a second file places it beside the
- * focused one. */
+ * focused pane, so each panel opens a file for itself. */
 static int     s_open_target_pane = 0;
 
 /* Alias the historical per-document globals onto the current pane. */
@@ -2261,9 +2260,11 @@ extern "C" void editor_ui_show_file_browser(void)
         editor_close_file();
         s_open_target_pane = 0;
     } else {
-        /* Split: keep both documents open and target the unfocused pane
-         * so the picked file appears beside the focused one. */
-        s_open_target_pane = (s_focus + 1) % s_pane_count;
+        /* Split: keep both documents open and target the focused pane,
+         * so each panel opens a file for itself -- focus a pane, press
+         * Ctrl+O, and the picked file loads into that same pane while the
+         * other pane keeps its document. */
+        s_open_target_pane = s_focus;
     }
     refresh_file_list();
 
@@ -3736,8 +3737,9 @@ static bool cursor_line_is_rtl(void)
  * Enabling a split for the first time acquires a fresh, empty untitled
  * document into pane 1; collapsing back to a single pane keeps pane 1's
  * document open in the background so re-splitting restores it. Each
- * pane independently selects a file (the unfocused pane is targeted by
- * the file browser); opening the same path in both panes shares one
+ * pane independently selects a file (the file browser targets the
+ * focused pane, so each panel opens a file for itself); opening the
+ * same path in both panes shares one
  * refcounted buffer so the two editors view / edit the same file. */
 static void save_split_to_nvs(void)
 {
@@ -4254,11 +4256,11 @@ static void browser_activate_item(int row)
          * have acted on the active doc). */
         s_panes[0].doc = editor_get_active();
     } else {
-        /* Split: load the file into the target (unfocused) pane through
+        /* Split: load the file into the target (focused) pane through
          * the document pool, sharing the buffer if the same path is
          * already open in the other pane. */
         int tp = (s_open_target_pane >= 0 && s_open_target_pane < s_pane_count)
-                     ? s_open_target_pane : (s_focus + 1) % s_pane_count;
+                     ? s_open_target_pane : s_focus;
         editor_doc_t *d = open_into_pane(tp, path);
         if (!d) {
             editor_ui_set_status("Open failed");
