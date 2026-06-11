@@ -55,6 +55,7 @@ development boards with reflective LCD, e-paper or color LCD displays.
 | Ctrl+O | Open file browser |
 | Ctrl+N | New file |
 | Ctrl+L | Cycle keyboard layout |
+| Win+Space | Cycle keyboard layout (same as Ctrl+L) |
 | Ctrl+G | Git sync (pull + push) |
 | Ctrl+W | Toggle WiFi (connect / disconnect) |
 | Ctrl+F | Find |
@@ -65,7 +66,7 @@ development boards with reflective LCD, e-paper or color LCD displays.
 | Ctrl+B | Cycle backlight / front-light brightness (boards with a controllable backlight) |
 | Ctrl+Home/End | Start / end of document |
 | Ctrl+Left/Right | Word movement |
-| Escape | Switch to file browser |
+| Escape | Switch to file browser. With unsaved changes, a dialog offers Save and exit / Exit without saving / Cancel (Up/Down + Enter to choose) |
 
 ## Touch Operations
 
@@ -276,7 +277,7 @@ touch instead.
 ## Keyboard Layouts
 
 The editor supports four keyboard layouts that can be switched with
-**Ctrl+L** or through the **F1 menu**:
+**Ctrl+L** (or **Win+Space**) or through the **F1 menu**:
 
 | Code | Layout |
 |------|--------|

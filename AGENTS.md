@@ -273,6 +273,18 @@ switches between the Find and Replace fields, `Enter` jumps to the
 next match (wrapping at end-of-document), and `Ctrl+Enter` replaces
 the current match and advances to the next.
 
+The keyboard layout is cycled with `Ctrl+L` or, equivalently, with
+`Win+Space` (the GUI modifier plus HID keycode 0x2C); both call
+`kb_layout_next()` from `handle_editor_key()`.
+
+`Esc` in the editor leaves to the file browser. When the document has
+unsaved changes it instead opens a small modal overlay (`s_exit_panel`,
+handled by `handle_exit_prompt_key()`) offering three choices --
+"Save and exit", "Exit without saving" and "Cancel (keep editing)" --
+navigated with `Up`/`Down` and confirmed with `Enter`; `Esc` inside
+the dialog cancels. For an untitled document, "Save and exit" first
+opens the save-as prompt so the user can name the file.
+
 The title bar shows `L %d/%d` (current line / total lines) on every
 build; on non-EPD targets the column counter is appended as well.
 
@@ -324,7 +336,8 @@ for the active keyboard layout. Supports US-English (QWERTY), Ukrainian
 (Cyrillic), German (QWERTZ), and French (AZERTY). Each layout can be
 independently enabled or disabled at build time via Kconfig (see
 `components/kb_layout/Kconfig.projbuild`). The active layout is cycled
-at runtime with `kb_layout_next()`.
+at runtime with `kb_layout_next()` (bound to `Ctrl+L` and `Win+Space`
+in the editor).
 
 Public API: `kb_layout_translate()`, `kb_layout_set()`, `kb_layout_get()`,
 `kb_layout_name()`, `kb_layout_next()`.

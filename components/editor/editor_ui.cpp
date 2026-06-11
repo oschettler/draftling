@@ -490,9 +490,26 @@ static int       s_replace_pos     = 0;    /* byte cursor into s_replace_buf */
 static int       s_search_match_start = -1;
 static int       s_search_match_end   = -1;
 
-/* Escape-save-prompt: when true the user has been warned about unsaved
- * changes and a second Esc will discard + close. */
-static bool s_esc_pending = false;
+/* ---- Exit (Esc) prompt overlay ----
+ * Shown when Esc is pressed in the editor with unsaved changes. Offers
+ * three choices: save the file, exit without saving, or cancel and
+ * keep editing. Navigated with Up/Down + Enter; Esc cancels. */
+static lv_obj_t *s_exit_panel    = NULL;
+static lv_obj_t *s_exit_hdr_lbl  = NULL;
+static lv_obj_t *s_exit_opt_lbl[3] = { NULL, NULL, NULL };
+static bool      s_exit_open     = false;
+static int       s_exit_sel      = 0;      /* 0=Save 1=Exit-no-save 2=Cancel */
+
+#define EXIT_OPT_SAVE   0
+#define EXIT_OPT_DISCARD 1
+#define EXIT_OPT_CANCEL 2
+#define EXIT_OPT_COUNT  3
+
+static const char *const EXIT_OPT_LABELS[EXIT_OPT_COUNT] = {
+    "Save and exit",
+    "Exit without saving",
+    "Cancel (keep editing)",
+};
 
 /* ---- Device battery display ----
  *
@@ -1709,7 +1726,8 @@ static void editor_touch_event_cb(lv_event_t *e)
     /* Bail out early if any modal overlay is open: the overlay's
      * own keyboard handler owns the input. (A future revision could
      * give overlays their own touch routing; for now we skip them.) */
-    if (s_menu_open || s_settings_open || s_save_open || s_search_open) {
+    if (s_menu_open || s_settings_open || s_save_open || s_search_open ||
+        s_exit_open) {
         return;
     }
     if (editor_get_mode() != EDITOR_MODE_EDITING) return;
@@ -2965,6 +2983,97 @@ static void handle_save_prompt_key(const kb_event_t *ev)
     refresh_save_prompt();
 }
 
+/* ---- Exit (Esc) prompt overlay ----
+ * Asks whether to save, exit without saving, or cancel when Esc is
+ * pressed in the editor with unsaved changes. */
+
+static void refresh_exit_prompt(void)
+{
+    if (!s_exit_panel) return;
+    for (int i = 0; i < EXIT_OPT_COUNT; i++) {
+        if (!s_exit_opt_lbl[i]) continue;
+        bool sel = (i == s_exit_sel);
+        /* Invert colors on the selected option so the highlight is
+         * visible on the 1-bpp reflective / e-paper panels. */
+        lv_obj_set_style_bg_color(s_exit_opt_lbl[i],
+                                  sel ? theme_fg() : theme_bg(), 0);
+        lv_obj_set_style_bg_opa(s_exit_opt_lbl[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(s_exit_opt_lbl[i],
+                                    sel ? theme_bg() : theme_fg(), 0);
+    }
+}
+
+static void close_exit_prompt(void)
+{
+    s_exit_open = false;
+    if (s_exit_panel) lv_obj_add_flag(s_exit_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void show_exit_prompt(void)
+{
+    if (!s_exit_panel) return;
+    s_exit_open = true;
+    s_exit_sel  = EXIT_OPT_SAVE;
+    lv_obj_remove_flag(s_exit_panel, LV_OBJ_FLAG_HIDDEN);
+    refresh_exit_prompt();
+}
+
+static void exit_prompt_activate(void)
+{
+    switch (s_exit_sel) {
+    case EXIT_OPT_SAVE:
+        close_exit_prompt();
+        if (editor_get_file_path()) {
+            /* Known filename -- save in place and leave the editor. */
+            if (editor_save_file() == ESP_OK) {
+                editor_ui_show_file_browser();
+            } else {
+                editor_ui_set_status("Save failed!");
+            }
+        } else {
+            /* Untitled document -- ask for a filename first. The user
+             * stays in the editor; once saved a later Esc exits
+             * cleanly because the document is no longer modified. */
+            show_save_prompt();
+        }
+        return;
+    case EXIT_OPT_DISCARD:
+        close_exit_prompt();
+        editor_ui_show_file_browser();
+        return;
+    case EXIT_OPT_CANCEL:
+    default:
+        close_exit_prompt();
+        editor_ui_set_status(
+            "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+        return;
+    }
+}
+
+static void handle_exit_prompt_key(const kb_event_t *ev)
+{
+    switch (ev->keycode) {
+    case KB_KEY_UP:
+        s_exit_sel = (s_exit_sel + EXIT_OPT_COUNT - 1) % EXIT_OPT_COUNT;
+        refresh_exit_prompt();
+        return;
+    case KB_KEY_DOWN:
+        s_exit_sel = (s_exit_sel + 1) % EXIT_OPT_COUNT;
+        refresh_exit_prompt();
+        return;
+    case KB_KEY_ENTER:
+        exit_prompt_activate();
+        return;
+    case KB_KEY_ESCAPE:
+        /* Esc inside the dialog cancels and keeps editing. */
+        s_exit_sel = EXIT_OPT_CANCEL;
+        exit_prompt_activate();
+        return;
+    default:
+        break;
+    }
+}
+
 /* ---- Search / Replace overlay logic ---- */
 
 /* Render both fields and place the cursor bar in the active one. */
@@ -3414,13 +3523,6 @@ static void handle_editor_key(const kb_event_t *ev)
     bool &fast_path_eligible = clip_guard.eligible;
 #endif
 
-    /* Clear the escape-save-prompt on any key other than Esc */
-    if (ev->keycode != KB_KEY_ESCAPE && s_esc_pending) {
-        s_esc_pending = false;
-        editor_ui_set_status(
-            "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
-    }
-
     /* Forget the "preferred column" used by visual Up/Down navigation
      * the moment the user presses anything else -- otherwise typing,
      * Home/End, etc. would leave a stale goal_x that the next Up/Down
@@ -3432,6 +3534,17 @@ static void handle_editor_key(const kb_event_t *ev)
     /* F1 opens the menu */
     if (ev->keycode == KB_KEY_F1) {
         show_menu();
+        return;
+    }
+
+    /* Win+Space cycles the keyboard layout, mirroring Ctrl+L. HID
+     * keycode 0x2C is Space; the GUI ("Win"/"Cmd") modifier is
+     * KB_MOD_LGUI / KB_MOD_RGUI. */
+    if ((ev->modifier & (KB_MOD_LGUI | KB_MOD_RGUI)) &&
+        ev->keycode == KB_KEY_SPACE) {
+        kb_layout_next();
+        ensure_cursor_visible();
+        editor_ui_refresh();
         return;
     }
 
@@ -3661,21 +3774,13 @@ static void handle_editor_key(const kb_event_t *ev)
         break;
     case KB_KEY_ESCAPE:
         if (editor_is_modified()) {
-            if (s_esc_pending) {
-                /* Second Esc -- discard and close */
-                s_esc_pending = false;
-                editor_ui_show_file_browser();
-                return;
-            }
-            /* First Esc -- warn the user */
-            s_esc_pending = true;
-            editor_ui_set_status("Unsaved! Ctrl+S:Save  Esc:Discard");
-        } else {
-            s_esc_pending = false;
-            editor_ui_show_file_browser();
+            /* Ask whether to save, discard, or keep editing. */
+            show_exit_prompt();
             return;
         }
-        break;
+        /* No unsaved changes -- leave the editor immediately. */
+        editor_ui_show_file_browser();
+        return;
     default: {
         /* Use keyboard layout to translate keycode to UTF-8 */
         const char *text = kb_layout_translate(ev->keycode, ev->modifier);
@@ -3885,6 +3990,8 @@ static void process_key_event(const kb_event_t *ev)
 
     if (s_save_open) {
         handle_save_prompt_key(e);
+    } else if (s_exit_open) {
+        handle_exit_prompt_key(e);
     } else if (s_search_open) {
         handle_search_prompt_key(e);
     } else if (s_settings_open) {
@@ -4083,6 +4190,8 @@ static void apply_pending_connect_state(void)
 #endif
         s_save_open = false;
         if (s_save_panel) lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+        s_exit_open = false;
+        if (s_exit_panel) lv_obj_add_flag(s_exit_panel, LV_OBJ_FLAG_HIDDEN);
         s_search_open = false;
         if (s_search_panel) lv_obj_add_flag(s_search_panel, LV_OBJ_FLAG_HIDDEN);
         /* Cancel any in-progress key repeat so stale keys do not
@@ -4767,6 +4876,41 @@ static void build_screens(void)
     lv_obj_set_style_pad_all(s_save_cur, 0, 0);
     lv_obj_add_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
 
+    /* ---- Exit (Esc) prompt overlay (shown on the editor screen) ----
+     * Header line plus three selectable option rows. */
+    {
+        int rows = EXIT_OPT_COUNT;
+        int panel_h = 20 + rows * (LINE_H + 2) + 12;
+        s_exit_panel = lv_obj_create(s_scr);
+        lv_obj_set_size(s_exit_panel, SCR_W - 20, panel_h);
+        lv_obj_set_pos(s_exit_panel, 10, (SCR_H - panel_h) / 2);
+        lv_obj_set_style_bg_color(s_exit_panel, theme_bg(), 0);
+        lv_obj_set_style_bg_opa(s_exit_panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(s_exit_panel, theme_fg(), 0);
+        lv_obj_set_style_border_width(s_exit_panel, 2, 0);
+        lv_obj_set_style_radius(s_exit_panel, 4, 0);
+        lv_obj_set_style_pad_all(s_exit_panel, 6, 0);
+        lv_obj_remove_flag(s_exit_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_exit_panel, LV_OBJ_FLAG_HIDDEN);
+
+        s_exit_hdr_lbl = lv_label_create(s_exit_panel);
+        lv_obj_set_style_text_font(s_exit_hdr_lbl, FONT_11, 0);
+        lv_obj_set_style_text_color(s_exit_hdr_lbl, theme_fg(), 0);
+        lv_label_set_text(s_exit_hdr_lbl,
+                          "Unsaved changes (Up/Down + Enter):");
+        lv_obj_set_pos(s_exit_hdr_lbl, 0, 0);
+
+        for (int i = 0; i < EXIT_OPT_COUNT; i++) {
+            s_exit_opt_lbl[i] = lv_label_create(s_exit_panel);
+            lv_obj_set_style_text_font(s_exit_opt_lbl[i], FONT_11, 0);
+            lv_obj_set_style_text_color(s_exit_opt_lbl[i], theme_fg(), 0);
+            lv_obj_set_width(s_exit_opt_lbl[i], SCR_W - 20 - 12);
+            lv_obj_set_style_pad_hor(s_exit_opt_lbl[i], 2, 0);
+            lv_label_set_text(s_exit_opt_lbl[i], EXIT_OPT_LABELS[i]);
+            lv_obj_set_pos(s_exit_opt_lbl[i], 0, 20 + i * (LINE_H + 2));
+        }
+    }
+
     /* ---- Search / Replace overlay (shown on the editor screen) ---- */
     s_search_panel = lv_obj_create(s_scr);
     lv_obj_set_size(s_search_panel, SCR_W - 20, 76);
@@ -4893,6 +5037,8 @@ static void teardown_screens(void)
     s_ble_prompt_lbl = NULL;
     s_passkey_panel = s_passkey_label = NULL;
     s_save_panel = s_save_hdr_lbl = s_save_name_lbl = s_save_cur = NULL;
+    s_exit_panel = s_exit_hdr_lbl = NULL;
+    s_exit_opt_lbl[0] = s_exit_opt_lbl[1] = s_exit_opt_lbl[2] = NULL;
     s_search_panel = s_search_hdr_lbl = NULL;
     s_search_find_hdr = s_search_find_lbl = NULL;
     s_search_repl_hdr = s_search_repl_lbl = NULL;
@@ -4912,6 +5058,7 @@ static void teardown_screens(void)
 #endif
     s_factory_reset_confirm   = false;
     s_save_open               = false;
+    s_exit_open               = false;
     s_search_open             = false;
     s_search_replace_mode     = false;
 
