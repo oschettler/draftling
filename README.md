@@ -129,6 +129,18 @@ automatically from that choice.
   Same as the Pro variant minus the SX1262 LoRa radio and MIA-M10Q
   GPS; on-board MicroSD lives alone on SPI3.
 
+- **[LilyGO T5 E-Paper S3 Pro
+  (H752)](https://github.com/Xinyuan-LilyGO/T5S3-4.7-e-paper-PRO)** --
+  Original pre-"H752-01" revision (v1.0-240810) of the LilyGO T5
+  E-Paper S3 Pro. Same 4.7" ED047TC1 panel (960x540) and GT911 touch
+  as the current Pro / Pro Lite, but without the PCA9535 IO expander
+  and TPS65185 PMIC, so the panel is driven by the vendored FastEPD
+  library (`components/fastepd`) instead of `vroland/epdiy`. The side
+  key on GPIO48 acts as a Menu key (injects F1); GPIO48 is not an RTC
+  IO, so standby uses light sleep + `gpio_wakeup` + `esp_restart`
+  rather than EXT0 deep sleep. The capacitive touch key below the
+  panel acts as Back (injects Esc).
+
 - **[M5Stack PaperS3](https://docs.m5stack.com/en/core/papers3)** --
   4.7" e-paper ED047TC1 (540x960) driven over a parallel I80 bus by
   the `vroland/epdiy` managed component with a PaperS3-specific

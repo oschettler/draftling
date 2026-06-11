@@ -544,6 +544,7 @@ static void t5_release_held_gpios_after_wake(void)
     }
 }
 
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO)
 static void pre_sleep_t5_deinit(void)
 {
     ESP_LOGI(TAG, "Pre-sleep: LilyGO T5 peripheral teardown");
@@ -645,7 +646,9 @@ static void pre_sleep_t5_deinit(void)
      * specifically) so the level stays driven through deep sleep. */
     gpio_deep_sleep_hold_en();
 }
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO */
 
+#if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_H752)
 static void pre_sleep_h752_deinit(void)
 {
     ESP_LOGI(TAG, "Pre-sleep: LilyGO original H752 peripheral teardown");
@@ -668,6 +671,7 @@ static void pre_sleep_h752_deinit(void)
     display_deep_sleep_prepare();
     gpio_deep_sleep_hold_en();
 }
+#endif /* CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_H752 */
 #endif /* LilyGO T5 EPD S3 family */
 
 #if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_H752)
