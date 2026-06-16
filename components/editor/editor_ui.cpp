@@ -2283,6 +2283,19 @@ extern "C" void editor_ui_show_file_browser(void)
          * pane, keeping the other pane's document on screen. The editor
          * screen stays active; the in-pane selector flag (checked first
          * in process_key_event) reroutes keys to the browser handler. */
+
+        /* The in-pane selector is drawn as a child of the editor screen
+         * (s_scr). At boot (or after a BLE (re)connect) the split layout
+         * is restored before any editor screen has been loaded -- the
+         * active LVGL screen is still the BLE prompt. Loading the overlay
+         * onto an off-screen canvas leaves the prompt frozen on screen
+         * and swallows keystrokes, so make the editor screen active and
+         * paint both panes before overlaying the selector. */
+        s_editor_screen_active = true;
+        if (lv_scr_act() != s_scr) {
+            lv_scr_load(s_scr);
+            editor_ui_refresh();
+        }
         show_inpane_browser();
         return;
     }
