@@ -46,6 +46,10 @@ static const char *TAG = "Tab5Kbd";
 /* HID keycodes 0..3 are reserved error codes; 0 means "no key". */
 #define HID_KEY_MIN       0x04
 
+/* A 0xFF/0xFF report is the sentinel for "no event" returned when the
+ * queue is read while empty; it must not be treated as a keypress. */
+#define HID_NO_EVENT_BYTE 0xFF
+
 /* Cap the per-IRQ drain so a wedged device cannot spin forever. */
 #define EVENT_DRAIN_MAX   32
 
@@ -148,12 +152,13 @@ static void drain_events(void)
 
     if (status & INT_STA_HID_BIT) {
         uint8_t count = 0;
-        if (reg_read_byte(REG_EVENT_NUM, &count) == true) {
+        if (reg_read_byte(REG_EVENT_NUM, &count)) {
             int guard = 0;
             while (count > 0 && guard < EVENT_DRAIN_MAX) {
                 uint8_t buf[2];
                 if (reg_read(REG_HID_EVENT, buf, 2)) {
-                    if (!(buf[0] == 0xFF && buf[1] == 0xFF)) {
+                    if (!(buf[0] == HID_NO_EVENT_BYTE &&
+                          buf[1] == HID_NO_EVENT_BYTE)) {
                         process_hid_report(buf[0], buf[1]);
                     }
                 }

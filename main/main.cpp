@@ -1520,13 +1520,13 @@ extern "C" void app_main(void)
      * user unplugs the USB keyboard (the USB disconnect handler in
      * usb_kbd.cpp calls ble_keyboard_enable() which restarts
      * scanning) or chooses "BLE: Start scan" from the menu. When a
-     * local keyboard (USB or the Tab5 attachable keyboard) is
+     * wired keyboard (USB or the Tab5 attachable keyboard) is
      * already present at boot we initialise BLE and immediately
      * disable it; the BT controller stays up but the host stops
      * scanning and stops dispatching key events / status text until
      * it is re-enabled. */
-    bool local_kbd_present = usb_kbd_present || tab5_kbd_present;
-    if (local_kbd_present) {
+    bool wired_kbd_present = usb_kbd_present || tab5_kbd_present;
+    if (wired_kbd_present) {
         if (usb_kbd_present) {
             ESP_LOGI(TAG, "USB keyboard detected; BLE will stay idle "
                           "until the USB keyboard is unplugged");
