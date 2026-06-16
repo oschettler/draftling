@@ -362,6 +362,25 @@ config DRAFTLING_USB_KBD_PROBE_MS
         all keyboards tested so far. If shorter, slow keyboards may
         miss the window and BLE will be brought up instead.
 
+# Enables the M5Stack Tab5 attachable keyboard driver
+# (components/tab5_kbd). The keyboard talks over the shared system
+# I2C bus (address 0x6D) plus a dedicated interrupt line. main.cpp
+# probes for it at boot; if present it feeds the editor alongside any
+# USB keyboard, and BLE is left available on demand via the menu.
+config DRAFTLING_HAS_TAB5_KBD
+    bool
+    default y if DRAFTLING_MODEL_M5STACK_TAB5
+    default n
+
+config DRAFTLING_TAB5_KBD_INT_GPIO
+    int
+    depends on DRAFTLING_HAS_TAB5_KBD
+    default 50
+    help
+        GPIO wired to the Tab5 keyboard's interrupt (INT) line. The
+        keyboard pulls this line low when a key event is queued; the
+        driver reads the event over I2C on the falling edge.
+
 # DRAFTLING_HAS_POWER_LATCH is set automatically on boards that wire
 # the battery rail through a hardware latch (typically a TCA9554 IO
 # expander pin) so that the firmware can fully power the device off.

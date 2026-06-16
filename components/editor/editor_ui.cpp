@@ -17,6 +17,9 @@
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
 #include "usb_kbd.h"
 #endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+#include "tab5_kbd.h"
+#endif
 #include "kb_layout.h"
 #include "wifi_manager.h"
 #include "git_sync.h"
@@ -2716,6 +2719,11 @@ static void menu_activate_item(int idx)
     case 0: /* BLE status -- no action */
         break;
     case 1: /* BLE scan */
+        /* BLE may be idle (disabled) when another keyboard owns input
+         * -- e.g. a USB or Tab5 keyboard was present at boot. Re-enable
+         * it first so an on-demand scan can actually start. No-op when
+         * BLE is already active. */
+        ble_keyboard_enable();
         ble_keyboard_start_scan();
         editor_ui_set_status("BLE: scanning...");
         close_menu();
@@ -4545,6 +4553,12 @@ static void build_screens(void)
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
     usb_kbd_set_callback((kb_event_callback_t)editor_ui_handle_key);
+#endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+    /* Tab5 attachable keyboard feeds the same handler. It coexists
+     * with USB / BLE rather than replacing them: on the Tab5 the
+     * built-in keyboard and a USB keyboard are both accepted. */
+    tab5_kbd_set_callback((kb_event_callback_t)editor_ui_handle_key);
 #endif
 
     /* ---- BLE connection prompt screen ---- */

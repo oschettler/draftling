@@ -44,6 +44,9 @@
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
 #include "usb_kbd.h"
 #endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+#include "tab5_kbd.h"
+#endif
 
 static const char *TAG = "Draftling";
 
@@ -1465,6 +1468,23 @@ extern "C" void app_main(void)
     }
 #endif
 
+    /* Bring up the M5Stack Tab5 attachable keyboard (I2C + GPIO INT).
+     * Probed once here: if the keyboard is attached it is initialised
+     * in HID interrupt mode and feeds the editor alongside any USB
+     * keyboard; if it is absent the driver goes idle and issues no
+     * further I2C traffic this boot. Runs before the USB probe so the
+     * combined "is any wired keyboard present?" decision below can
+     * suppress the automatic BLE scan when local input already
+     * exists. */
+    bool tab5_kbd_present = false;
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+    ESP_LOGI(TAG, "Probing for Tab5 keyboard...");
+    if (tab5_kbd_init(bsp_i2c_get_handle(),
+                      CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO) == 0) {
+        tab5_kbd_present = true;
+    }
+#endif
+
     /* Bring up USB Host + HID keyboard driver (Tab5: USB-A port).
      * If a USB keyboard is enumerated within the probe window we
      * disable BLE so the wired keyboard is the sole input source;
@@ -1499,18 +1519,26 @@ extern "C" void app_main(void)
      * We always bring BLE up so it can take over as soon as the
      * user unplugs the USB keyboard (the USB disconnect handler in
      * usb_kbd.cpp calls ble_keyboard_enable() which restarts
-     * scanning). When a USB keyboard is already present at boot
-     * we initialise BLE and immediately disable it; the BT
-     * controller stays up but the host stops scanning and stops
-     * dispatching key events / status text. */
-    if (usb_kbd_present) {
-        ESP_LOGI(TAG, "USB keyboard detected; BLE will stay idle "
-                      "until the USB keyboard is unplugged");
+     * scanning) or chooses "BLE: Start scan" from the menu. When a
+     * local keyboard (USB or the Tab5 attachable keyboard) is
+     * already present at boot we initialise BLE and immediately
+     * disable it; the BT controller stays up but the host stops
+     * scanning and stops dispatching key events / status text until
+     * it is re-enabled. */
+    bool local_kbd_present = usb_kbd_present || tab5_kbd_present;
+    if (local_kbd_present) {
+        if (usb_kbd_present) {
+            ESP_LOGI(TAG, "USB keyboard detected; BLE will stay idle "
+                          "until the USB keyboard is unplugged");
+        } else {
+            ESP_LOGI(TAG, "Tab5 keyboard detected; BLE stays idle "
+                          "(connect on demand via the menu)");
+        }
         /* editor_ui_init() left the "Searching for BLE keyboard..."
          * prompt screen active because at that point we did not yet
-         * know whether a USB keyboard would enumerate. Jump straight
-         * to the file browser; the BLE connect callback will not
-         * fire while BLE is disabled. */
+         * know whether a local keyboard would be present. Jump
+         * straight to the file browser; the BLE connect callback will
+         * not fire while BLE is disabled. */
         if (draftling_lvgl_port_lock(-1)) {
             editor_ui_show_file_browser();
             draftling_lvgl_port_unlock();

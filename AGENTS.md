@@ -75,7 +75,9 @@ components/                 Reusable IDF components
   power/                    TCA9554-latched battery rail + PWR-button driver
   sd_card/                  SD card (SDMMC 1-bit) file operations
   standby/                  Deep-sleep / standby inactivity timer
+  tab5_kbd/                 M5Stack Tab5 attachable keyboard (I2C + INT)
   wifi_manager/             WiFi STA connection manager
+  usb_kbd/                  USB HID keyboard host (boot protocol)
 ```
 
 ## Component Details
@@ -432,6 +434,50 @@ ESP-IDF v5.x `i2c_master_*` API; we issue only two register writes
 heavy `esp_io_expander_tca9554` dependency.
 
 Public API: `power_init()`, `power_set_long_press_cb()`, `power_off()`.
+
+### components/tab5_kbd/
+
+Driver for the M5Stack Tab5 attachable keyboard, a detachable QWERTY
+keyboard that talks to the ESP32-P4 over the shared system I2C bus
+(7-bit address 0x6D, see `TAB5_KBD_I2C_ADDR`) plus a dedicated
+interrupt line on GPIO 50 (`CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO`).
+Compiled in only when `CONFIG_DRAFTLING_HAS_TAB5_KBD` is set (Tab5
+default); main / editor pull it in via
+`idf_component_optional_requires()`.
+
+`tab5_kbd_init(bus, int_gpio)` probes the keyboard once by reading its
+version register (0xFE). If the keyboard is not attached the probe
+fails, the I2C device handle is removed, and the component stays
+permanently idle this boot -- no further traffic is issued on the bus
+shared with the touch controller, IMU and audio codec. If the probe
+succeeds the keyboard is switched to HID mode (register 0x10 = 1),
+the event queue / interrupt latch are cleared, RGB custom mode is
+selected (register 0x11 = 1), both indicator LEDs are lit green for
+one second and then turned off (a one-shot `esp_timer`), and a
+negative-edge GPIO interrupt on the INT line drives a worker task.
+
+On each interrupt the task reads the interrupt-status register
+(0x01); if the HID-event bit (0x02) is set it drains the queued
+events (count from register 0x02), reading the 2-byte HID report
+(modifier + keycode) from register 0x30 for each, then clears the
+status register to release the INT line. Because the Tab5 HID report
+carries a single keycode slot (keycode 0 means "no key"), each report
+is diffed against the previous one to synthesise the same
+`kb_event_t` press / release stream the BLE and USB keyboards emit;
+the editor key handler is shared verbatim. The Tab5 keyboard coexists
+with USB and BLE rather than replacing them: on the Tab5 the built-in
+keyboard and a USB keyboard both feed the editor, and when neither a
+USB nor BLE keyboard is connected the user can still start a BLE scan
+on demand from the F1 menu ("BLE: Start scan", which re-enables BLE
+if it was left idle at boot).
+
+Only the registers Draftling needs are implemented here; the full
+vendor library (RGB binding modes, string mode, I2C-address
+re-flashing, Arduino backend) from
+`m5stack/M5Tab5-Keyboard-UserDemo` is intentionally not vendored.
+
+Public API: `tab5_kbd_init()`, `tab5_kbd_is_present()`,
+`tab5_kbd_set_callback()`.
 
 ### components/wifi_manager/
 
