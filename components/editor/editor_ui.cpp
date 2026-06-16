@@ -4081,6 +4081,25 @@ static void apply_pending_connect_state(void)
                 "Keyboard connected!");
         }
     } else {
+        /* A BLE disconnect arrived, but if another local keyboard is
+         * still usable (the Tab5 attachable keyboard, or a USB
+         * keyboard) the user is NOT actually keyboard-less -- on the
+         * Tab5 the BLE host fires this callback simply because it gets
+         * disabled at boot once a wired keyboard is detected. Do not
+         * yank the user onto the "Keyboard disconnected /
+         * Reconnecting..." prompt screen in that case; leave the
+         * editor / file browser as-is. */
+        bool other_kbd = false;
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+        if (tab5_kbd_is_present()) other_kbd = true;
+#endif
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+        if (usb_kbd_is_connected()) other_kbd = true;
+#endif
+        if (other_kbd) {
+            return;
+        }
+
         /* Keyboard disconnected -- close any open overlays so the
          * UI is in a clean state when we reconnect.  Do NOT call
          * editor_close_file() -- preserve the user's work. */
