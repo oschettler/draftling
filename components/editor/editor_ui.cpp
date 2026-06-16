@@ -644,6 +644,19 @@ typedef struct {
     int  y;                /* content-area top (screen y) */
     int  h;                /* content-area height */
     bool cursor_on_screen; /* last refresh placed the cursor in view */
+
+    /* Per-pane view state (cursor / scroll / selection). When the same
+     * file is open in both panes they share one editor_doc_t (one
+     * buffer, one set of cursor/scroll/selection fields). To keep each
+     * pane's view independent, pane_bind() stashes the outgoing pane's
+     * view here and restores the incoming pane's view into the shared
+     * document. v_valid is false until the pane first adopts its
+     * document's current view (so a freshly opened file keeps the cursor
+     * restored from its sidecar metadata). */
+    size_t v_cursor;       /* saved cursor (logical byte offset) */
+    int    v_scroll;       /* saved scroll line */
+    int    v_sel_anchor;   /* saved selection anchor (< 0 = none) */
+    bool   v_valid;        /* view state has been captured at least once */
 } pane_t;
 
 static pane_t  s_panes[EDITOR_MAX_PANES];
@@ -716,14 +729,70 @@ static void close_inpane_browser(void);
 #define s_prev_line_was_selected (s_rp->prev_line_was_selected)
 #define s_cursor_on_screen       (s_rp->cursor_on_screen)
 
+/* Capture the live document's view (cursor / scroll / selection) into a
+ * pane's saved view state. Used to record a pane's view from the active
+ * document so a sibling pane that shares the same buffer can restore its
+ * own independent view. */
+static void pane_capture_view(pane_t *p)
+{
+    p->v_cursor     = editor_get_cursor();
+    p->v_scroll     = editor_get_scroll_line();
+    p->v_sel_anchor = editor_get_sel_anchor();
+    p->v_valid      = true;
+}
+
+/* Push a pane's saved view back into the (now active) shared document so
+ * the document's cursor / scroll / selection reflect this pane. */
+static void pane_restore_view(pane_t *p)
+{
+    editor_set_cursor(p->v_cursor);
+    editor_set_scroll_line(p->v_scroll);
+    editor_set_sel_anchor(p->v_sel_anchor);
+}
+
 /* Bind pane idx as the current pane: point the aliasing macros at it
- * and make its document the engine's active document. */
+ * and make its document the engine's active document.
+ *
+ * Two panes that open the same file share one editor_doc_t (and thus one
+ * cursor / scroll / selection). To keep each pane's view independent,
+ * binding swaps view state in and out of the shared document: the
+ * outgoing pane's live view is captured, then the incoming pane's saved
+ * view is restored. Re-binding the already-current pane is a no-op for
+ * view state (the document already holds this pane's live view). */
 static void pane_bind(int idx)
 {
     if (idx < 0) idx = 0;
     if (idx >= EDITOR_MAX_PANES) idx = EDITOR_MAX_PANES - 1;
-    s_rp = &s_panes[idx];
-    if (s_rp->doc) editor_set_active(s_rp->doc);
+    pane_t *target = &s_panes[idx];
+
+    if (target == s_rp) {
+        /* Same pane: keep the active document current. Adopt the
+         * document's view the first time (e.g. just after a file was
+         * opened into this pane, which reset v_valid). */
+        if (s_rp->doc) {
+            editor_set_active(s_rp->doc);
+            if (!s_rp->v_valid) pane_capture_view(s_rp);
+        }
+        return;
+    }
+
+    /* Switching panes: stash the outgoing pane's live view (only valid
+     * while its document is the active one). */
+    if (s_rp && s_rp->doc && s_rp->doc == editor_get_active()) {
+        pane_capture_view(s_rp);
+    }
+
+    s_rp = target;
+    if (s_rp->doc) {
+        editor_set_active(s_rp->doc);
+        if (s_rp->v_valid) {
+            pane_restore_view(s_rp);
+        } else {
+            /* First bind: adopt the document's current view (cursor /
+             * scroll restored from its sidecar metadata on open). */
+            pane_capture_view(s_rp);
+        }
+    }
 }
 
 /* Bind the focused pane (the one that receives keyboard input). */
@@ -3822,6 +3891,7 @@ static void editor_ui_apply_split_mode(split_mode_t mode)
             return;
         }
         s_panes[1].doc = d;
+        s_panes[1].v_valid = false;   /* adopt the new doc's view */
     }
 
     s_split_mode = mode;
@@ -3896,6 +3966,7 @@ static editor_doc_t *open_into_pane(int target, const char *path)
             return NULL;
         }
         s_panes[target].doc = d;
+        s_panes[target].v_valid = false;   /* adopt the new doc's view */
         editor_set_active(d);
         return d;
     }
@@ -3906,11 +3977,12 @@ static editor_doc_t *open_into_pane(int target, const char *path)
     if (d == prev) {
         /* Re-acquired the document this pane already holds: acquire
          * bumped its refcount, so drop the extra reference to keep the
-         * count balanced. */
+         * count balanced. The pane keeps its existing view. */
         editor_doc_release(d);
     } else if (prev) {
         editor_doc_release(prev);
     }
+    if (d != prev) s_panes[target].v_valid = false;  /* adopt new view */
     s_panes[target].doc = d;
     editor_set_active(d);
     return d;
@@ -4011,6 +4083,7 @@ static void handle_editor_key(const kb_event_t *ev)
             if (s_pane_count <= 1) {
                 editor_new_file();
                 s_panes[0].doc = editor_get_active();
+                s_panes[0].v_valid = false;   /* adopt the new doc's view */
             } else {
                 open_into_pane(s_focus, NULL);
             }
@@ -4366,6 +4439,7 @@ static void browser_activate_item(int row)
         /* Keep pane 0's document handle current (editor_open_file may
          * have acted on the active doc). */
         s_panes[0].doc = editor_get_active();
+        s_panes[0].v_valid = false;   /* adopt the freshly opened view */
     } else {
         /* Split: load the file into the target (focused) pane through
          * the document pool, sharing the buffer if the same path is

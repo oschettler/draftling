@@ -117,6 +117,11 @@ const char *editor_get_line(int line_num, size_t *out_len);
 int editor_get_scroll_line(void);
 void editor_set_scroll_line(int line);
 
+/* Raw selection-anchor accessors (logical byte offset; < 0 = none).
+ * Used by the split-screen UI to save / restore a per-pane selection. */
+int editor_get_sel_anchor(void);
+void editor_set_sel_anchor(int anchor);
+
 void editor_move_left(void);
 void editor_move_right(void);
 void editor_move_up(void);

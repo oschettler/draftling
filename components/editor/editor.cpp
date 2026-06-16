@@ -769,6 +769,18 @@ extern "C" const char *editor_get_line(int line_num, size_t *out_len)
 extern "C" int editor_get_scroll_line(void) { return s_scroll_line; }
 extern "C" void editor_set_scroll_line(int line) { s_scroll_line = line < 0 ? 0 : line; }
 
+/* Raw selection-anchor accessors. Used by the split-screen UI to keep a
+ * separate selection per pane when the same document is shown in both
+ * panes (see editor_doc_is_shared). A value < 0 means "no selection". */
+extern "C" int editor_get_sel_anchor(void) { return s_sel_anchor; }
+extern "C" void editor_set_sel_anchor(int anchor)
+{
+    if (anchor < 0) { s_sel_anchor = -1; return; }
+    size_t len = content_len();
+    if ((size_t)anchor > len) anchor = (int)len;
+    s_sel_anchor = anchor;
+}
+
 /* ---- Cursor movement ---- */
 
 /* Byte-level gap shifts (internal primitives). */
