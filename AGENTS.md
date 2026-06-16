@@ -438,18 +438,22 @@ Public API: `power_init()`, `power_set_long_press_cb()`, `power_off()`.
 ### components/tab5_kbd/
 
 Driver for the M5Stack Tab5 attachable keyboard, a detachable QWERTY
-keyboard that talks to the ESP32-P4 over the shared system I2C bus
-(7-bit address 0x6D, see `TAB5_KBD_I2C_ADDR`) plus a dedicated
-interrupt line on GPIO 50 (`CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO`).
+keyboard that talks to the ESP32-P4 over a dedicated I2C bus
+(7-bit address 0x6D, see `TAB5_KBD_I2C_ADDR`; SDA/SCL set by
+`CONFIG_DRAFTLING_TAB5_KBD_I2C_SDA_GPIO` /
+`CONFIG_DRAFTLING_TAB5_KBD_I2C_SCL_GPIO`, default GPIO 0 / 1) plus a
+dedicated interrupt line on GPIO 50 (`CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO`).
 Compiled in only when `CONFIG_DRAFTLING_HAS_TAB5_KBD` is set (Tab5
 default); main / editor pull it in via
-`idf_component_optional_requires()`.
+`idf_component_optional_requires()`. main.cpp creates the dedicated
+keyboard I2C master bus (port 1) and hands its handle to
+`tab5_kbd_init()`.
 
 `tab5_kbd_init(bus, int_gpio)` probes the keyboard once by reading its
 version register (0xFE). If the keyboard is not attached the probe
 fails, the I2C device handle is removed, and the component stays
-permanently idle this boot -- no further traffic is issued on the bus
-shared with the touch controller, IMU and audio codec. If the probe
+permanently idle this boot -- no further traffic is issued on its
+dedicated bus. If the probe
 succeeds the keyboard is switched to HID mode (register 0x10 = 1),
 the event queue / interrupt latch are cleared, RGB custom mode is
 selected (register 0x11 = 1), both indicator LEDs are lit green for

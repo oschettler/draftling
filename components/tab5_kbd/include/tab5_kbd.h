@@ -4,7 +4,7 @@
  * M5Stack Tab5 attachable keyboard host.
  *
  * The Tab5 keyboard is a detachable QWERTY keyboard that talks to the
- * Tab5 (ESP32-P4) over the on-board I2C bus (7-bit address 0x6D) plus
+ * Tab5 (ESP32-P4) over a dedicated I2C bus (7-bit address 0x6D) plus
  * a dedicated interrupt line on GPIO 50. Its co-processor exposes a
  * small register map (version, mode, interrupt status, event queue,
  * RGB indicator LEDs). We drive it in "interrupt HID" mode: the
@@ -17,9 +17,8 @@
  * Presence is probed once, at init time, by reading the version
  * register. If the keyboard is not attached the probe fails and the
  * component goes permanently idle: no further I2C traffic is issued
- * (so an absent keyboard never slows the bus shared with the touch
- * controller, IMU and codec) until the next boot / wake re-runs
- * tab5_kbd_init().
+ * (so an absent keyboard never slows its dedicated bus) until the
+ * next boot / wake re-runs tab5_kbd_init().
  *
  * Protocol reference: m5stack/M5Tab5-Keyboard-UserDemo
  * (components/m5_tab5_keyboard_component).

@@ -1479,7 +1479,28 @@ extern "C" void app_main(void)
     bool tab5_kbd_present = false;
 #if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
     ESP_LOGI(TAG, "Probing for Tab5 keyboard...");
-    if (tab5_kbd_init(bsp_i2c_get_handle(),
+    /* The Tab5 keyboard sits on its own I2C bus (SDA/SCL configured
+     * via CONFIG_DRAFTLING_TAB5_KBD_I2C_SDA_GPIO / _SCL_GPIO), not on
+     * the shared system bus (touch / IMU / codec). Create a dedicated
+     * master bus for it here. */
+    i2c_master_bus_handle_t tab5_kbd_bus = NULL;
+    {
+        i2c_master_bus_config_t kbd_bus_cfg = {};
+        kbd_bus_cfg.i2c_port          = 1;
+        kbd_bus_cfg.sda_io_num        = (gpio_num_t)CONFIG_DRAFTLING_TAB5_KBD_I2C_SDA_GPIO;
+        kbd_bus_cfg.scl_io_num        = (gpio_num_t)CONFIG_DRAFTLING_TAB5_KBD_I2C_SCL_GPIO;
+        kbd_bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
+        kbd_bus_cfg.glitch_ignore_cnt = 7;
+        kbd_bus_cfg.flags.enable_internal_pullup = true;
+        esp_err_t kbd_bus_err = i2c_new_master_bus(&kbd_bus_cfg, &tab5_kbd_bus);
+        if (kbd_bus_err != ESP_OK) {
+            ESP_LOGE(TAG, "Tab5 keyboard I2C bus init failed: %s",
+                     esp_err_to_name(kbd_bus_err));
+            tab5_kbd_bus = NULL;
+        }
+    }
+    if (tab5_kbd_bus &&
+        tab5_kbd_init(tab5_kbd_bus,
                       CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO) == 0) {
         tab5_kbd_present = true;
     }
