@@ -650,13 +650,13 @@ typedef struct {
      * buffer, one set of cursor/scroll/selection fields). To keep each
      * pane's view independent, pane_bind() stashes the outgoing pane's
      * view here and restores the incoming pane's view into the shared
-     * document. v_valid is false until the pane first adopts its
+     * document. has_saved_view is false until the pane first adopts its
      * document's current view (so a freshly opened file keeps the cursor
      * restored from its sidecar metadata). */
-    size_t v_cursor;       /* saved cursor (logical byte offset) */
-    int    v_scroll;       /* saved scroll line */
-    int    v_sel_anchor;   /* saved selection anchor (< 0 = none) */
-    bool   v_valid;        /* view state has been captured at least once */
+    size_t saved_cursor;       /* saved cursor (logical byte offset) */
+    int    saved_scroll;       /* saved scroll line */
+    int    saved_sel_anchor;   /* saved selection anchor (< 0 = none) */
+    bool   has_saved_view;     /* view captured at least once */
 } pane_t;
 
 static pane_t  s_panes[EDITOR_MAX_PANES];
@@ -735,19 +735,19 @@ static void close_inpane_browser(void);
  * own independent view. */
 static void pane_capture_view(pane_t *p)
 {
-    p->v_cursor     = editor_get_cursor();
-    p->v_scroll     = editor_get_scroll_line();
-    p->v_sel_anchor = editor_get_sel_anchor();
-    p->v_valid      = true;
+    p->saved_cursor     = editor_get_cursor();
+    p->saved_scroll     = editor_get_scroll_line();
+    p->saved_sel_anchor = editor_get_sel_anchor();
+    p->has_saved_view   = true;
 }
 
 /* Push a pane's saved view back into the (now active) shared document so
  * the document's cursor / scroll / selection reflect this pane. */
 static void pane_restore_view(pane_t *p)
 {
-    editor_set_cursor(p->v_cursor);
-    editor_set_scroll_line(p->v_scroll);
-    editor_set_sel_anchor(p->v_sel_anchor);
+    editor_set_cursor(p->saved_cursor);
+    editor_set_scroll_line(p->saved_scroll);
+    editor_set_sel_anchor(p->saved_sel_anchor);
 }
 
 /* Bind pane idx as the current pane: point the aliasing macros at it
@@ -768,10 +768,10 @@ static void pane_bind(int idx)
     if (target == s_rp) {
         /* Same pane: keep the active document current. Adopt the
          * document's view the first time (e.g. just after a file was
-         * opened into this pane, which reset v_valid). */
+         * opened into this pane, which reset has_saved_view). */
         if (s_rp->doc) {
             editor_set_active(s_rp->doc);
-            if (!s_rp->v_valid) pane_capture_view(s_rp);
+            if (!s_rp->has_saved_view) pane_capture_view(s_rp);
         }
         return;
     }
@@ -785,7 +785,7 @@ static void pane_bind(int idx)
     s_rp = target;
     if (s_rp->doc) {
         editor_set_active(s_rp->doc);
-        if (s_rp->v_valid) {
+        if (s_rp->has_saved_view) {
             pane_restore_view(s_rp);
         } else {
             /* First bind: adopt the document's current view (cursor /
@@ -3891,7 +3891,7 @@ static void editor_ui_apply_split_mode(split_mode_t mode)
             return;
         }
         s_panes[1].doc = d;
-        s_panes[1].v_valid = false;   /* adopt the new doc's view */
+        s_panes[1].has_saved_view = false;   /* adopt the new doc's view */
     }
 
     s_split_mode = mode;
@@ -3966,7 +3966,7 @@ static editor_doc_t *open_into_pane(int target, const char *path)
             return NULL;
         }
         s_panes[target].doc = d;
-        s_panes[target].v_valid = false;   /* adopt the new doc's view */
+        s_panes[target].has_saved_view = false;   /* adopt the new doc's view */
         editor_set_active(d);
         return d;
     }
@@ -3982,7 +3982,7 @@ static editor_doc_t *open_into_pane(int target, const char *path)
     } else if (prev) {
         editor_doc_release(prev);
     }
-    if (d != prev) s_panes[target].v_valid = false;  /* adopt new view */
+    if (d != prev) s_panes[target].has_saved_view = false;  /* adopt new view */
     s_panes[target].doc = d;
     editor_set_active(d);
     return d;
@@ -4083,7 +4083,7 @@ static void handle_editor_key(const kb_event_t *ev)
             if (s_pane_count <= 1) {
                 editor_new_file();
                 s_panes[0].doc = editor_get_active();
-                s_panes[0].v_valid = false;   /* adopt the new doc's view */
+                s_panes[0].has_saved_view = false;   /* adopt the new doc's view */
             } else {
                 open_into_pane(s_focus, NULL);
             }
@@ -4439,7 +4439,7 @@ static void browser_activate_item(int row)
         /* Keep pane 0's document handle current (editor_open_file may
          * have acted on the active doc). */
         s_panes[0].doc = editor_get_active();
-        s_panes[0].v_valid = false;   /* adopt the freshly opened view */
+        s_panes[0].has_saved_view = false;   /* adopt the freshly opened view */
     } else {
         /* Split: load the file into the target (focused) pane through
          * the document pool, sharing the buffer if the same path is
