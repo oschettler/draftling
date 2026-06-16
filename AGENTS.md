@@ -446,7 +446,7 @@ dedicated interrupt line on GPIO 50 (`CONFIG_DRAFTLING_TAB5_KBD_INT_GPIO`).
 Compiled in only when `CONFIG_DRAFTLING_HAS_TAB5_KBD` is set (Tab5
 default); main / editor pull it in via
 `idf_component_optional_requires()`. main.cpp creates the dedicated
-keyboard I2C master bus (auto-selected port via `I2C_NUM_AUTO`, since
+keyboard I2C master bus (auto-selected port via `i2c_port = -1`, since
 the BSP system bus already holds one controller) and hands its handle
 to `tab5_kbd_init()`.
 

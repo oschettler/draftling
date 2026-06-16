@@ -1484,11 +1484,11 @@ extern "C" void app_main(void)
      * the shared system bus (touch / IMU / codec). Create a dedicated
      * master bus for it here. The system bus owned by bsp_i2c_init()
      * already holds one controller, so let ESP-IDF auto-pick a free
-     * port (I2C_NUM_AUTO) instead of hard-coding one and colliding. */
+     * port (i2c_port = -1) instead of hard-coding one and colliding. */
     i2c_master_bus_handle_t tab5_kbd_bus = NULL;
     {
         i2c_master_bus_config_t kbd_bus_cfg = {};
-        kbd_bus_cfg.i2c_port          = I2C_NUM_AUTO;
+        kbd_bus_cfg.i2c_port          = -1;
         kbd_bus_cfg.sda_io_num        = (gpio_num_t)CONFIG_DRAFTLING_TAB5_KBD_I2C_SDA_GPIO;
         kbd_bus_cfg.scl_io_num        = (gpio_num_t)CONFIG_DRAFTLING_TAB5_KBD_I2C_SCL_GPIO;
         kbd_bus_cfg.clk_source        = I2C_CLK_SRC_DEFAULT;
