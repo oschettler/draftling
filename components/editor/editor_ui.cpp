@@ -3823,6 +3823,16 @@ static void capture_typing_pre_state(typing_pre_state_t *out)
 static bool try_partial_clip_for_typing(const typing_pre_state_t *pre)
 {
     if (!pre->valid) return false;
+    /* The fast path assumes only the focused pane's cursor line is
+     * dirty, so it clips the panel refresh to that one line. While
+     * split, a content edit also repaints the sibling pane (it may
+     * share the same document and show the edited line at a different
+     * position), dirtying pixels outside the clip. A clipped flush
+     * would consume the whole dirty bbox but drive only the cursor
+     * line, discarding the sibling pane's update and leaving stale
+     * "overwritten" text behind. Disable the clip while split so the
+     * full dirty bbox (covering both panes) is always refreshed. */
+    if (s_pane_count > 1) return false;
     if (s_cursor == NULL) return false;
     if (lv_obj_has_flag(s_cursor, LV_OBJ_FLAG_HIDDEN)) return false;
     if (editor_selection_active()) return false;
@@ -4295,8 +4305,19 @@ static void handle_editor_key(const kb_event_t *ev)
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         case 'r':
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
-             * artefacts left over from partial refreshes. */
-            display_full_refresh();
+             * and any stale "overwritten" pixels left behind by partial
+             * refreshes. Re-displaying the existing framebuffer is not
+             * enough -- the garbage lives in the framebuffer itself, so
+             * wipe it to the background colour and invalidate the active
+             * screen to make LVGL repaint every widget from scratch
+             * (display_clear() also flags the next flush as a full
+             * refresh). Mirrors the font-size-change path above. */
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+            display_clear(0x00);
+#else
+            display_clear(0xFF);
+#endif
+            lv_obj_invalidate(lv_scr_act());
             return;
 #endif
         default: break;
@@ -4720,8 +4741,17 @@ static void handle_browser_key(const kb_event_t *ev)
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
         if (ck == 'r') {
             /* Ctrl+R: force a full e-paper refresh to clear ghosting
-             * artefacts left over from partial refreshes. */
-            display_full_refresh();
+             * and any stale "overwritten" pixels left behind by partial
+             * refreshes. Wipe the framebuffer to the background colour
+             * and invalidate the active screen so LVGL repaints every
+             * widget from scratch (display_clear() also flags the next
+             * flush as a full refresh). */
+#if defined(CONFIG_DRAFTLING_EPD_BLACK_BACKGROUND)
+            display_clear(0x00);
+#else
+            display_clear(0xFF);
+#endif
+            lv_obj_invalidate(lv_scr_act());
             return;
         }
 #endif
