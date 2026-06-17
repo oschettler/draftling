@@ -16,6 +16,7 @@
 #include <driver/sdmmc_host.h>
 #include <driver/sdspi_host.h>
 #include <driver/spi_common.h>
+#include <driver/spi_master.h>
 #include <driver/gpio.h>
 
 #include "sd_card.h"
@@ -25,6 +26,15 @@ static sdmmc_card_t *s_card = NULL;
 static char s_mount[32] = "";
 static int  s_spi_host  = -1;     /* set when mounted via SPI, otherwise -1 */
 static bool s_spi_bus_owned = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+/* Permanent no-CS "keepalive" device kept on the shared SPI bus for the
+ * lifetime of the bus on epdiy boards. See sd_card_init_spi() for the
+ * rationale: it prevents the SPI master driver's shared interrupt from
+ * being torn down by esp_vfs_fat_sdspi_mount()'s internal device
+ * add/remove churn, which would otherwise disturb epdiy's shared LCD
+ * frame interrupt. */
+static spi_device_handle_t s_keepalive_dev = NULL;
+#endif
 
 extern "C" esp_err_t sd_card_init(int clk_pin, int cmd_pin, int d0_pin, const char *mount_point)
 {
@@ -96,6 +106,49 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
             return ret;
         }
     }
+
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* Hold a permanent no-CS keepalive device on the bus before the
+     * mount loop runs.
+     *
+     * ESP-IDF's SPI master driver allocates the per-bus interrupt on
+     * the FIRST spi_bus_add_device() and frees it again on the LAST
+     * spi_bus_remove_device(). esp_vfs_fat_sdspi_mount() adds its own
+     * sdspi device and, on every failed attempt, removes it again --
+     * so when NO SD card is inserted the retry ladder below tears the
+     * SPI interrupt down and back up several times. epdiy drives the
+     * e-paper panel through the ESP32-S3 LCD peripheral, whose
+     * frame-advance interrupt it installs with ESP_INTR_FLAG_SHARED on
+     * the same CPU interrupt line; freeing the SPI handler disturbs
+     * that shared LCD interrupt and leaves it no longer serviced. The
+     * next e-paper refresh then never completes -- both epdiy
+     * "epd_prep" feeder tasks busy-spin forever at top priority,
+     * starve IDLE0 and trip the task watchdog. The symptom appears
+     * only when no card is present, because only then does the device
+     * get removed (a present card keeps its device, and the
+     * interrupt, alive).
+     *
+     * Keeping our own device on the bus means at least one device is
+     * always present, so the SPI driver and its shared interrupt are
+     * allocated exactly once (here) and never torn down for the rest
+     * of the session, no matter how the mount attempts add and remove
+     * the sdspi device. The keepalive device has no CS line and is
+     * never used for transactions. */
+    if (s_spi_bus_owned && !s_keepalive_dev) {
+        spi_device_interface_config_t ka_cfg = {};
+        ka_cfg.clock_speed_hz = 1 * 1000 * 1000;
+        ka_cfg.mode           = 0;
+        ka_cfg.spics_io_num   = -1;
+        ka_cfg.queue_size     = 1;
+        esp_err_t kerr = spi_bus_add_device((spi_host_device_t)spi_host,
+                                            &ka_cfg, &s_keepalive_dev);
+        if (kerr != ESP_OK) {
+            ESP_LOGW(TAG, "SPI keepalive device add failed: %s",
+                     esp_err_to_name(kerr));
+            s_keepalive_dev = NULL;
+        }
+    }
+#endif
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
@@ -266,23 +319,23 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
          * E-Paper S3 Pro / Pro Lite) the e-paper panel is driven by
          * the ESP32-S3 LCD peripheral, whose frame-advance /
          * frame-done interrupt epdiy installs with
-         * ESP_INTR_FLAG_SHARED. Tearing the SPI bus back down with
-         * spi_bus_free() here (the failure path is the ONLY caller of
-         * spi_bus_free during boot -- a present card keeps the bus
-         * owned) frees the SPI controller's shared interrupt and, as
-         * a side effect, leaves epdiy's shared LCD interrupt no longer
-         * being serviced. The very next e-paper refresh then never
+         * ESP_INTR_FLAG_SHARED. Freeing the SPI controller's shared
+         * interrupt -- which the SPI master driver does when its LAST
+         * device is removed -- leaves epdiy's shared LCD interrupt no
+         * longer serviced. The very next e-paper refresh then never
          * completes: its DMA stops draining the line queue, so both
          * epdiy "epd_prep" feeder tasks (priority configMAX_PRIORITIES
          * - 1, pinned one per core) busy-spin forever, starve IDLE0
          * and trip the task watchdog. Symptom observed only when NO SD
-         * card is inserted, because only then is spi_bus_free reached.
+         * card is inserted.
          *
-         * Leave the SPI bus initialized on these boards. Nothing else
-         * needs SPI3 freed for this session (sd_card_deinit() still
-         * frees it on a clean unmount), and keeping it owned matches
-         * the known-good "card present" peripheral state, so the
-         * shared LCD interrupt is left untouched. */
+         * The keepalive device added in the bus-init block above keeps
+         * one device on the bus at all times, so the SPI driver and its
+         * shared interrupt are never freed by the mount attempts. Here
+         * we additionally leave the bus itself initialized: nothing
+         * else needs the bus freed for this session (sd_card_deinit()
+         * still frees it on a clean unmount), and keeping it owned
+         * matches the known-good "card present" peripheral state. */
         ESP_LOGW(TAG, "Leaving SPI%d bus initialized after mount failure "
                       "to avoid disturbing the shared e-paper LCD interrupt",
                  spi_host);
@@ -307,6 +360,14 @@ extern "C" esp_err_t sd_card_deinit(void)
     esp_err_t ret;
     if (s_spi_host >= 0) {
         ret = esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+        /* Release the keepalive device before freeing the bus so the
+         * SPI driver can shut down cleanly. */
+        if (s_keepalive_dev) {
+            spi_bus_remove_device(s_keepalive_dev);
+            s_keepalive_dev = NULL;
+        }
+#endif
         if (s_spi_bus_owned) {
             spi_bus_free((spi_host_device_t)s_spi_host);
             s_spi_bus_owned = false;
