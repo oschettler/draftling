@@ -278,12 +278,12 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
          * and trip the task watchdog. Symptom observed only when NO SD
          * card is inserted, because only then is spi_bus_free reached.
          *
-         * Leave the SPI bus initialised on these boards. Nothing else
+         * Leave the SPI bus initialized on these boards. Nothing else
          * needs SPI3 freed for this session (sd_card_deinit() still
          * frees it on a clean unmount), and keeping it owned matches
          * the known-good "card present" peripheral state, so the
          * shared LCD interrupt is left untouched. */
-        ESP_LOGW(TAG, "Leaving SPI%d bus initialised after mount failure "
+        ESP_LOGW(TAG, "Leaving SPI%d bus initialized after mount failure "
                       "to avoid disturbing the shared e-paper LCD interrupt",
                  spi_host);
 #else
