@@ -23,6 +23,7 @@ typedef enum {
     KB_KEY_ESCAPE    = 0x29,
     KB_KEY_BACKSPACE = 0x2A,
     KB_KEY_TAB       = 0x2B,
+    KB_KEY_SPACE     = 0x2C,
     KB_KEY_DELETE    = 0x4C,
     KB_KEY_RIGHT     = 0x4F,
     KB_KEY_LEFT      = 0x50,

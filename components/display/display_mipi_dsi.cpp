@@ -80,6 +80,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <esp_lcd_panel_ops.h>
@@ -94,10 +96,62 @@ static const char *TAG = "Display";
 
 #define MDSI_SCALE   CONFIG_DRAFTLING_DISPLAY_SCALE
 
+/* Upper bound on how long a single DMA2D frame-buffer copy may take
+ * before we give up waiting for the color-trans-done callback. The
+ * worst case (a full-screen 720x1280 RGB565 copy) completes in a few
+ * milliseconds; 1 s is a generous safety net so a missed callback can
+ * never wedge the LVGL task forever. */
+#define MDSI_DRAW_TIMEOUT_MS 1000
+
 static esp_lcd_panel_handle_t   s_panel = NULL;
 static esp_lcd_panel_io_handle_t s_io    = NULL;
 static int   s_width  = 0;   /* physical panel width  in pixels */
 static int   s_height = 0;   /* physical panel height in pixels */
+
+/* Binary semaphore signalled from the DPI panel's on_color_trans_done
+ * callback once esp_lcd_panel_draw_bitmap() has finished copying our
+ * buffer into the scanout framebuffer (the copy is performed
+ * asynchronously by the DMA2D engine). dsi_blit() blocks on it after
+ * every draw so we never issue a second draw_bitmap while the previous
+ * DMA2D copy is still in flight -- the condition the ESP-LCD DSI driver
+ * rejects with "previous draw operation is not finished" and which,
+ * under the two-pane split refresh, used to back up until the LVGL task
+ * spun and tripped the task watchdog. Keeping each blit synchronous
+ * also means the source buffer (LVGL's draw buffer, our scaling scratch
+ * buffer, or the clear scanline) is safe to reuse or free as soon as
+ * dsi_blit() returns. */
+static SemaphoreHandle_t s_draw_done = NULL;
+
+static bool dsi_color_trans_done_cb(esp_lcd_panel_handle_t /*panel*/,
+                                    esp_lcd_dpi_panel_event_data_t * /*edata*/,
+                                    void * /*user_ctx*/)
+{
+    BaseType_t need_yield = pdFALSE;
+    if (s_draw_done) {
+        xSemaphoreGiveFromISR(s_draw_done, &need_yield);
+    }
+    return need_yield == pdTRUE;
+}
+
+/* Issue a draw_bitmap and block until the DMA2D copy completes. The
+ * semaphore starts empty, so the take() below waits for the
+ * on_color_trans_done callback that this draw will trigger. If the
+ * semaphore has not been created yet (should not happen once
+ * display_init() has run) the draw is issued without waiting. */
+static void dsi_blit(int x1, int y1, int x2, int y2, const void *buf)
+{
+    esp_lcd_panel_draw_bitmap(s_panel, x1, y1, x2, y2, buf);
+    if (s_draw_done) {
+        if (xSemaphoreTake(s_draw_done, pdMS_TO_TICKS(MDSI_DRAW_TIMEOUT_MS)) != pdTRUE) {
+            /* The draw-done callback never fired within the timeout.
+             * Proceed anyway (the next draw may still recover), but log
+             * it: a recurring warning here points at a stalled DMA2D /
+             * DPI engine rather than a source-buffer reuse hazard. */
+            ESP_LOGW(TAG, "draw_bitmap timeout (%d ms) waiting for DMA2D",
+                     MDSI_DRAW_TIMEOUT_MS);
+        }
+    }
+}
 
 /* Scratch buffer used to nearest-neighbor expand a logical RGB565
  * tile into a SCALE x SCALE panel-pixel block. Grown on demand to
@@ -170,6 +224,28 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     s_panel = handles.panel;
     s_io    = handles.io;
 
+    /* Create the draw-completion semaphore and register the DPI
+     * color-trans-done callback before the first draw so dsi_blit()
+     * can serialise draws against the DMA2D engine. The semaphore
+     * starts empty (created "taken"): the first dsi_blit() issues its
+     * draw and then waits for the callback this very draw raises. */
+    if (!s_draw_done) {
+        s_draw_done = xSemaphoreCreateBinary();
+    }
+    if (s_draw_done) {
+        esp_lcd_dpi_panel_event_callbacks_t cbs = {};
+        cbs.on_color_trans_done = dsi_color_trans_done_cb;
+        esp_err_t cb_err = esp_lcd_dpi_panel_register_event_callbacks(
+                               s_panel, &cbs, NULL);
+        if (cb_err != ESP_OK) {
+            ESP_LOGW(TAG, "register draw-done callback failed: %s; "
+                          "freeing semaphore and falling back to "
+                          "unsynchronised draws", esp_err_to_name(cb_err));
+            vSemaphoreDelete(s_draw_done);
+            s_draw_done = NULL;
+        }
+    }
+
     err = esp_lcd_panel_disp_on_off(s_panel, true);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_panel_disp_on_off(true) failed: %s",
@@ -200,7 +276,7 @@ extern "C" void display_clear(uint8_t color)
     if (!row) return;
     for (int x = 0; x < s_width; x++) row[x] = fill;
     for (int y = 0; y < s_height; y++) {
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, s_width, y + 1, row);
+        dsi_blit(0, y, s_width, y + 1, row);
     }
     heap_caps_free(row);
 }
@@ -225,7 +301,7 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
         if (x2 > s_width)  x2 = s_width;
         if (y2 > s_height) y2 = s_height;
         if (x2 <= x || y2 <= y) return true;
-        esp_lcd_panel_draw_bitmap(s_panel, x, y, x2, y2, color_map);
+        dsi_blit(x, y, x2, y2, color_map);
         return true;
     }
 
@@ -269,7 +345,7 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
             memcpy(dst_row, dst_row0, (size_t)pw * sizeof(uint16_t));
         }
     }
-    esp_lcd_panel_draw_bitmap(s_panel, px, py, px + pw, py + ph, s_scratch);
+    dsi_blit(px, py, px + pw, py + ph, s_scratch);
     return true;
 }
 
