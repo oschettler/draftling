@@ -825,6 +825,34 @@ static void invalidate_all_render_caches(void)
     s_rp = save;
 }
 
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+/* Force a clean full-screen repaint on the e-paper backends.
+ *
+ * On EPD the panel framebuffer persists between flushes and LVGL only
+ * redraws widgets whose content actually changed -- fine for incremental
+ * edits, but wrong whenever the framebuffer is wiped or the widget layout
+ * shifts without lv_scr_load() running a full screen redraw. In split mode
+ * the editor and its in-pane file selector share one screen (s_scr), so
+ * lv_scr_load(s_scr) is a no-op and no implicit full redraw happens. Two
+ * symptoms result:
+ *   - opening a file into one pane leaves the *other* pane blank, because
+ *     display_clear() cleared its pixels but LVGL never redrew its
+ *     (unchanged) labels;
+ *   - collapsing a split leaves the old divider / right-pane content as
+ *     ghosting, because only the changed regions were partially refreshed.
+ * Clearing the framebuffer, wiping every pane's render cache and
+ * invalidating the whole screen forces LVGL to repaint every widget into
+ * the freshly-cleared framebuffer; display_clear() also promotes the next
+ * flush to a flashing full refresh, clearing any accumulated ghosting.
+ * Mirrors the font-change repaint in the F1 settings handler. */
+static void epd_full_screen_repaint(void)
+{
+    display_clear(0xFF);
+    invalidate_all_render_caches();
+    if (s_scr) lv_obj_invalidate(s_scr);
+}
+#endif
+
 /* Recompute each pane's content-area rectangle from the current split
  * state. The editor body occupies [EDITOR_Y, EDITOR_Y + EDITOR_H). A
  * single pane fills it entirely; a vertical split places two panes
@@ -3967,6 +3995,15 @@ static void editor_ui_apply_split_mode(split_mode_t mode)
     invalidate_all_render_caches();
     pane_bind_focus();
     ensure_cursor_visible();
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
+    /* Changing the split layout moves / hides the divider and one pane.
+     * On e-paper, force a clean full-screen repaint so the collapsed
+     * pane's old borders / divider and any partially-refreshed regions
+     * do not survive as ghosting (and a freshly-enabled pane is drawn in
+     * full). No-op until the editor screen is on screen (e.g. the boot
+     * restore below runs before the first lv_scr_load). */
+    if (s_editor_screen_active) epd_full_screen_repaint();
+#endif
     editor_ui_refresh();
 }
 
@@ -4591,8 +4628,18 @@ static void browser_activate_item(int row)
      * document) survive in regions the new content does not cover.
      * display_clear() also flags the next flush as a full refresh,
      * clearing any accumulated e-paper ghosting. Done after the
-     * open succeeds so a failed open leaves the browser intact. */
-    display_clear(0xFF);
+     * open succeeds so a failed open leaves the browser intact.
+     *
+     * In split mode the editor screen never changes (the file selector
+     * is an in-pane overlay on s_scr), so the upcoming lv_scr_load() in
+     * editor_ui_show_editor() is a no-op and would not repaint the
+     * *other* pane that display_clear() just blanked. Force a full
+     * screen repaint so both panes are redrawn. */
+    if (s_pane_count > 1) {
+        epd_full_screen_repaint();
+    } else {
+        display_clear(0xFF);
+    }
 #endif
     /* editor_open_file restores the cursor / scroll line from the
      * metadata sidecar; make sure the cursor is on screen before
