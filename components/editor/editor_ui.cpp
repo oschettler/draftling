@@ -17,6 +17,9 @@
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
 #include "usb_kbd.h"
 #endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+#include "tab5_kbd.h"
+#endif
 #include "kb_layout.h"
 #include "wifi_manager.h"
 #include "git_sync.h"
@@ -2716,6 +2719,11 @@ static void menu_activate_item(int idx)
     case 0: /* BLE status -- no action */
         break;
     case 1: /* BLE scan */
+        /* BLE may be idle (disabled) when another keyboard owns input
+         * -- e.g. a USB or Tab5 keyboard was present at boot. Re-enable
+         * it first so an on-demand scan can actually start. No-op when
+         * BLE is already active. */
+        ble_keyboard_enable();
         ble_keyboard_start_scan();
         editor_ui_set_status("BLE: scanning...");
         close_menu();
@@ -3515,6 +3523,10 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
+        case 'm':
+            /* Ctrl+M: menu, equivalent to F1 */
+            show_menu();
+            return;
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
         case 'b': {
             /* Ctrl+B: cycle to the next backlight / front-light
@@ -3786,6 +3798,11 @@ static void handle_browser_key(const kb_event_t *ev)
             } else {
                 editor_ui_set_status("Git: not configured");
             }
+            return;
+        }
+        if (ck == 'm') {
+            /* Ctrl+M: menu, equivalent to F1 */
+            show_menu();
             return;
         }
         if (ck == 'w') {
@@ -4073,6 +4090,25 @@ static void apply_pending_connect_state(void)
                 "Keyboard connected!");
         }
     } else {
+        /* A BLE disconnect arrived, but if another local keyboard is
+         * still usable (the Tab5 attachable keyboard, or a USB
+         * keyboard) the user is NOT actually keyboard-less -- on the
+         * Tab5 the BLE host fires this callback simply because it gets
+         * disabled at boot once a wired keyboard is detected. Do not
+         * yank the user onto the "Keyboard disconnected /
+         * Reconnecting..." prompt screen in that case; leave the
+         * editor / file browser as-is. */
+        bool other_kbd = false;
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+        if (tab5_kbd_is_present()) other_kbd = true;
+#endif
+#if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
+        if (usb_kbd_is_connected()) other_kbd = true;
+#endif
+        if (other_kbd) {
+            return;
+        }
+
         /* Keyboard disconnected -- close any open overlays so the
          * UI is in a clean state when we reconnect.  Do NOT call
          * editor_close_file() -- preserve the user's work. */
@@ -4545,6 +4581,12 @@ static void build_screens(void)
     ble_keyboard_set_callback((kb_event_callback_t)editor_ui_handle_key);
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
     usb_kbd_set_callback((kb_event_callback_t)editor_ui_handle_key);
+#endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+    /* Tab5 attachable keyboard feeds the same handler. It coexists
+     * with USB / BLE rather than replacing them: on the Tab5 the
+     * built-in keyboard and a USB keyboard are both accepted. */
+    tab5_kbd_set_callback((kb_event_callback_t)editor_ui_handle_key);
 #endif
 
     /* ---- BLE connection prompt screen ---- */

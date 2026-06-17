@@ -55,6 +55,7 @@ development boards with reflective LCD, e-paper or color LCD displays.
 | Ctrl+O | Open file browser |
 | Ctrl+N | New file |
 | Ctrl+L | Cycle keyboard layout |
+| Ctrl+M | Menu (equivalent to F1) |
 | Ctrl+G | Git sync (pull + push) |
 | Ctrl+W | Toggle WiFi (connect / disconnect) |
 | Ctrl+F | Find |

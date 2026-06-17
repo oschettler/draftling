@@ -10,3 +10,7 @@ idf_component_register(
 if(CONFIG_DRAFTLING_HAS_USB_HOST)
     idf_component_optional_requires(PRIVATE usb_kbd)
 endif()
+
+if(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+    idf_component_optional_requires(PRIVATE tab5_kbd)
+endif()
