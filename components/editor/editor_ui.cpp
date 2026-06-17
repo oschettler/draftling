@@ -1603,6 +1603,23 @@ extern "C" void editor_ui_refresh(void)
     sync_battery_labels();
 }
 
+/* Re-render only the focused pane. Used by the mid-navigation scroll
+ * steps in editor_ui_move_visual(): a full editor_ui_refresh() also
+ * binds and redraws the unfocused pane, which (when both panes share
+ * one document) momentarily retargets the active document at the other
+ * pane while capturing/restoring its saved view. Keeping the scroll
+ * step focused-pane-only means vertical cursor movement never touches
+ * the other pane, so the caret always stays within the focused pane
+ * until the user switches with Ctrl+Tab. */
+static void refresh_focused_pane(void)
+{
+    if (!s_editor_screen_active) return;
+    pane_bind_focus();
+    if (!s_inpane_browser_open) {
+        refresh_active_pane(true);
+    }
+}
+
 static void ensure_cursor_visible(void)
 {
     int cur_line, cur_col;
@@ -1865,7 +1882,7 @@ static void editor_ui_move_visual(int direction)
             }
             editor_set_scroll_line(sc + 1);
         }
-        editor_ui_refresh();
+        refresh_focused_pane();
         if (!s_cursor || !s_cursor_on_screen) {
             if (direction < 0) editor_move_up();
             else               editor_move_down();
@@ -4096,7 +4113,18 @@ static void handle_editor_key(const kb_event_t *ev)
                 open_into_pane(s_focus, NULL);
             }
             break;
-        case 'o': editor_ui_show_file_browser(); return;
+        case 'o':
+            /* Opening another file leaves the current document behind.
+             * If it has unsaved changes, prompt to save / discard /
+             * cancel first (same dialog as Esc, whose save and discard
+             * paths both proceed to the file browser); otherwise open
+             * the browser straight away. */
+            if (editor_is_modified()) {
+                show_exit_prompt();
+            } else {
+                editor_ui_show_file_browser();
+            }
+            return;
         case 'c':
             if (editor_copy())
                 editor_ui_set_status("Copied");
@@ -4403,10 +4431,21 @@ static void close_inpane_browser(void)
     s_browser_list = s_list_files;
 
     /* The focused pane was skipped while the overlay covered it (and
-     * may now hold a freshly-opened document). Wipe its render cache so
-     * the next editor_ui_refresh() repaints every line from scratch. */
+     * may now hold a freshly-opened, possibly shorter document). Hide
+     * every line label / selection rect and wipe its render cache so
+     * the next editor_ui_refresh() repaints the pane from scratch with
+     * no leftover lines from the previously shown file. Hiding the
+     * widgets is required in addition to invalidating the cache: the
+     * refresh path only hides a stale label when prev_line_visible[]
+     * still marks it visible, and invalidate_render_cache() clears that
+     * flag -- so without an explicit hide here a shorter new file would
+     * leave the previous file's trailing lines on screen. */
     pane_t *save = s_rp;
     s_rp = &s_panes[s_focus];
+    for (int i = 0; i < MAX_LINE_LABELS; i++) {
+        if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+        if (s_sel_rects[i])   lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+    }
     invalidate_render_cache();
     s_rp = save;
 }
@@ -4629,6 +4668,17 @@ static void handle_inpane_browser_key(const kb_event_t *ev)
     if (ev->keycode == KB_KEY_F1) {
         close_inpane_browser();
         show_menu();
+        return;
+    }
+
+    if (ctrl && ev->keycode == KB_KEY_TAB) {
+        /* Ctrl+Tab leaves the in-pane file selector and moves keyboard
+         * focus to the other (editor) pane. Close the overlay first so
+         * the pane it covered repaints as an editor, then switch focus
+         * and return to editing. */
+        close_inpane_browser();
+        editor_ui_focus_other_pane();
+        editor_ui_show_editor();
         return;
     }
 
