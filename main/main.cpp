@@ -1231,6 +1231,35 @@ extern "C" void app_main(void)
     /* Initialize SD card */
     ESP_LOGI(TAG, "Initializing SD card...");
     esp_err_t sd_ret = ESP_FAIL;
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* Hold the LVGL port lock across the whole SD mount sequence on
+     * epdiy e-paper boards (M5Stack PaperS3, LilyGO T5 E-Paper S3 Pro
+     * / Pro Lite).
+     *
+     * When NO card is inserted, sd_card_init_spi()'s retry ladder
+     * spends up to ~800 ms in its slowest attempt (1 MHz), keeping
+     * core 0 busy servicing the SPI3 ISR and the sdspi command
+     * timeouts. The epdiy LCD render path feeds pixel lines through
+     * the ESP32-S3 LCD peripheral on a tight ~25 us-per-line schedule
+     * driven by the LCD VSYNC and GDMA end-of-frame interrupts (also
+     * on core 0). If an EPD flush starts while that slow probing is
+     * hammering core 0, the frame timing is disrupted, the LCD state
+     * machine desyncs, and both epdiy "epd_prep" feeder tasks
+     * busy-spin forever at top priority -- starving IDLE0 and tripping
+     * the task watchdog. The symptom appears only with no card,
+     * because a present card mounts on the first 20 MHz attempt and an
+     * EPD flush never overlaps a slow attempt.
+     *
+     * EPD flushes run from the LVGL task inside lv_timer_handler(),
+     * which holds this same lock (see lvgl_port.cpp). Taking the lock
+     * here lets any in-progress flush finish, then blocks new flushes
+     * for the duration of the mount, making SD probing and EPD
+     * refreshes mutually exclusive. (NOTE: the SPI master allocates a
+     * dedicated, non-shared interrupt, so the earlier "SD mount frees
+     * epdiy's shared SPI IRQ" theory does not hold; this serialization
+     * is the actual fix.) */
+    bool sd_lvgl_held = draftling_lvgl_port_lock(-1);
+#endif
 #if defined(CONFIG_DRAFTLING_SD_SDMMC)
     /* Boards with the SD slot wired to the on-chip SDMMC peripheral
      * (Waveshare RLCD-4.2). Uses 1-bit mode to keep the pin count
@@ -1275,6 +1304,15 @@ extern "C" void app_main(void)
             draftling_lvgl_port_unlock();
         }
     }
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* Release the LVGL port lock taken before the mount sequence. The
+     * pending "ERROR: SD card not ready" status (or the editor's
+     * normal first refresh) is flushed by the LVGL task only now that
+     * SD probing has finished, so the flush can never overlap it. */
+    if (sd_lvgl_held) {
+        draftling_lvgl_port_unlock();
+    }
+#endif
 
 #if defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO) || \
     defined(CONFIG_DRAFTLING_MODEL_LILYGO_T5_EPD_S3_PRO_H752)
