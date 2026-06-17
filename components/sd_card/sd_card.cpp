@@ -1,3 +1,5 @@
+#include "sdkconfig.h"
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -14,6 +16,7 @@
 #include <driver/sdmmc_host.h>
 #include <driver/sdspi_host.h>
 #include <driver/spi_common.h>
+#include <driver/spi_master.h>
 #include <driver/gpio.h>
 
 #include "sd_card.h"
@@ -23,6 +26,15 @@ static sdmmc_card_t *s_card = NULL;
 static char s_mount[32] = "";
 static int  s_spi_host  = -1;     /* set when mounted via SPI, otherwise -1 */
 static bool s_spi_bus_owned = false;
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+/* Permanent no-CS "keepalive" device kept on the shared SPI bus for the
+ * lifetime of the bus on epdiy boards. See sd_card_init_spi() for the
+ * rationale: it prevents the SPI master driver's shared interrupt from
+ * being torn down by esp_vfs_fat_sdspi_mount()'s internal device
+ * add/remove churn, which would otherwise disturb epdiy's shared LCD
+ * frame interrupt. */
+static spi_device_handle_t s_keepalive_dev = NULL;
+#endif
 
 extern "C" esp_err_t sd_card_init(int clk_pin, int cmd_pin, int d0_pin, const char *mount_point)
 {
@@ -95,6 +107,43 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
         }
     }
 
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+    /* Hold a permanent no-CS keepalive device on the bus before the
+     * mount loop runs.
+     *
+     * NOTE: this is a defensive measure, not the actual fix for the
+     * no-card "epd_prep" watchdog wedge. An earlier theory blamed the
+     * SPI master driver tearing its per-bus interrupt down and back up
+     * as esp_vfs_fat_sdspi_mount() adds/removes its sdspi device on
+     * each failed attempt, supposedly disturbing epdiy's
+     * ESP_INTR_FLAG_SHARED LCD interrupt. That theory is wrong: the
+     * ESP-IDF v5.5 SPI master allocates its host interrupt WITHOUT
+     * ESP_INTR_FLAG_SHARED (a dedicated interrupt), so SPI device
+     * add/remove cannot disturb epdiy's separately-allocated shared
+     * LCD interrupt. The real cause is an EPD flush overlapping the
+     * slow (down to 1 MHz) no-card mount probe; that is serialized in
+     * app_main() by holding the LVGL port lock across SD init.
+     *
+     * The keepalive device is kept anyway because it is harmless:
+     * keeping at least one device on the bus avoids needless
+     * interrupt alloc/free churn during the retry ladder. It has no CS
+     * line and is never used for transactions. */
+    if (s_spi_bus_owned && !s_keepalive_dev) {
+        spi_device_interface_config_t ka_cfg = {};
+        ka_cfg.clock_speed_hz = 1 * 1000 * 1000;
+        ka_cfg.mode           = 0;
+        ka_cfg.spics_io_num   = -1;
+        ka_cfg.queue_size     = 1;
+        esp_err_t kerr = spi_bus_add_device((spi_host_device_t)spi_host,
+                                            &ka_cfg, &s_keepalive_dev);
+        if (kerr != ESP_OK) {
+            ESP_LOGW(TAG, "SPI keepalive device add failed: %s",
+                     esp_err_to_name(kerr));
+            s_keepalive_dev = NULL;
+        }
+    }
+#endif
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = spi_host;
     /* SPI data-phase clock retry ladder. We start at the SDSPI
@@ -116,7 +165,7 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
      * FAT / cluster region a multi-GB FAT32 volume actually uses),
      * not a global clock cap. Starting at 20 MHz lets healthy SDHC
      * cards run at full speed, and the step-down ladder
-     * (10 → 4 → 2 → 1 MHz) catches the marginal SDSC cases. */
+     * (10 -> 4 -> 2 -> 1 MHz) catches the marginal SDSC cases. */
     static const int kRetryFreqKhz[] = {
         20000,
         10000,
@@ -259,10 +308,33 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+        /* On the epdiy e-paper boards (M5Stack PaperS3, LilyGO T5
+         * E-Paper S3 Pro / Pro Lite) leave the SPI bus initialized
+         * after a mount failure rather than freeing it.
+         *
+         * NOTE: an earlier theory blamed freeing the SPI controller's
+         * interrupt for disturbing epdiy's ESP_INTR_FLAG_SHARED LCD
+         * interrupt and wedging the "epd_prep" feeders. That theory is
+         * wrong -- the ESP-IDF v5.5 SPI master uses a dedicated,
+         * non-shared interrupt, so freeing the SPI bus cannot disturb
+         * the LCD interrupt. The real no-card wedge is an EPD flush
+         * overlapping the slow mount probe, which app_main() now
+         * serializes with the LVGL port lock around SD init.
+         *
+         * We still leave the bus owned here because it is harmless:
+         * nothing else needs the bus freed for this session
+         * (sd_card_deinit() still frees it on a clean unmount), and it
+         * avoids extra bus teardown/setup churn. */
+        ESP_LOGW(TAG, "Leaving SPI%d bus initialized after mount failure "
+                      "to avoid disturbing the shared e-paper LCD interrupt",
+                 spi_host);
+#else
         if (s_spi_bus_owned) {
             spi_bus_free((spi_host_device_t)spi_host);
             s_spi_bus_owned = false;
         }
+#endif
         s_card = NULL;
         return ret;
     }
@@ -278,6 +350,14 @@ extern "C" esp_err_t sd_card_deinit(void)
     esp_err_t ret;
     if (s_spi_host >= 0) {
         ret = esp_vfs_fat_sdcard_unmount(s_mount, s_card);
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+        /* Release the keepalive device before freeing the bus so the
+         * SPI driver can shut down cleanly. */
+        if (s_keepalive_dev) {
+            spi_bus_remove_device(s_keepalive_dev);
+            s_keepalive_dev = NULL;
+        }
+#endif
         if (s_spi_bus_owned) {
             spi_bus_free((spi_host_device_t)s_spi_host);
             s_spi_bus_owned = false;
