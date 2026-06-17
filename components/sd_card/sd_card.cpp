@@ -1,3 +1,5 @@
+#include "sdkconfig.h"
+
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -259,10 +261,37 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
+#if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
+        /* On the epdiy e-paper boards (M5Stack PaperS3, LilyGO T5
+         * E-Paper S3 Pro / Pro Lite) the e-paper panel is driven by
+         * the ESP32-S3 LCD peripheral, whose frame-advance /
+         * frame-done interrupt epdiy installs with
+         * ESP_INTR_FLAG_SHARED. Tearing the SPI bus back down with
+         * spi_bus_free() here (the failure path is the ONLY caller of
+         * spi_bus_free during boot -- a present card keeps the bus
+         * owned) frees the SPI controller's shared interrupt and, as
+         * a side effect, leaves epdiy's shared LCD interrupt no longer
+         * being serviced. The very next e-paper refresh then never
+         * completes: its DMA stops draining the line queue, so both
+         * epdiy "epd_prep" feeder tasks (priority configMAX_PRIORITIES
+         * - 1, pinned one per core) busy-spin forever, starve IDLE0
+         * and trip the task watchdog. Symptom observed only when NO SD
+         * card is inserted, because only then is spi_bus_free reached.
+         *
+         * Leave the SPI bus initialised on these boards. Nothing else
+         * needs SPI3 freed for this session (sd_card_deinit() still
+         * frees it on a clean unmount), and keeping it owned matches
+         * the known-good "card present" peripheral state, so the
+         * shared LCD interrupt is left untouched. */
+        ESP_LOGW(TAG, "Leaving SPI%d bus initialised after mount failure "
+                      "to avoid disturbing the shared e-paper LCD interrupt",
+                 spi_host);
+#else
         if (s_spi_bus_owned) {
             spi_bus_free((spi_host_device_t)spi_host);
             s_spi_bus_owned = false;
         }
+#endif
         s_card = NULL;
         return ret;
     }
