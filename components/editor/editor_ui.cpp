@@ -2049,6 +2049,38 @@ static void touch_select_word_at(size_t off)
     editor_set_cursor(end);
 }
 
+/* Scroll the pane the finger is on by delta_lines WITHOUT moving the
+ * keyboard focus or the editing caret. A drag / swipe should only pan
+ * the touched pane's view; the caret must stay where the user is
+ * typing -- which may be the other pane. The touched pane is bound just
+ * long enough to update its scroll line and repaint it, then the
+ * focused-pane binding is restored. Binding the focused pane back does
+ * not repaint it, so its caret widget keeps its position / blink state.
+ * Only the focused pane ever draws a caret (refresh_active_pane's
+ * draw_cursor is true only when the touched pane is the focused one), so
+ * panning an unfocused pane never makes a caret appear in it. */
+static void touch_scroll_pane_by(int pane_idx, int delta_lines)
+{
+    if (delta_lines == 0) return;
+    if (pane_idx < 0 || pane_idx >= s_pane_count) pane_idx = s_focus;
+
+    bool refocus = (pane_idx != s_focus);
+    pane_bind(pane_idx);
+
+    int total      = editor_get_line_count();
+    int scroll     = editor_get_scroll_line();
+    int new_scroll = scroll + delta_lines;
+    if (new_scroll > total - 1) new_scroll = total - 1;
+    if (new_scroll < 0) new_scroll = 0;
+    if (new_scroll != scroll) {
+        editor_set_scroll_line(new_scroll);
+        refresh_active_pane(pane_idx == s_focus);
+        standby_reset_timer();
+    }
+
+    if (refocus) pane_bind_focus();
+}
+
 static void editor_touch_event_cb(lv_event_t *e)
 {
     /* Bail out early if any modal overlay is open: the overlay's
@@ -2060,13 +2092,14 @@ static void editor_touch_event_cb(lv_event_t *e)
     }
     if (!s_editor_screen_active) return;
 
-    /* Focus follows touch: bind the tapped pane (its index was stored
-     * in the container's user_data at creation) so all drag / caret
-     * logic below operates on that pane's document. */
+    /* The tapped pane index was stored in the container's user_data at
+     * creation. Focus is NOT moved here: a drag / swipe only pans the
+     * touched pane (see touch_scroll_pane_by), leaving the caret in the
+     * pane the user is editing. Keyboard focus follows a genuine TAP
+     * (the CLICKED branch below), which is the user explicitly placing
+     * the caret in that pane. */
     int pane_idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (pane_idx < 0 || pane_idx >= s_pane_count) pane_idx = s_focus;
-    s_focus = pane_idx;
-    pane_bind_focus();
 
     lv_event_code_t code = lv_event_get_code(e);
 
@@ -2106,20 +2139,12 @@ static void editor_touch_event_cb(lv_event_t *e)
             int step = dy / line_h;
             s_drag_anchor_y += step * line_h;
 
-            int total      = editor_get_line_count();
-            int scroll     = editor_get_scroll_line();
             /* Finger moves down (dy>0, step>0)  -> scroll backward
              *   (reveal lines above, like dragging the page down).
              * Finger moves up   (dy<0, step<0)  -> scroll forward
-             *   (reveal lines below, like dragging the page up). */
-            int new_scroll = scroll - step;
-            if (new_scroll > total - 1) new_scroll = total - 1;
-            if (new_scroll < 0) new_scroll = 0;
-            if (new_scroll != scroll) {
-                editor_set_scroll_line(new_scroll);
-                editor_ui_refresh();
-                standby_reset_timer();
-            }
+             *   (reveal lines below, like dragging the page up).
+             * Pan only the touched pane; keep the caret / focus put. */
+            touch_scroll_pane_by(pane_idx, -step);
         }
         return;
     }
@@ -2140,11 +2165,16 @@ static void editor_touch_event_cb(lv_event_t *e)
         }
         s_drag_total_dy = 0;
 
+        /* A genuine tap places the caret -> move keyboard focus to the
+         * tapped pane and bind it so the pane-local coordinate math and
+         * caret update below operate on that pane's document. */
+        s_focus = pane_idx;
+        pane_bind_focus();
+
         lv_indev_t *indev = lv_indev_active();
         if (!indev) return;
         lv_point_t pt;
         lv_indev_get_point(indev, &pt);
-
         /* Translate screen-space point into pane-local coordinates.
          * The pane's content area starts at (s_rp->x, s_rp->y). */
         int lx = pt.x - s_rp->x;
@@ -2186,22 +2216,11 @@ static void editor_touch_event_cb(lv_event_t *e)
 
         int step = VISIBLE_LINES > 2 ? VISIBLE_LINES - 1 : 1;
         if (dir == LV_DIR_TOP) {
-            /* Finger swiped up -> show content further down. */
-            int scroll = editor_get_scroll_line();
-            int total  = editor_get_line_count();
-            int new_scroll = scroll + step;
-            if (new_scroll > total - 1) new_scroll = total - 1;
-            if (new_scroll < 0) new_scroll = 0;
-            editor_set_scroll_line(new_scroll);
-            editor_ui_refresh();
-            standby_reset_timer();
+            /* Finger swiped up -> show content further down. Pan only
+             * the touched pane; keep the caret / focus put. */
+            touch_scroll_pane_by(pane_idx, +step);
         } else if (dir == LV_DIR_BOTTOM) {
-            int scroll = editor_get_scroll_line();
-            int new_scroll = scroll - step;
-            if (new_scroll < 0) new_scroll = 0;
-            editor_set_scroll_line(new_scroll);
-            editor_ui_refresh();
-            standby_reset_timer();
+            touch_scroll_pane_by(pane_idx, -step);
         }
         /* Horizontal swipes are ignored for now (no obvious editor
          * action; could be wired to undo/redo later). */
