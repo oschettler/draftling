@@ -70,6 +70,7 @@
 #include <driver/gpio.h>
 
 #include "display.h"
+#include "lvgl_port.h"
 
 #if defined(CONFIG_DRAFTLING_EPDIY_BOARD_PAPERS3)
 extern "C" const EpdBoardDefinition epd_board_papers3;
@@ -197,6 +198,25 @@ static bool                s_initialized = false;
 static int  s_dx0 = 0, s_dy0 = 0, s_dx1 = -1, s_dy1 = -1;
 static bool s_force_full = true;
 static int  s_partial_count = 0;
+
+/* Flush debounce. The epdiy LCD render path on the ESP32-S3 wedges
+ * (both `epd_prep` feeder tasks busy-spinning at top priority on both
+ * cores, starving IDLE0 and tripping the task watchdog) when EPD
+ * updates are issued back-to-back before the previous one has fully
+ * quiesced. On the M5Stack PaperS3 the direct-GPIO power gates
+ * (EPD_EN/BST_EN) cycle in microseconds, so unlike the TPS65185-based
+ * boards there is no natural inter-update spacing and rapid flushes
+ * (SD-init failure status, BLE bring-up redraws, fast scrolling) reach
+ * epdiy back-to-back and wedge it at boot. Coalesce flushes that
+ * arrive within EPDIY_DEBOUNCE_MS of the previous one into a single
+ * deferred update, restoring the inter-update spacing the old M5GFX
+ * driver provided. Full refreshes (display_clear/display_full_refresh)
+ * bypass the debounce. */
+#define EPDIY_DEBOUNCE_MS 120
+static int64_t            s_last_flush_us    = 0;
+static esp_timer_handle_t s_deferred_timer   = nullptr;
+static bool               s_deferred_pending = false;
+static bool               s_in_deferred_flush = false;
 
 static inline void mark_dirty_rect(int x, int y, int w, int h)
 {
@@ -447,10 +467,59 @@ extern "C" bool display_push_rgb565(int x, int y, int w, int h,
     return true;
 }
 
+/* Deferred-flush timer callback. Runs in the esp_timer task, so it
+ * must take the LVGL port lock to serialise with the LVGL task's
+ * flush callback (two concurrent epd_hl_update_area() calls would
+ * themselves wedge the render path). s_in_deferred_flush tells the
+ * re-entered display_flush() to skip the debounce guard and perform
+ * the actual update. */
+static void deferred_flush_cb(void *arg)
+{
+    (void)arg;
+    draftling_lvgl_port_lock(-1);
+    s_in_deferred_flush = true;
+    display_flush();
+    s_in_deferred_flush = false;
+    draftling_lvgl_port_unlock();
+}
+
 extern "C" void display_flush(void)
 {
     if (!s_initialized) return;
     if (s_dx1 < s_dx0 || s_dy1 < s_dy0) return;
+
+    /* Debounce: coalesce rapid back-to-back flushes so consecutive EPD
+     * updates never start closer than EPDIY_DEBOUNCE_MS apart (see the
+     * s_last_flush_us comment block). Full refreshes bypass this. The
+     * deferred callback re-enters display_flush with s_in_deferred_flush
+     * set, which skips this guard. */
+    if (!s_in_deferred_flush && !s_force_full) {
+        int64_t now = esp_timer_get_time();
+        int64_t elapsed_ms = (now - s_last_flush_us) / 1000;
+        if (s_last_flush_us != 0 && elapsed_ms < EPDIY_DEBOUNCE_MS) {
+            if (!s_deferred_pending) {
+                if (!s_deferred_timer) {
+                    const esp_timer_create_args_t args = {
+                        .callback = &deferred_flush_cb,
+                        .arg = nullptr,
+                        .dispatch_method = ESP_TIMER_TASK,
+                        .name = "epd_flush",
+                        .skip_unhandled_events = true,
+                    };
+                    esp_timer_create(&args, &s_deferred_timer);
+                }
+                if (s_deferred_timer) {
+                    int64_t remaining_ms = EPDIY_DEBOUNCE_MS - elapsed_ms;
+                    if (remaining_ms < 1) remaining_ms = 1;
+                    s_deferred_pending = true;
+                    esp_timer_start_once(s_deferred_timer,
+                                         (uint64_t)remaining_ms * 1000);
+                }
+            }
+            return;
+        }
+    }
+    s_deferred_pending = false;
 
     int dx0 = s_dx0, dy0 = s_dy0, dx1 = s_dx1, dy1 = s_dy1;
     int dw  = dx1 - dx0 + 1;
@@ -478,7 +547,6 @@ extern "C" void display_flush(void)
     static const int     FAST_SCROLL_GAP_MS       = 800;
     static const long    FAST_SCROLL_AREA_NUM     = 2;   /* >= 2/5 ... */
     static const long    FAST_SCROLL_AREA_DEN     = 5;   /* ... of screen */
-    static int64_t       s_last_flush_us          = 0;
     int64_t now_us = esp_timer_get_time();
     bool fast_scroll =
         (s_last_flush_us != 0) &&
