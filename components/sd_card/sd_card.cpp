@@ -111,29 +111,23 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
     /* Hold a permanent no-CS keepalive device on the bus before the
      * mount loop runs.
      *
-     * ESP-IDF's SPI master driver allocates the per-bus interrupt on
-     * the FIRST spi_bus_add_device() and frees it again on the LAST
-     * spi_bus_remove_device(). esp_vfs_fat_sdspi_mount() adds its own
-     * sdspi device and, on every failed attempt, removes it again --
-     * so when NO SD card is inserted the retry ladder below tears the
-     * SPI interrupt down and back up several times. epdiy drives the
-     * e-paper panel through the ESP32-S3 LCD peripheral, whose
-     * frame-advance interrupt it installs with ESP_INTR_FLAG_SHARED on
-     * the same CPU interrupt line; freeing the SPI handler disturbs
-     * that shared LCD interrupt and leaves it no longer serviced. The
-     * next e-paper refresh then never completes -- both epdiy
-     * "epd_prep" feeder tasks busy-spin forever at top priority,
-     * starve IDLE0 and trip the task watchdog. The symptom appears
-     * only when no card is present, because only then does the device
-     * get removed (a present card keeps its device, and the
-     * interrupt, alive).
+     * NOTE: this is a defensive measure, not the actual fix for the
+     * no-card "epd_prep" watchdog wedge. An earlier theory blamed the
+     * SPI master driver tearing its per-bus interrupt down and back up
+     * as esp_vfs_fat_sdspi_mount() adds/removes its sdspi device on
+     * each failed attempt, supposedly disturbing epdiy's
+     * ESP_INTR_FLAG_SHARED LCD interrupt. That theory is wrong: the
+     * ESP-IDF v5.5 SPI master allocates its host interrupt WITHOUT
+     * ESP_INTR_FLAG_SHARED (a dedicated interrupt), so SPI device
+     * add/remove cannot disturb epdiy's separately-allocated shared
+     * LCD interrupt. The real cause is an EPD flush overlapping the
+     * slow (down to 1 MHz) no-card mount probe; that is serialized in
+     * app_main() by holding the LVGL port lock across SD init.
      *
-     * Keeping our own device on the bus means at least one device is
-     * always present, so the SPI driver and its shared interrupt are
-     * allocated exactly once (here) and never torn down for the rest
-     * of the session, no matter how the mount attempts add and remove
-     * the sdspi device. The keepalive device has no CS line and is
-     * never used for transactions. */
+     * The keepalive device is kept anyway because it is harmless:
+     * keeping at least one device on the bus avoids needless
+     * interrupt alloc/free churn during the retry ladder. It has no CS
+     * line and is never used for transactions. */
     if (s_spi_bus_owned && !s_keepalive_dev) {
         spi_device_interface_config_t ka_cfg = {};
         ka_cfg.clock_speed_hz = 1 * 1000 * 1000;
@@ -171,7 +165,7 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
      * FAT / cluster region a multi-GB FAT32 volume actually uses),
      * not a global clock cap. Starting at 20 MHz lets healthy SDHC
      * cards run at full speed, and the step-down ladder
-     * (10 → 4 → 2 → 1 MHz) catches the marginal SDSC cases. */
+     * (10 -> 4 -> 2 -> 1 MHz) catches the marginal SDSC cases. */
     static const int kRetryFreqKhz[] = {
         20000,
         10000,
@@ -316,26 +310,22 @@ extern "C" esp_err_t sd_card_init_spi(int spi_host, int miso, int mosi, int sck,
         ESP_LOGE(TAG, "SD/SPI mount failed: %s", esp_err_to_name(ret));
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPDIY)
         /* On the epdiy e-paper boards (M5Stack PaperS3, LilyGO T5
-         * E-Paper S3 Pro / Pro Lite) the e-paper panel is driven by
-         * the ESP32-S3 LCD peripheral, whose frame-advance /
-         * frame-done interrupt epdiy installs with
-         * ESP_INTR_FLAG_SHARED. Freeing the SPI controller's shared
-         * interrupt -- which the SPI master driver does when its LAST
-         * device is removed -- leaves epdiy's shared LCD interrupt no
-         * longer serviced. The very next e-paper refresh then never
-         * completes: its DMA stops draining the line queue, so both
-         * epdiy "epd_prep" feeder tasks (priority configMAX_PRIORITIES
-         * - 1, pinned one per core) busy-spin forever, starve IDLE0
-         * and trip the task watchdog. Symptom observed only when NO SD
-         * card is inserted.
+         * E-Paper S3 Pro / Pro Lite) leave the SPI bus initialized
+         * after a mount failure rather than freeing it.
          *
-         * The keepalive device added in the bus-init block above keeps
-         * one device on the bus at all times, so the SPI driver and its
-         * shared interrupt are never freed by the mount attempts. Here
-         * we additionally leave the bus itself initialized: nothing
-         * else needs the bus freed for this session (sd_card_deinit()
-         * still frees it on a clean unmount), and keeping it owned
-         * matches the known-good "card present" peripheral state. */
+         * NOTE: an earlier theory blamed freeing the SPI controller's
+         * interrupt for disturbing epdiy's ESP_INTR_FLAG_SHARED LCD
+         * interrupt and wedging the "epd_prep" feeders. That theory is
+         * wrong -- the ESP-IDF v5.5 SPI master uses a dedicated,
+         * non-shared interrupt, so freeing the SPI bus cannot disturb
+         * the LCD interrupt. The real no-card wedge is an EPD flush
+         * overlapping the slow mount probe, which app_main() now
+         * serializes with the LVGL port lock around SD init.
+         *
+         * We still leave the bus owned here because it is harmless:
+         * nothing else needs the bus freed for this session
+         * (sd_card_deinit() still frees it on a clean unmount), and it
+         * avoids extra bus teardown/setup churn. */
         ESP_LOGW(TAG, "Leaving SPI%d bus initialized after mount failure "
                       "to avoid disturbing the shared e-paper LCD interrupt",
                  spi_host);
