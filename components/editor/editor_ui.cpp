@@ -1620,6 +1620,24 @@ static void refresh_focused_pane(void)
     }
 }
 
+/* Like refresh_focused_pane() but also updates the shared title and
+ * battery widgets. Used as the post-key refresh for pure cursor
+ * navigation (arrows, Home/End, Page Up/Down, word/document moves):
+ * these never change document content, so re-rendering the unfocused
+ * pane is unnecessary. Avoiding the full editor_ui_refresh() keeps the
+ * binding (and therefore the visible caret) on the focused pane, so a
+ * cursor that reaches the beginning / end of the text cannot end up
+ * drawn in the other pane -- focus only ever moves with Ctrl+Tab.
+ * Content-changing keys still use the full editor_ui_refresh() so a
+ * sibling pane showing the same shared document repaints the edit. */
+static void refresh_focused_pane_and_title(void)
+{
+    if (!s_editor_screen_active) return;
+    refresh_focused_pane();
+    update_title_bar();
+    sync_battery_labels();
+}
+
 static void ensure_cursor_visible(void)
 {
     int cur_line, cur_col;
@@ -4033,6 +4051,13 @@ static void handle_editor_key(const kb_event_t *ev)
      * engine's active doc and the widget aliases point at it. */
     pane_bind_focus();
 
+    /* Set by the content-modifying key cases below. Pure cursor
+     * navigation leaves this false so the post-key refresh repaints
+     * only the focused pane (keeping the caret inside it); edits set it
+     * true to force a full refresh that also repaints a sibling pane
+     * sharing the same document. */
+    bool content_changed = false;
+
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* Snapshot before-edit state for the partial-refresh fast path,
      * and ensure the clip is updated (set or cleared) on every
@@ -4250,7 +4275,10 @@ static void handle_editor_key(const kb_event_t *ev)
             editor_move_doc_end();
         }
         ensure_cursor_visible();
-        editor_ui_refresh();
+        /* Ctrl word / document moves are pure navigation: repaint only
+         * the focused pane while split so the caret stays in it. */
+        if (s_pane_count > 1) refresh_focused_pane_and_title();
+        else                  editor_ui_refresh();
         return;
     }
 
@@ -4313,6 +4341,7 @@ static void handle_editor_key(const kb_event_t *ev)
         editor_move_page_down(VISIBLE_LINES);
         break;
     case KB_KEY_BACKSPACE:
+        content_changed = true;
         if (!editor_delete_selection()) {
             editor_delete_back();
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
@@ -4321,6 +4350,7 @@ static void handle_editor_key(const kb_event_t *ev)
         }
         break;
     case KB_KEY_DELETE:
+        content_changed = true;
         if (!editor_delete_selection()) {
             editor_delete_forward();
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
@@ -4329,11 +4359,13 @@ static void handle_editor_key(const kb_event_t *ev)
         }
         break;
     case KB_KEY_ENTER:
+        content_changed = true;
         editor_delete_selection();
         if (!editor_insert_newline())
             editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
         break;
     case KB_KEY_TAB:
+        content_changed = true;
         editor_delete_selection();
         if (!editor_insert_text("    ", 4))
             editor_ui_set_status("Buffer full -- increase editor size in menuconfig");
@@ -4351,6 +4383,7 @@ static void handle_editor_key(const kb_event_t *ev)
         /* Use keyboard layout to translate keycode to UTF-8 */
         const char *text = kb_layout_translate(ev->keycode, ev->modifier);
         if (text) {
+            content_changed = true;
             bool had_sel = editor_selection_active();
             editor_delete_selection();
             if (!editor_insert_text(text, strlen(text)))
@@ -4369,7 +4402,16 @@ static void handle_editor_key(const kb_event_t *ev)
     }
 
     ensure_cursor_visible();
-    editor_ui_refresh();
+    if (content_changed || s_pane_count <= 1) {
+        /* Content edits (and single-pane mode) take the full refresh so
+         * a sibling pane sharing the same document repaints too. */
+        editor_ui_refresh();
+    } else {
+        /* Pure cursor navigation while split: repaint only the focused
+         * pane so the caret can never end up drawn in the other pane
+         * when the cursor reaches the beginning / end of the text. */
+        refresh_focused_pane_and_title();
+    }
     /* Partial-refresh clip is set/cleared by ClipGuard's destructor
      * on the M5Stack PaperS3 backend. */
 }
@@ -4410,6 +4452,25 @@ static void show_inpane_browser(void)
     lv_obj_remove_flag(s_inpane_list, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_inpane_hdr);
     lv_obj_move_foreground(s_inpane_list);
+
+    /* Clear the covered pane's editor widgets so none of its text shows
+     * through. The overlay list only paints rows it has; any area below
+     * the last entry (and the caret / selection rects / logo, which are
+     * raised above the list) would otherwise leave the previous
+     * document's lines visible behind the selector. Hide the focused
+     * pane's line labels, selection rects, cursor and logo explicitly. */
+    {
+        pane_t *save = s_rp;
+        s_rp = &s_panes[s_focus];
+        for (int i = 0; i < MAX_LINE_LABELS; i++) {
+            if (s_line_labels[i]) lv_obj_add_flag(s_line_labels[i], LV_OBJ_FLAG_HIDDEN);
+            if (s_sel_rects[i])   lv_obj_add_flag(s_sel_rects[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_cursor)   lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        if (s_img_logo) lv_obj_add_flag(s_img_logo, LV_OBJ_FLAG_HIDDEN);
+        s_cursor_on_screen = false;
+        s_rp = save;
+    }
 
     s_inpane_browser_open = true;
     /* The editor screen stays active (the other pane keeps rendering);
