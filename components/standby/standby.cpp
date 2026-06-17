@@ -56,6 +56,9 @@
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
 #include "usb_kbd.h"
 #endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+#include "tab5_kbd.h"
+#endif
 
 static const char *TAG = "Standby";
 
@@ -110,6 +113,12 @@ static void kb_wait_cb(void *arg)
 #if defined(CONFIG_DRAFTLING_HAS_USB_HOST)
     if (usb_kbd_is_connected()) {
         ESP_LOGI(TAG, "No-keyboard timer fired but a USB keyboard is connected -- staying awake");
+        return;
+    }
+#endif
+#if defined(CONFIG_DRAFTLING_HAS_TAB5_KBD)
+    if (tab5_kbd_is_present()) {
+        ESP_LOGI(TAG, "No-keyboard timer fired but Tab5 keyboard is connected -- staying awake");
         return;
     }
 #endif
