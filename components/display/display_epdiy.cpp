@@ -506,7 +506,11 @@ extern "C" void display_flush(void)
                         .name = "epd_flush",
                         .skip_unhandled_events = true,
                     };
-                    esp_timer_create(&args, &s_deferred_timer);
+                    esp_err_t terr = esp_timer_create(&args, &s_deferred_timer);
+                    if (terr != ESP_OK) {
+                        ESP_LOGE(TAG, "deferred flush timer create failed: %s",
+                                 esp_err_to_name(terr));
+                    }
                 }
                 if (s_deferred_timer) {
                     int64_t remaining_ms = EPDIY_DEBOUNCE_MS - elapsed_ms;
