@@ -169,21 +169,32 @@ static void log_boot_power_telemetry(void)
 }
 #endif /* CONFIG_DRAFTLING_DEBUG_POWER */
 
-/* Called by standby just before entering deep sleep */
-static void pre_sleep_autosave(void)
+/* Save one open document (called for every in-use doc via
+ * editor_doc_foreach) before deep sleep. Persists the body if it has
+ * unsaved changes and a path, and always persists the cursor/scroll
+ * sidecar so reopening resumes at the last position. */
+static void pre_sleep_save_doc_cb(editor_doc_t *doc, void *ctx)
 {
-    ESP_LOGI(TAG, "Pre-sleep: autosave + EPD wipe (generic path)");
-    if (editor_is_modified() && editor_get_file_path()) {
-        ESP_LOGI(TAG, "Auto-saving before deep sleep...");
-        esp_err_t err = editor_save_file();
+    (void)ctx;
+    if (editor_doc_is_modified(doc) && editor_doc_get_path(doc)) {
+        ESP_LOGI(TAG, "Auto-saving %s before deep sleep...",
+                 editor_doc_get_path(doc));
+        esp_err_t err = editor_doc_save(doc);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Auto-save failed: %s", esp_err_to_name(err));
         }
     }
-    /* Persist cursor/scroll metadata even when the document body
-     * itself is unmodified, so reopening the file resumes at the
-     * last position. No-op if no file is currently open. */
-    editor_save_meta();
+    editor_doc_save_meta(doc);
+}
+
+/* Called by standby just before entering deep sleep */
+static void pre_sleep_autosave(void)
+{
+    ESP_LOGI(TAG, "Pre-sleep: autosave + EPD wipe (generic path)");
+    /* Persist every open document (both panes when split), not just the
+     * active one. Each callback saves the body if modified and always
+     * writes the cursor/scroll sidecar so reopening resumes in place. */
+    editor_doc_foreach(pre_sleep_save_doc_cb, NULL);
 #if defined(CONFIG_DRAFTLING_DISPLAY_EPD)
     /* E-paper retains its image without power. Wipe the panel to a
      * clean white frame so the user does not see the editor frozen on

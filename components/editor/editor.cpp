@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <cassert>
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 
@@ -11,31 +12,79 @@
 
 static const char *TAG = "Editor";
 
-static char *s_buf      = NULL;   /* gap buffer */
-static char *s_flat     = NULL;   /* flattened text cache */
-static size_t s_gap_start = 0;
-static size_t s_gap_end   = 0;
-static size_t s_buf_size  = 0;
-static char s_path[256]   = "";
-static bool s_modified    = false;
-static bool s_flat_dirty  = true;
-static editor_mode_t s_mode = EDITOR_MODE_NORMAL;
-static int s_scroll_line  = 0;
-static int s_sel_anchor   = -1;   /* logical byte offset, -1 = no selection */
-static char *s_clipboard  = NULL;
-static size_t s_clip_len  = 0;
+/* ---- Per-document state ----
+ *
+ * Everything that used to be a file-scope global now lives in an
+ * editor_doc_t so the engine can hold several open documents at once
+ * (one per editor pane). A small fixed pool of these is kept in s_docs[]
+ * and the public API operates on whichever one s_active points at.
+ *
+ * The clipboard is intentionally NOT part of this struct: it is a single
+ * system clipboard shared across every document (see s_clipboard below).
+ */
+struct editor_doc_s {
+    bool   in_use;        /* slot is allocated */
+    int    refcount;      /* number of panes referencing this doc */
 
-/* Cached line count of the flattened text. -1 means "not computed".
- * Invalidated alongside the flat buffer in invalidate_flat(). */
-static int s_line_count_cache = -1;
+    char  *buf;           /* gap buffer (NULL until first use) */
+    char  *flat;          /* flattened text cache */
+    size_t gap_start;     /* gap start == cursor position */
+    size_t gap_end;
+    size_t buf_size;      /* allocated size of buf (and flat - 1) */
 
-/* Forward-only line-lookup cache used by editor_get_line().
- * Stores the byte offset into s_flat where line s_line_cache_num starts.
- * editor_ui_refresh() iterates lines in increasing order, so this
- * lets each refresh walk the flat buffer at most once instead of
- * O(N^2). Invalidated alongside the flat buffer in invalidate_flat(). */
-static int    s_line_cache_num    = -1;
-static size_t s_line_cache_offset = 0;
+    char   path[256];     /* backing file path, "" when untitled */
+    bool   modified;
+    bool   flat_dirty;
+    editor_mode_t mode;
+    int    scroll_line;
+    int    sel_anchor;    /* logical byte offset, -1 = no selection */
+
+    /* Cached line count of the flattened text. -1 means "not computed".
+     * Invalidated alongside the flat buffer in invalidate_flat(). */
+    int    line_count_cache;
+    /* Forward-only line-lookup cache used by editor_get_line(). Stores
+     * the byte offset into flat where line line_cache_num starts.
+     * editor_ui_refresh() iterates lines in increasing order, so this
+     * lets each refresh walk the flat buffer at most once instead of
+     * O(N^2). Invalidated alongside the flat buffer in invalidate_flat(). */
+    int    line_cache_num;
+    size_t line_cache_offset;
+};
+
+/* Maximum number of simultaneously open documents. Two is enough for the
+ * side-by-side editor panes; bump this if more panes are ever added. */
+#define EDITOR_MAX_DOCS 2
+
+static editor_doc_t  s_docs[EDITOR_MAX_DOCS];
+static editor_doc_t *s_active = NULL;   /* the document the public API acts on */
+
+/* Per-document buffer size, computed once from free PSRAM in
+ * editor_init() and reused for every pool slot's lazy allocation. */
+static size_t s_doc_buf_size = 0;
+
+/* The rest of this file was written against file-scope globals named
+ * s_buf, s_gap_start, ... Rather than thread an editor_doc_t* through
+ * dozens of small helpers, alias each former global to the matching
+ * field of the active document. Every existing function body is then
+ * unchanged and automatically operates on s_active. */
+#define s_buf               (s_active->buf)
+#define s_flat              (s_active->flat)
+#define s_gap_start         (s_active->gap_start)
+#define s_gap_end           (s_active->gap_end)
+#define s_buf_size          (s_active->buf_size)
+#define s_path              (s_active->path)
+#define s_modified          (s_active->modified)
+#define s_flat_dirty        (s_active->flat_dirty)
+#define s_mode              (s_active->mode)
+#define s_scroll_line       (s_active->scroll_line)
+#define s_sel_anchor        (s_active->sel_anchor)
+#define s_line_count_cache  (s_active->line_count_cache)
+#define s_line_cache_num    (s_active->line_cache_num)
+#define s_line_cache_offset (s_active->line_cache_offset)
+
+/* Shared system clipboard (not per-document). */
+static char  *s_clipboard  = NULL;
+static size_t s_clip_len   = 0;
 
 /* Content length (excluding gap) */
 static inline size_t content_len(void) { return s_buf_size - (s_gap_end - s_gap_start); }
@@ -46,12 +95,17 @@ static inline char char_at(size_t p)
     return (p < s_gap_start) ? s_buf[p] : s_buf[p + (s_gap_end - s_gap_start)];
 }
 
+static void doc_invalidate_flat(editor_doc_t *d)
+{
+    d->flat_dirty        = true;
+    d->line_count_cache  = -1;
+    d->line_cache_num    = -1;
+    d->line_cache_offset = 0;
+}
+
 static void invalidate_flat(void)
 {
-    s_flat_dirty        = true;
-    s_line_count_cache  = -1;
-    s_line_cache_num    = -1;
-    s_line_cache_offset = 0;
+    doc_invalidate_flat(s_active);
 }
 
 static void ensure_gap(size_t need)
@@ -62,76 +116,157 @@ static void ensure_gap(size_t need)
     ESP_LOGE(TAG, "Gap buffer full");
 }
 
+/* ---- Document pool management ---- */
+
+/* Reset a document slot to an empty, untitled buffer. The slot's
+ * buffers must already be allocated (doc_ensure_buffers). */
+static void doc_reset_empty(editor_doc_t *d)
+{
+    d->gap_start   = 0;
+    d->gap_end     = d->buf_size;
+    d->path[0]     = '\0';
+    d->modified    = false;
+    d->mode        = EDITOR_MODE_NORMAL;
+    d->scroll_line = 0;
+    d->sel_anchor  = -1;
+    doc_invalidate_flat(d);
+}
+
+/* Compute the per-document gap-buffer size from the PSRAM that is free
+ * right now. Mirrors the original single-buffer sizing so a single open
+ * document keeps exactly the same maximum size as before. */
+static size_t compute_doc_buf_size(void)
+{
+    /* ---- Dynamic sizing from free PSRAM ----
+     *
+     * Use roughly half of the PSRAM that is still free at this point in
+     * boot, split evenly between the gap buffer and the flat text cache.
+     * The other half is reserved for the rest of the system that
+     * initializes after the editor: BLE/Bluedroid
+     * (CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST), the WiFi/LWIP dynamic
+     * pools (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP), the Git-sync HTTPS
+     * task stack and response buffers, the LVGL widget heap growth, and
+     * ad-hoc heap_caps_malloc(SPIRAM) allocations during editing
+     * (clipboard, file I/O staging, Markdown re-rendering, etc.).
+     *
+     * Clamped to a sensible min/max so very small or very large PSRAM
+     * configurations still get a usable editor:
+     *   - Min 64 KB per buffer keeps editor_open_file() useful.
+     *   - Max git_sync_max_file_size() per buffer: git_sync cannot push
+     *     anything larger than what its base64 + JSON encode transient
+     *     fits into the currently-free PSRAM. Git is the tighter of the
+     *     two constraints, so it determines the effective maximum file
+     *     size for the whole application. */
+    const size_t MIN_BUF = 64  * 1024;
+    const size_t MAX_BUF = git_sync_max_file_size();
+    const size_t RUNTIME_RESERVE = 2 * 1024 * 1024;
+    const size_t ALIGN   = 4 * 1024;
+
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t usable;
+    if (free_psram > RUNTIME_RESERVE) {
+        usable = free_psram - RUNTIME_RESERVE;
+    } else {
+        /* PSRAM is tight: fall back to using half of what is free. The
+         * min/max clamp below still guarantees we ask for at least
+         * MIN_BUF -- if that allocation fails we abort via assert(),
+         * which is the same behaviour as before. */
+        usable = free_psram / 2;
+    }
+    size_t per_buf = usable / 2;
+    per_buf &= ~(ALIGN - 1);
+    if (per_buf < MIN_BUF) per_buf = MIN_BUF;
+    if (per_buf > MAX_BUF) per_buf = MAX_BUF;
+    return per_buf;
+}
+
+/* Lazily allocate a slot's gap buffer and flat cache. The first slot is
+ * sized from the PSRAM free at editor_init() time (so a single document
+ * keeps the historical maximum size); a second concurrently-opened
+ * document is sized from whatever PSRAM remains free when it is first
+ * acquired, which is the trade-off called out in the split-screen plan
+ * ("two large docs must fit"). Returns false on allocation failure. */
+static bool doc_ensure_buffers(editor_doc_t *d)
+{
+    if (d->buf) return true;
+    /* For a second/third document, re-derive the size from the PSRAM
+     * that is free now -- the first document and the rest of the system
+     * have already taken their share -- but never exceed the primary
+     * size so editor_get_max_doc_size() stays an upper bound. */
+    size_t sz = s_doc_buf_size;
+    size_t now = compute_doc_buf_size();
+    if (now < sz) sz = now;
+    d->buf  = (char *)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+    d->flat = (char *)heap_caps_malloc(sz + 1, MALLOC_CAP_SPIRAM);
+    if (!d->buf || !d->flat) {
+        free(d->buf);  d->buf  = NULL;
+        free(d->flat); d->flat = NULL;
+        return false;
+    }
+    d->buf_size = sz;
+    ESP_LOGI(TAG, "Document buffer allocated (%u KB, PSRAM; %u KB free remaining)",
+             (unsigned)(sz / 1024),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+    return true;
+}
+
+/* Find an in-use pool slot already bound to path, or NULL. */
+static editor_doc_t *doc_find_by_path(const char *path)
+{
+    if (!path || path[0] == '\0') return NULL;
+    for (int i = 0; i < EDITOR_MAX_DOCS; i++) {
+        if (s_docs[i].in_use && strcmp(s_docs[i].path, path) == 0)
+            return &s_docs[i];
+    }
+    return NULL;
+}
+
+/* Claim a free pool slot, allocate its buffers, and mark it in use.
+ * Returns NULL if the pool is full or allocation fails. */
+static editor_doc_t *doc_alloc_slot(void)
+{
+    for (int i = 0; i < EDITOR_MAX_DOCS; i++) {
+        if (!s_docs[i].in_use) {
+            editor_doc_t *d = &s_docs[i];
+            if (!doc_ensure_buffers(d)) return NULL;
+            d->in_use   = true;
+            d->refcount = 0;
+            doc_reset_empty(d);
+            return d;
+        }
+    }
+    ESP_LOGW(TAG, "Document pool exhausted (%d slots)", EDITOR_MAX_DOCS);
+    return NULL;
+}
+
 extern "C" void editor_init(void)
 {
-    /* Idempotent: the gap buffer and flat cache are large PSRAM
-     * allocations and should be made exactly once for the lifetime
-     * of the process. Subsequent calls (e.g. from the file-browser
-     * "open" handler) only reset the in-memory document state. */
-    if (s_buf == NULL) {
-        /* ---- Dynamic sizing from free PSRAM ----
-         *
-         * Use roughly half of the PSRAM that is still free at this
-         * point in boot, split evenly between the gap buffer and the
-         * flat text cache. The other half is reserved for the rest of
-         * the system that initializes after the editor: BLE/Bluedroid
-         * (CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST), the WiFi/LWIP
-         * dynamic pools (CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP), the
-         * Git-sync HTTPS task stack and response buffers, the LVGL
-         * widget heap growth, and ad-hoc heap_caps_malloc(SPIRAM)
-         * allocations during editing (clipboard, file I/O staging,
-         * Markdown re-rendering, etc.).
-         *
-         * Clamped to a sensible min/max so very small or very large
-         * PSRAM configurations still get a usable editor:
-         *   - Min 64 KB per buffer keeps editor_open_file() useful.
-         *   - Max git_sync_max_file_size() per buffer: git_sync cannot
-         *     push anything larger than what its base64 + JSON encode
-         *     transient fits into the currently-free PSRAM. Git is the
-         *     tighter of the two constraints, so it determines the
-         *     effective maximum file size for the whole application.
-         *     Querying it *now* (before we take our own buffers) yields
-         *     the most generous bound that still matches what git_sync
-         *     could push at this point in startup. */
-        const size_t MIN_BUF = 64  * 1024;
-        const size_t MAX_BUF = git_sync_max_file_size();
-        const size_t RUNTIME_RESERVE = 2 * 1024 * 1024;
-        const size_t ALIGN   = 4 * 1024;
-
-        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        size_t usable;
-        if (free_psram > RUNTIME_RESERVE) {
-            usable = free_psram - RUNTIME_RESERVE;
-        } else {
-            /* PSRAM is tight: fall back to using half of what is free.
-             * The min/max clamp below still guarantees we ask for at
-             * least MIN_BUF -- if that allocation fails we abort via
-             * assert(), which is the same behaviour as before. */
-            usable = free_psram / 2;
-        }
-        size_t per_buf = usable / 2;
-        per_buf &= ~(ALIGN - 1);
-        if (per_buf < MIN_BUF) per_buf = MIN_BUF;
-        if (per_buf > MAX_BUF) per_buf = MAX_BUF;
-        s_buf_size = per_buf;
-
-        s_buf  = (char *)heap_caps_malloc(s_buf_size, MALLOC_CAP_SPIRAM);
-        s_flat = (char *)heap_caps_malloc(s_buf_size + 1, MALLOC_CAP_SPIRAM);
-        assert(s_buf && s_flat);
-        ESP_LOGI(TAG, "Editor initialized (%u KB buffer, PSRAM; %u KB free PSRAM remaining)",
-                 (unsigned)(s_buf_size / 1024),
+    /* Size the per-document buffers exactly once, from the PSRAM free at
+     * this point in boot. */
+    if (s_doc_buf_size == 0) {
+        s_doc_buf_size = compute_doc_buf_size();
+        ESP_LOGI(TAG, "Editor initialized (per-doc buffer %u KB; %u KB free PSRAM)",
+                 (unsigned)(s_doc_buf_size / 1024),
                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     }
-    s_gap_start = 0;
-    s_gap_end   = s_buf_size;
-    s_modified  = false;
-    s_path[0]   = '\0';
-    invalidate_flat();
+
+    /* Ensure there is always an active (empty, untitled) document so the
+     * rest of the public API and the single-pane UI keep working without
+     * any awareness of the pool. Idempotent: a subsequent call (e.g. the
+     * file-browser "open" handler used to call editor_init() to reset)
+     * just resets the active document back to empty. */
+    if (s_active == NULL) {
+        editor_doc_t *d = doc_alloc_slot();
+        assert(d && "editor_init: failed to allocate primary document");
+        d->refcount = 1;
+        s_active = d;
+    }
+    doc_reset_empty(s_active);
 }
 
 extern "C" size_t editor_get_max_doc_size(void)
 {
-    return s_buf_size;
+    return s_doc_buf_size;
 }
 
 /* ---- Per-file metadata sidecar ----
@@ -445,6 +580,111 @@ extern "C" void editor_close_file(void)
 extern "C" const char *editor_get_file_path(void) { return s_path[0] ? s_path : NULL; }
 extern "C" bool editor_is_modified(void) { return s_modified; }
 
+/* ---- Document pool public API ----
+ *
+ * These let a multi-pane UI hold more than one open document. The rest
+ * of the public API above always operates on whichever document is
+ * active (editor_set_active / editor_get_active). */
+
+extern "C" editor_doc_t *editor_get_active(void) { return s_active; }
+
+extern "C" void editor_set_active(editor_doc_t *doc) { s_active = doc; }
+
+extern "C" const char *editor_doc_get_path(const editor_doc_t *doc)
+{
+    return (doc && doc->path[0]) ? doc->path : NULL;
+}
+
+extern "C" bool editor_doc_is_modified(const editor_doc_t *doc)
+{
+    return doc && doc->modified;
+}
+
+/* First in-use slot, used as a fallback active document. */
+static editor_doc_t *pick_any_active(void)
+{
+    for (int i = 0; i < EDITOR_MAX_DOCS; i++) {
+        if (s_docs[i].in_use) return &s_docs[i];
+    }
+    return NULL;
+}
+
+extern "C" editor_doc_t *editor_doc_acquire(const char *path)
+{
+    /* Two panes opening the same path share one editor_doc_t (and one
+     * underlying buffer): hand back the existing handle, bump its
+     * reference count, and make it active. */
+    editor_doc_t *existing = doc_find_by_path(path);
+    if (existing) {
+        existing->refcount++;
+        s_active = existing;
+        return existing;
+    }
+
+    editor_doc_t *slot = doc_alloc_slot();
+    if (!slot) return NULL;
+    slot->refcount = 1;
+    s_active = slot;   /* editor_open_file / editor_new_file act on active */
+
+    if (path && path[0]) {
+        if (editor_open_file(path) != ESP_OK) {
+            /* Roll back the slot allocation and restore a valid active. */
+            slot->in_use   = false;
+            slot->refcount = 0;
+            slot->path[0]  = '\0';
+            s_active = pick_any_active();
+            return NULL;
+        }
+    } else {
+        editor_new_file();
+    }
+    return slot;
+}
+
+extern "C" void editor_doc_release(editor_doc_t *doc)
+{
+    if (!doc || !doc->in_use) return;
+    if (doc->refcount > 0) doc->refcount--;
+    if (doc->refcount > 0) return;   /* still referenced by another pane */
+
+    /* Last reference: persist resume metadata, then free the slot. The
+     * gap buffer and flat cache are kept allocated for reuse by a future
+     * acquire so we do not thrash large PSRAM allocations. */
+    editor_doc_save_meta(doc);
+    doc->in_use   = false;
+    doc->path[0]  = '\0';
+    doc->modified = false;
+    if (s_active == doc) s_active = pick_any_active();
+}
+
+extern "C" esp_err_t editor_doc_save(editor_doc_t *doc)
+{
+    if (!doc || doc->path[0] == '\0') return ESP_ERR_INVALID_STATE;
+    editor_doc_t *prev = s_active;
+    s_active = doc;
+    esp_err_t ret = editor_save_file();
+    s_active = prev;
+    return ret;
+}
+
+extern "C" void editor_doc_save_meta(editor_doc_t *doc)
+{
+    if (!doc || doc->path[0] == '\0') return;
+    editor_doc_t *prev = s_active;
+    s_active = doc;
+    editor_save_meta();
+    s_active = prev;
+}
+
+extern "C" void editor_doc_foreach(void (*cb)(editor_doc_t *doc, void *ctx),
+                                   void *ctx)
+{
+    if (!cb) return;
+    for (int i = 0; i < EDITOR_MAX_DOCS; i++) {
+        if (s_docs[i].in_use) cb(&s_docs[i], ctx);
+    }
+}
+
 extern "C" const char *editor_get_text(size_t *out_len)
 {
     if (s_flat_dirty) {
@@ -528,6 +768,18 @@ extern "C" const char *editor_get_line(int line_num, size_t *out_len)
 
 extern "C" int editor_get_scroll_line(void) { return s_scroll_line; }
 extern "C" void editor_set_scroll_line(int line) { s_scroll_line = line < 0 ? 0 : line; }
+
+/* Raw selection-anchor accessors. Used by the split-screen UI to keep a
+ * separate selection per pane when the same document is shown in both
+ * panes (see editor_doc_is_shared). A value < 0 means "no selection". */
+extern "C" int editor_get_sel_anchor(void) { return s_sel_anchor; }
+extern "C" void editor_set_sel_anchor(int anchor)
+{
+    if (anchor < 0) { s_sel_anchor = -1; return; }
+    size_t len = content_len();
+    if ((size_t)anchor > len) anchor = (int)len;
+    s_sel_anchor = anchor;
+}
 
 /* ---- Cursor movement ---- */
 
