@@ -3523,6 +3523,10 @@ static void handle_editor_key(const kb_event_t *ev)
             /* Ctrl+L: cycle keyboard layout */
             kb_layout_next();
             break;
+        case 'm':
+            /* Ctrl+M: menu, equivalent to F1 */
+            show_menu();
+            return;
 #if defined(CONFIG_DRAFTLING_DISPLAY_HAS_BACKLIGHT)
         case 'b': {
             /* Ctrl+B: cycle to the next backlight / front-light
@@ -3794,6 +3798,11 @@ static void handle_browser_key(const kb_event_t *ev)
             } else {
                 editor_ui_set_status("Git: not configured");
             }
+            return;
+        }
+        if (ck == 'm') {
+            /* Ctrl+M: menu, equivalent to F1 */
+            show_menu();
             return;
         }
         if (ck == 'w') {
