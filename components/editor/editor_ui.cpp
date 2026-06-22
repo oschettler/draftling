@@ -4869,6 +4869,21 @@ static void process_key_event(const kb_event_t *ev)
     if (norm.keycode == KB_KEY_KP_ENTER) {
         norm.keycode = KB_KEY_ENTER;
     }
+
+    /* Ctrl+X is a substitute for Escape on keyboards that have no
+     * dedicated ESC key (e.g. some compact BLE keyboards). Translate
+     * it into a synthetic Escape event so every screen handler that
+     * already keys off KB_KEY_ESCAPE picks it up unchanged. The 'x'
+     * HID usage id is 0x1B; match it with either Control modifier. */
+    {
+        bool ctrl = (norm.modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
+        if (ctrl && norm.keycode == 0x1B) {
+            norm.keycode  = KB_KEY_ESCAPE;
+            norm.modifier = 0;
+            norm.character = 0;
+        }
+    }
+
     const kb_event_t *e = &norm;
 
     if (s_save_open) {

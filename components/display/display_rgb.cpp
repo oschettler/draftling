@@ -5,7 +5,8 @@
  * Parallel RGB565 color-LCD driver (ESP32-S3 LCD RGB peripheral).
  *
  * Used by:
- *   - Sunton ESP32-8048S070C (800x480, 16-bit parallel RGB)
+ *   - Sunton ESP32-8048S070C (7", 800x480, 16-bit parallel RGB)
+ *   - Sunton ESP32-8048S043C (4.3", 800x480, ST7262, 16-bit RGB)
  *
  * The ESP32-S3 LCD peripheral drives a "dumb" RGB TFT directly:
  * a continuously-scanned-out framebuffer in PSRAM is shifted out
@@ -25,8 +26,14 @@
  * fallback (display_set_pixel, interpreting 0/0xFF as black/white) is
  * provided for the splash-screen logo path in editor_ui.cpp.
  *
- * Pin map / timings are baked in. The 16 data GPIOs are listed in R,G,B order
- * (R0-R4, G0-G5, B0-B4); this order is correct on the Sunton panel.
+ * Per-board pin map / timings are selected at build time on
+ * CONFIG_DRAFTLING_RGB_BOARD_S043 (set for the 4.3" ESP32-8048S043C;
+ * unset for the default 7" ESP32-8048S070C). The two boards share the
+ * 800x480 resolution but differ in their control-pin map (VSYNC/DE
+ * swapped), panel timings (12.5 MHz pclk_active_neg vs 12 MHz
+ * pclk_idle_high) and data-line order (R,G,B vs B,G,R). The data
+ * GPIOs are always listed in the order required by the panel so a
+ * standard RGB565 pixel lands on the correct color lines.
  */
 
 #include <cstdio>
@@ -45,29 +52,72 @@
 
 static const char *TAG = "DisplayRGB";
 
-/* ---- Panel pin map + timings (Sunton ESP32-8048S070C) ---- */
-#define RGB_PCLK_HZ         (12 * 1000 * 1000)
+/* ---- Panel pin map + timings (per board) ----
+ *
+ * Backlight is GPIO2 on both Sunton boards. The control pins, panel
+ * timings and data-line order differ between the 7" ESP32-8048S070C
+ * (default) and the 4.3" ESP32-8048S043C
+ * (CONFIG_DRAFTLING_RGB_BOARD_S043). esp_lcd_new_rgb_panel maps
+ * data_gpio_nums[0] to the least-significant bit of the 16-bit RGB565
+ * word and [15] to the most-significant; RGB565 packs as
+ * R[15:11] G[10:5] B[4:0]. Each board's data array is listed in the
+ * order its panel wiring requires so a standard RGB565 pixel lands on
+ * the correct color lines. */
+#define RGB_DISP_GPIO       -1
+#define RGB_BL_GPIO         2
+
+#if defined(CONFIG_DRAFTLING_RGB_BOARD_S043)
+/* ---- Sunton ESP32-8048S043C (4.3", ST7262) ---- */
+#define RGB_PCLK_HZ         (12500 * 1000)   /* 12.5 MHz */
+#define RGB_HSYNC_GPIO      39
+#define RGB_VSYNC_GPIO      41
+#define RGB_DE_GPIO         40
+#define RGB_PCLK_GPIO       42
+#define RGB_HSYNC_PULSE     4
+#define RGB_HSYNC_BACK      8
+#define RGB_HSYNC_FRONT     8
+#define RGB_VSYNC_PULSE     4
+#define RGB_VSYNC_BACK      8
+#define RGB_VSYNC_FRONT     8
+#define RGB_PCLK_ACTIVE_NEG 1   /* ST7262 panel needs active-low PCLK */
+#define RGB_PCLK_IDLE_HIGH  0
+
+/* Data lines in R,G,B order (the 4.3" panel's required wiring).
+ * R0-R4 -> bits 0..4, G0-G5 -> 5..10, B0-B4 -> 11..15. */
+static const int kDataGpios[16] = {
+    8, 3, 46, 9, 1,       /* R0-R4 */
+    5, 6, 7, 15, 16, 4,   /* G0-G5 */
+    45, 48, 47, 21, 14    /* B0-B4 */
+};
+
+#else
+/* ---- Sunton ESP32-8048S070C (7", default) ---- */
+#define RGB_PCLK_HZ         (12 * 1000 * 1000)   /* 12 MHz */
 #define RGB_HSYNC_GPIO      39
 #define RGB_VSYNC_GPIO      40
 #define RGB_DE_GPIO         41
 #define RGB_PCLK_GPIO       42
-#define RGB_DISP_GPIO       -1
-#define RGB_BL_GPIO         2
+#define RGB_HSYNC_PULSE     2
+#define RGB_HSYNC_BACK      43
+#define RGB_HSYNC_FRONT     8
+#define RGB_VSYNC_PULSE     2
+#define RGB_VSYNC_BACK      12
+#define RGB_VSYNC_FRONT     8
+#define RGB_PCLK_ACTIVE_NEG 0
+#define RGB_PCLK_IDLE_HIGH  1
 
-/* 16 data lines. esp_lcd_new_rgb_panel maps data_gpio_nums[0] to the
- * least-significant bit of the 16-bit RGB565 word and [15] to the
- * most-significant. RGB565 packs as R[15:11] G[10:5] B[4:0], so the
- * panel's blue lines must occupy data_gpio_nums[0..4], green [5..10],
- * red [11..15]. The verified Sunton wiring (from the breezydemo port
- * on the same hardware) lists the physical pins in R,G,B order; we
- * place them in B,G,R order here so a standard RGB565 pixel lands on
- * the correct color lines. With the R,G,B order red and blue came
- * out swapped (e.g. "orange on black" rendered as blue on black). */
+/* Data lines in B,G,R order. The verified Sunton 7" wiring lists the
+ * physical pins in R,G,B order; we place them in B,G,R order here so
+ * a standard RGB565 pixel lands on the correct color lines. With the
+ * R,G,B order red and blue came out swapped (e.g. "orange on black"
+ * rendered as blue on black).
+ * B0-B4 -> bits 0..4, G0-G5 -> 5..10, R0-R4 -> 11..15. */
 static const int kDataGpios[16] = {
-    15, 7, 6, 5, 4,       /* B0-B4 -> RGB565 bits 0..4   */
-    9, 46, 3, 8, 16, 1,   /* G0-G5 -> RGB565 bits 5..10  */
-    14, 21, 47, 48, 45    /* R0-R4 -> RGB565 bits 11..15 */
+    15, 7, 6, 5, 4,       /* B0-B4 */
+    9, 46, 3, 8, 16, 1,   /* G0-G5 */
+    14, 21, 47, 48, 45    /* R0-R4 */
 };
+#endif
 
 /* ---- Backlight LEDC ---- */
 #define BL_LEDC_TIMER       LEDC_TIMER_0
@@ -153,14 +203,14 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     cfg.timings.pclk_hz           = RGB_PCLK_HZ;
     cfg.timings.h_res             = s_width;
     cfg.timings.v_res             = s_height;
-    cfg.timings.hsync_pulse_width = 2;
-    cfg.timings.hsync_back_porch  = 43;
-    cfg.timings.hsync_front_porch = 8;
-    cfg.timings.vsync_pulse_width = 2;
-    cfg.timings.vsync_back_porch  = 12;
-    cfg.timings.vsync_front_porch = 8;
-    cfg.timings.flags.pclk_active_neg = 0;
-    cfg.timings.flags.pclk_idle_high  = 1;
+    cfg.timings.hsync_pulse_width = RGB_HSYNC_PULSE;
+    cfg.timings.hsync_back_porch  = RGB_HSYNC_BACK;
+    cfg.timings.hsync_front_porch = RGB_HSYNC_FRONT;
+    cfg.timings.vsync_pulse_width = RGB_VSYNC_PULSE;
+    cfg.timings.vsync_back_porch  = RGB_VSYNC_BACK;
+    cfg.timings.vsync_front_porch = RGB_VSYNC_FRONT;
+    cfg.timings.flags.pclk_active_neg = RGB_PCLK_ACTIVE_NEG;
+    cfg.timings.flags.pclk_idle_high  = RGB_PCLK_IDLE_HIGH;
     cfg.data_width   = 16;
     cfg.bits_per_pixel = 16;
     cfg.num_fbs      = 1;
