@@ -181,6 +181,19 @@ config DRAFTLING_RGB_BOARD_S043
     default y if DRAFTLING_MODEL_SUNTON_8048S043
     default n
 
+# DRAFTLING_DISPLAY_CAN_ROTATE enables a runtime "Rotate 180" entry in
+# the F1 -> Settings menu (persisted in NVS). It is offered on boards
+# whose display backend implements the software 180-degree flip in
+# lvgl_port.cpp's flush path. A 180 flip never changes the reported
+# panel resolution, so it can be toggled at runtime without rebuilding
+# the LVGL widget tree. Currently enabled on the parallel-RGB boards
+# (the Sunton ESP32-8048S0xx family), where the USB-C / SD-card edge
+# may be on either side depending on the enclosure.
+config DRAFTLING_DISPLAY_CAN_ROTATE
+    bool
+    default y if DRAFTLING_DISPLAY_RGB
+    default n
+
 # DRAFTLING_DISPLAY_EPD is set automatically when the selected
 # board has an electronic-paper panel. Code that has to be aware
 # of e-paper specifics (slow refresh, no blinking cursor, white-on-
