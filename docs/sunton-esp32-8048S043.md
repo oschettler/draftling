@@ -118,6 +118,36 @@ so every screen handler that already keys off Escape (leaving the
 editor, closing the file browser / settings / menus / dialogs) reacts
 identically. This substitution is global, so it works on every board.
 
+## Standby and wake
+
+The inactivity timeout (runtime-configurable in F1 -> Settings,
+default 10 minutes) does NOT deep-sleep this board. Deep-sleep wake
+would require the GT911 INT line on an RTC-capable GPIO, but INT is
+not wired to the ESP32-S3 on the Sunton reference (TOUCH_INT = NC),
+so there would be no way to wake the board short of a RESET.
+
+Instead the board uses the display-off standby path
+(`CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF`, set in
+`sdkconfig.defaults.sunton043`): on timeout it runs the auto-save
+pre-sleep callback, blanks the panel (backlight off + framebuffer
+cleared) and leaves the MCU running. A dedicated low-priority task
+(`display_off_task` in `components/standby/standby.cpp`) polls the
+GT911 over I2C every 100 ms; any finger-down -- or any BLE key, which
+routes through the editor key handler to `standby_reset_timer()` --
+restores the backlight, repaints the screen and re-arms the
+inactivity timer. Because the MCU never deep-sleeps, the editor's
+in-RAM document and cursor position survive standby untouched (no
+reset needed to continue).
+
+The wait runs on its own task rather than inline so the inactivity
+esp_timer callback (and the LVGL "Sleep now" path) return
+immediately -- otherwise the LVGL tick esp_timer that drives the
+touch poll would itself be stalled for the whole standby interval.
+
+This path needs no touch INT pin, so it works on the stock Sunton
+wiring. The board is USB-powered, so the slightly higher idle draw
+of keeping the MCU awake (versus deep sleep) is not a concern.
+
 ## Display rotation
 
 The USB-C connector and MicroSD slot are on the opposite edge of the

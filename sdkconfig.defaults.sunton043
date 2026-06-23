@@ -24,3 +24,19 @@ CONFIG_KB_LAYOUT_ENABLE_DE=y
 CONFIG_KB_LAYOUT_ENABLE_UA=n
 CONFIG_KB_LAYOUT_ENABLE_FR=n
 CONFIG_KB_LAYOUT_ENABLE_HE=n
+
+# Standby: keep the MCU running and just blank the display (backlight
+# off) on the inactivity timeout, instead of deep-sleeping. The GT911
+# INT line is not wired to an ESP32 GPIO on this board
+# (TOUCH_INT = NC), so EXT0 deep-sleep touch-wake is impossible -- a
+# deep-sleeping board could then only be revived with RESET, which is
+# not acceptable once the device is built into a case. With the MCU
+# kept running, the touch indev keeps polling the GT911 every LVGL
+# tick and any tap fires the touchscreen activity callback, which the
+# standby manager uses to restore the backlight (see
+# touchscreen_set_activity_callback() in components/standby/standby.cpp).
+# The board is USB-powered, so the higher idle draw is irrelevant.
+# The editor's in-RAM state is preserved across standby (no reset, no
+# autosave round-trip needed to continue).
+CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF=y
+

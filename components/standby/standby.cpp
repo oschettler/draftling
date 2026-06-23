@@ -87,10 +87,13 @@ static standby_pre_sleep_cb_t s_pre_sleep_cb = NULL;
 static esp_timer_handle_t s_kb_wait_timer = NULL;
 
 #if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
-/* Forward declaration -- the display-off wait loop is implemented
- * further down, but standby_reset_timer() needs to flip this flag
- * to wake the loop when a BLE key event arrives. */
-static volatile bool s_display_off_wake_req = false;
+/* True while the panel backlight is off in display-off standby and
+ * the MCU is still running, waiting for user activity to restore it.
+ * Set by enter_display_off(), cleared by standby_activity_wake().
+ * Forward-declared here so standby_reset_timer() (defined above the
+ * display-off section) can route activity to the wake path. */
+static volatile bool s_display_is_off = false;
+static void standby_activity_wake(void);
 #endif
 
 /* ---- timer callback ---- */
@@ -98,7 +101,11 @@ static volatile bool s_display_off_wake_req = false;
 static void inactivity_cb(void *arg)
 {
     (void)arg;
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
+    ESP_LOGI(TAG, "Inactivity timeout reached -- turning display off");
+#else
     ESP_LOGI(TAG, "Inactivity timeout reached -- entering deep sleep");
+#endif
     standby_enter_sleep();
 }
 
@@ -196,17 +203,30 @@ extern "C" void standby_init(void)
                   "(no battery on this board, or timer = 0)");
 #endif
 
+#if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF) && defined(CONFIG_DRAFTLING_TOUCHSCREEN)
+    /* Wake from display-off standby on any touch. The callback fires
+     * from the LVGL indev read poll (the same path that drives normal
+     * touch input), so it is as reliable as touch itself and needs no
+     * touch INT pin -- which matters on boards like the Sunton
+     * ESP32-8048S0xx where the GT911 INT line is not wired. */
+    touchscreen_set_activity_callback(standby_reset_timer);
+#endif
+
     ESP_LOGI(TAG, "Standby initialized, timeout=%" PRIu32 " s", s_timeout_sec);
 }
 
 extern "C" void standby_reset_timer(void)
 {
 #if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
-    /* If the display is currently off, signal the wait loop to
-     * exit. Whichever code path delivered this activity (BLE key,
-     * touch, "Sleep now" cancelled) will then return through
-     * enter_display_off and continue normally. */
-    s_display_off_wake_req = true;
+    /* Any activity while the panel is blanked restores it. This is
+     * called from the editor key handler (BLE keys) and indirectly
+     * from the touch activity callback; standby_activity_wake() turns
+     * the backlight back on and re-arms the inactivity timer, so we
+     * return without falling through to the plain timer restart. */
+    if (s_display_is_off) {
+        standby_activity_wake();
+        return;
+    }
 #endif
     if (s_timeout_sec > 0) {
         start_timer();
@@ -266,57 +286,63 @@ static gpio_num_t resolve_wake_gpio(void)
 
 #if defined(CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF)
 
-/* Display-off standby: blank the display and idle the MCU until any
- * input arrives. Implemented as a busy wait inline on the caller's
- * task (the only caller is standby_enter_sleep, invoked from either
- * the LVGL timer callback or the inactivity esp_timer). The poll
- * loop checks:
- *   - touch INT GPIO low (any tap), or
- *   - BLE keyboard key event (ble_keyboard_is_connected -> reset
- *     timer in editor_ui resumes us via standby_reset_timer)
- * To keep this simple we poll only the touch INT and rely on
- * standby_reset_timer() being called from the BLE callback path
- * to invoke standby_display_off_wake() externally; in practice
- * the polling loop returns as soon as a touch is detected, which
- * is the primary input on display-off boards. */
+/* Display-off standby: on the inactivity timeout, blank the display
+ * (backlight off; the framebuffer and all editor state are kept) but
+ * leave the MCU, LVGL and the touch indev fully running. The screen
+ * is restored on the next user activity.
+ *
+ * Wake is fully EVENT-DRIVEN, not polled:
+ *   - Touch: touchscreen_set_activity_callback() registers
+ *     standby_activity_wake() (below) to fire from the LVGL indev
+ *     read poll on any finger-down. This is the exact same controller
+ *     read that drives normal touch input, so a tap wakes the device
+ *     as reliably as touch works at all -- no second I2C poller
+ *     racing the indev for the GT911 "buffer ready" status.
+ *   - BLE key: the editor key handler calls standby_reset_timer(),
+ *     which also routes through standby_activity_wake().
+ *
+ * enter_display_off() returns immediately (no blocking loop / no
+ * dedicated task), so the inactivity esp_timer callback and the LVGL
+ * "Sleep now" path are never stalled. */
+
+static void standby_activity_wake(void)
+{
+    if (!s_display_is_off) {
+        return;
+    }
+    s_display_is_off = false;
+    ESP_LOGI(TAG, "Standby: waking display");
+    display_wake();
+    /* Re-arm the inactivity timer for the next idle period. */
+    if (s_timeout_sec > 0) {
+        start_timer();
+    }
+}
 
 static void enter_display_off(void)
 {
+    if (s_display_is_off) {
+        return;
+    }
     ESP_LOGI(TAG, "Standby: turning display off");
     if (s_pre_sleep_cb) {
         s_pre_sleep_cb();
     }
     display_sleep();
-
-    s_display_off_wake_req = false;
-
-#if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
-    int int_gpio = touchscreen_get_int_gpio();
-#else
-    int int_gpio = -1;
-#endif
-
-    /* Block until we see a wake signal. Poll every 100 ms; that is
-     * fast enough to feel instant after a tap (a touch frame is
-     * 10-20 ms) without burning the CPU. */
-    while (!s_display_off_wake_req) {
-        if (int_gpio >= 0 &&
-            gpio_get_level((gpio_num_t)int_gpio) == 0) {
-            break;
-        }
-        if (ble_keyboard_is_connected()) {
-            /* BLE keyboard events route through editor_ui's
-             * key handler which calls standby_reset_timer(); that
-             * function flips s_display_off_wake_req. */
-        }
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-    ESP_LOGI(TAG, "Standby: waking display");
-    display_wake();
-    /* Rearm the inactivity timer so we go back to sleep after the
-     * user finishes interacting. */
-    start_timer();
+    /* Publish the "off" state only AFTER the backlight is actually
+     * down. enter_display_off() runs on the esp_timer task (inactivity)
+     * or the LVGL task ("Sleep now"), while standby_activity_wake()
+     * runs on the LVGL (touch indev) or BLE task. standby_activity_wake()
+     * early-returns while s_display_is_off is false, so keeping the
+     * flag false until display_sleep() has finished prevents a touch
+     * that lands mid-blanking from running display_wake() and then
+     * having this function blank the panel again (which would leave it
+     * dark until the next tap). Setting it last closes that window:
+     * once the flag is true the panel is already off, so the next
+     * activity does a clean display_wake(). */
+    s_display_is_off = true;
+    /* MCU keeps running; wake happens via standby_activity_wake()
+     * (touch activity callback) or standby_reset_timer() (BLE key). */
 }
 
 #endif /* CONFIG_DRAFTLING_STANDBY_DISPLAY_OFF */

@@ -414,7 +414,16 @@ extern "C" int display_get_buffer_size(void)
 
 extern "C" void display_sleep(void)
 {
-    if (s_bl_pin >= 0) display_set_backlight(0);
+    /* Drive the backlight LEDC duty to 0 directly. We must NOT call
+     * display_set_backlight(0) here: that setter records its argument
+     * in s_bl_last_pct, which would clobber the user's brightness with
+     * 0 and leave display_wake() restoring 0 (panel stays dark). The
+     * user-facing brightness in s_bl_last_pct is preserved so wake
+     * restores the same level. */
+    if (s_bl_pin >= 0) {
+        ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, 0);
+        ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+    }
 }
 
 extern "C" void display_wake(void)

@@ -139,6 +139,19 @@ bool touchscreen_is_pressed(void);
 typedef void (*touchscreen_button_cb_t)(void);
 void touchscreen_set_button_callback(touchscreen_button_cb_t cb);
 
+/* Optional callback fired on every LVGL indev poll frame where a
+ * finger is detected down, regardless of which widget is under it
+ * (or whether any widget is). Registered by the standby manager so a
+ * tap anywhere counts as user activity and wakes the device from
+ * display-off standby. Because it rides the same controller read that
+ * drives normal touch input, it is as reliable as touch itself --
+ * unlike a separate I2C poller, it cannot race the indev poll for the
+ * controller's "buffer ready" status. The callback runs in the LVGL
+ * task context; keep it short (the standby manager just re-arms a
+ * timer / flips a flag). */
+typedef void (*touchscreen_activity_cb_t)(void);
+void touchscreen_set_activity_callback(touchscreen_activity_cb_t cb);
+
 /* Put the touch controller into its lowest-power sleep mode. The
  * controller stops scanning and drops to a few uA until the host
  * either resets it or wakes it via the INT line. Used by the

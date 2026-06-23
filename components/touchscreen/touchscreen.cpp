@@ -332,6 +332,17 @@ static int64_t s_gt911_key_last_fire_us = 0;
 #define GT911_STATUS_HAVE_KEY      0x10
 #define GT911_KEY_REFIRE_US        300000
 
+/* Touch-activity callback. Fired from the LVGL indev read poll on
+ * every frame a finger is detected down, regardless of which widget
+ * (if any) is under it. The standby manager registers this so a tap
+ * anywhere -- including while the panel backlight is off during
+ * display-off standby -- counts as user activity and wakes the
+ * device. Using the indev poll path (rather than a separate I2C
+ * poller) means the wake uses exactly the same controller read that
+ * already drives normal touch input, so it is as reliable as touch
+ * itself. */
+static touchscreen_activity_cb_t s_activity_cb = NULL;
+
 static bool poll_gt911(int *out_x, int *out_y)
 {
     if (!s_dev) return false;
@@ -499,6 +510,13 @@ static void indev_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = s_x_latch;
         data->point.y = s_y_latch;
+        /* Any finger-down is user activity. Fire the activity hook so
+         * the standby manager can keep the screen awake / wake it from
+         * display-off standby. Fired on every pressed frame; the
+         * callback (standby_reset_timer) is cheap and idempotent. */
+        if (s_activity_cb) {
+            s_activity_cb();
+        }
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
         data->point.x = s_x_latch;
@@ -734,6 +752,11 @@ extern "C" void touchscreen_set_button_callback(touchscreen_button_cb_t cb)
 #endif
 }
 
+extern "C" void touchscreen_set_activity_callback(touchscreen_activity_cb_t cb)
+{
+    s_activity_cb = cb;
+}
+
 extern "C" bool touchscreen_is_initialized(void)
 {
     return s_initialized;
@@ -826,6 +849,7 @@ extern "C" void touchscreen_sleep(void)
 
 extern "C" void touchscreen_init(const touchscreen_config_t *cfg) { (void)cfg; }
 extern "C" void touchscreen_set_button_callback(touchscreen_button_cb_t cb) { (void)cb; }
+extern "C" void touchscreen_set_activity_callback(touchscreen_activity_cb_t cb) { (void)cb; }
 extern "C" bool touchscreen_is_initialized(void) { return false; }
 extern "C" int  touchscreen_get_int_gpio(void)    { return -1; }
 extern "C" bool touchscreen_read(int *x, int *y)  { (void)x; (void)y; return false; }
