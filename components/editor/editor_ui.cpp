@@ -1585,6 +1585,15 @@ static void refresh_active_pane(bool draw_cursor)
                     }
                     col_in_display -= prefix_chars;
                     if (col_in_display < 0) col_in_display = 0;
+                    /* Bullets render a synthetic "<2*indent spaces>* "
+                     * prefix (see the disp_text construction above)
+                     * instead of the raw markdown marker, so the
+                     * content-relative column must be re-offset by the
+                     * synthetic prefix width -- mirrors disp_prefix_cp
+                     * in ui_point_to_offset(). */
+                    if (mi.type == MD_LINE_BULLET) {
+                        col_in_display += mi.indent_level * 2 + 2;
+                    }
                 }
 
                 /* Use LVGL to find the actual pixel position of the cursor
@@ -4939,14 +4948,16 @@ static void process_key_event(const kb_event_t *ev)
         norm.keycode = KB_KEY_ENTER;
     }
 
-    /* Ctrl+X is a substitute for Escape on keyboards that have no
-     * dedicated ESC key (e.g. some compact BLE keyboards). Translate
-     * it into a synthetic Escape event so every screen handler that
-     * already keys off KB_KEY_ESCAPE picks it up unchanged. The 'x'
-     * HID usage id is 0x1B; match it with either Control modifier. */
+    /* Ctrl+Q is a substitute for Escape on keyboards that have no
+     * dedicated ESC key (e.g. some compact BLE keyboards). Ctrl+X is
+     * reserved for "cut" in the cut/copy/paste scheme, so Q is used
+     * instead. Translate it into a synthetic Escape event so every
+     * screen handler that already keys off KB_KEY_ESCAPE picks it up
+     * unchanged. The 'q' HID usage id is 0x14; match it with either
+     * Control modifier. */
     {
         bool ctrl = (norm.modifier & (KB_MOD_LCTRL | KB_MOD_RCTRL)) != 0;
-        if (ctrl && norm.keycode == 0x1B) {
+        if (ctrl && norm.keycode == 0x14) {
             norm.keycode  = KB_KEY_ESCAPE;
             norm.modifier = 0;
             norm.character = 0;
