@@ -479,6 +479,22 @@ static int  s_browser_sel_prev = -1;
 static int  s_browser_count  = 0;
 static sd_card_file_entry_t s_browser_entries[64];
 
+/* Current working directory for the file browser, as an absolute path
+ * including the SD mount point (e.g. "/sdcard/notes"). The full-screen
+ * browser and the two split-mode panes each keep their own CWD so
+ * navigating into a folder in one pane does not affect the other pane
+ * or the full-screen view. s_cwd points at whichever of these buffers
+ * is backing the browser list currently in use (see s_browser_list);
+ * left empty ("") until first used, then lazily set to the mount
+ * point by browser_cwd_init_if_empty(). */
+static char  s_browser_cwd[512]    = "";
+static char  s_inpane_cwd[2][512]  = { "", "" };
+static char *s_cwd = NULL;
+/* Single-line path display under the "File Browser" title (full-screen
+ * browser only; the in-pane overlay folds its CWD into s_inpane_hdr's
+ * text instead since it only has room for one header line). */
+static lv_obj_t *s_lbl_br_path = NULL;
+
 /* Settings screen objects */
 static lv_obj_t *s_scr_settings  = NULL;
 static lv_obj_t *s_settings_list = NULL;
@@ -2402,6 +2418,105 @@ static void ble_prompt_forget_btn_cb(lv_event_t *e)
 
 /* ---- File browser ---- */
 
+static void refresh_file_list(void);
+
+/* Lazily seed a CWD buffer with the SD mount point the first time it
+ * is used, so s_browser_cwd / s_inpane_cwd[pane] don't need static
+ * initialization from a function pointer at startup. */
+static void browser_cwd_init_if_empty(char *cwd, size_t sz)
+{
+    if (cwd[0] == '\0') {
+        snprintf(cwd, sz, "%s", sd_card_get_mount_point());
+    }
+}
+
+/* Format an absolute CWD (as stored in s_browser_cwd / s_inpane_cwd)
+ * for single-line display: relative to the SD root ("/" for the root
+ * itself), truncated from the front with a leading "..." if it would
+ * not fit in width_px at FONT_11's fixed 6px/char advance. */
+static void format_browser_cwd(const char *cwd, char *out, size_t outsz,
+                                int width_px)
+{
+    const char *mp = sd_card_get_mount_point();
+    size_t mp_len = strlen(mp);
+    const char *rel = (strncmp(cwd, mp, mp_len) == 0) ? cwd + mp_len : cwd;
+    if (rel[0] == '\0') rel = "/";
+
+    int max_chars = width_px / char_width_for_font(FONT_11);
+    if (max_chars < 4) max_chars = 4;
+
+    int rel_len = (int)strlen(rel);
+    if (rel_len <= max_chars) {
+        snprintf(out, outsz, "%s", rel);
+    } else {
+        int tail_chars = max_chars - 3;   /* room for the "..." prefix */
+        if (tail_chars < 1) tail_chars = 1;
+        snprintf(out, outsz, "...%s", rel + (rel_len - tail_chars));
+    }
+}
+
+/* Refresh whichever CWD display is relevant to the currently active
+ * browser list: the dedicated path label under the full-screen
+ * browser's title, or -- since the in-pane overlay only budgets one
+ * header line -- folded into s_inpane_hdr's own text. */
+static void update_browser_path_label(void)
+{
+    if (!s_cwd) return;
+    char disp[64];
+    if (s_browser_list == s_list_files) {
+        if (!s_lbl_br_path) return;
+        format_browser_cwd(s_cwd, disp, sizeof(disp), SCR_W - 4);
+        lv_label_set_text(s_lbl_br_path, disp);
+    } else if (s_browser_list == s_inpane_list) {
+        if (!s_inpane_hdr) return;
+        static const char prefix[] = "Open into pane: ";
+        int hdr_w = lv_obj_get_width(s_inpane_hdr);
+        int path_w = hdr_w - (int)(sizeof(prefix) - 1) * char_width_for_font(FONT_11);
+        if (path_w < 4 * char_width_for_font(FONT_11))
+            path_w = 4 * char_width_for_font(FONT_11);
+        format_browser_cwd(s_cwd, disp, sizeof(disp), path_w);
+        char full[96];
+        snprintf(full, sizeof(full), "%s%s", prefix, disp);
+        lv_label_set_text(s_inpane_hdr, full);
+    }
+}
+
+/* Descend into a subdirectory of the active CWD and reload the list. */
+static void browser_cwd_descend(const char *dirname)
+{
+    if (!s_cwd) return;
+    char next[512];
+    snprintf(next, sizeof(next), "%s/%s", s_cwd, dirname);
+    snprintf(s_cwd, 512, "%s", next);
+    /* A fresh directory has no "previous selection" to restore -- land
+     * on the first row instead of accidentally matching a same-named
+     * entry left over from the old directory. */
+    s_browser_sel = -1;
+    refresh_file_list();
+}
+
+/* Move the active CWD up one directory level, unless it is already at
+ * the SD root -- Left/"<-" is then a no-op (per the browser spec: you
+ * cannot leave the top level). */
+static void browser_cwd_go_up(void)
+{
+    if (!s_cwd) return;
+    const char *mp = sd_card_get_mount_point();
+    size_t mp_len = strlen(mp);
+    size_t cwd_len = strlen(s_cwd);
+    if (cwd_len <= mp_len) return;   /* already at the SD root */
+
+    char *slash = strrchr(s_cwd, '/');
+    if (!slash || (size_t)(slash - s_cwd) < mp_len) return;
+    if ((size_t)(slash - s_cwd) <= mp_len) {
+        s_cwd[mp_len] = '\0';        /* one level below root -> root */
+    } else {
+        *slash = '\0';
+    }
+    s_browser_sel = -1;   /* see browser_cwd_descend() */
+    refresh_file_list();
+}
+
 static void refresh_file_list(void)
 {
     /* Remember the currently-selected entry's filename (if any) so we
@@ -2422,8 +2537,8 @@ static void refresh_file_list(void)
         }
     }
 
-    const char *mp = sd_card_get_mount_point();
-    s_browser_count = sd_card_list_dir(mp, s_browser_entries, 64);
+    const char *dir = (s_cwd && s_cwd[0]) ? s_cwd : sd_card_get_mount_point();
+    s_browser_count = sd_card_list_dir(dir, s_browser_entries, 64);
     if (s_browser_count < 0) s_browser_count = 0;
 
     /* Filter to show only .md files and directories */
@@ -2467,6 +2582,8 @@ static void refresh_file_list(void)
      * black background. Mirror what refresh_menu_items() does. */
     apply_list_selection_styles(s_browser_list, s_browser_sel);
     s_browser_sel_prev = s_browser_sel;
+
+    update_browser_path_label();
 
 #if defined(CONFIG_DRAFTLING_TOUCHSCREEN)
     /* Attach tap-to-select / tap-again-to-activate handlers to the
@@ -2517,8 +2634,11 @@ extern "C" void editor_ui_show_file_browser(void)
      * from disk when a file is picked). */
     editor_close_file();
     s_open_target_pane = 0;
-    /* Operate on the full-screen browser list. */
+    /* Operate on the full-screen browser list, keeping its own CWD
+     * (independent of the split-mode panes') across sessions. */
     s_browser_list = s_list_files;
+    browser_cwd_init_if_empty(s_browser_cwd, sizeof(s_browser_cwd));
+    s_cwd = s_browser_cwd;
     refresh_file_list();
 
     /* The Wi-Fi connection state is conveyed by the Wi-Fi icon; the
@@ -4596,11 +4716,18 @@ static void show_inpane_browser(void)
     lv_obj_set_size(s_inpane_list, pw, ph - hdr_h);
 
     /* Target the focused pane and operate the shared browser logic on
-     * the in-pane list. */
+     * the in-pane list, using that pane's own CWD -- each split pane
+     * remembers where it last browsed independently of the other pane
+     * and of the full-screen browser. */
     s_open_target_pane = s_focus;
     s_browser_list = s_inpane_list;
     s_browser_sel = 0;
     s_browser_sel_prev = -1;
+    {
+        int pane_idx = (s_focus >= 0 && s_focus < 2) ? s_focus : 0;
+        browser_cwd_init_if_empty(s_inpane_cwd[pane_idx], sizeof(s_inpane_cwd[pane_idx]));
+        s_cwd = s_inpane_cwd[pane_idx];
+    }
     refresh_file_list();
 
     lv_obj_remove_flag(s_inpane_hdr, LV_OBJ_FLAG_HIDDEN);
@@ -4676,13 +4803,14 @@ static void browser_activate_item(int row)
     int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
     if (idx < 0 || idx >= s_browser_count) return;
     if (s_browser_entries[idx].is_dir) {
-        /* Directory navigation is not implemented yet. */
+        browser_cwd_descend(s_browser_entries[idx].name);
         return;
     }
 
     char path[512];
     snprintf(path, sizeof(path), "%s/%s",
-             sd_card_get_mount_point(), s_browser_entries[idx].name);
+             (s_cwd && s_cwd[0]) ? s_cwd : sd_card_get_mount_point(),
+             s_browser_entries[idx].name);
 
     if (s_pane_count <= 1) {
         editor_init();
@@ -4841,6 +4969,14 @@ static void handle_browser_key(const kb_event_t *ev)
     const char *br_t = kb_layout_translate(ev->keycode, ev->modifier);
     char ch = (br_t && br_t[0] && !br_t[1]) ? br_t[0] : 0;
 
+    /* Left ("<-") leaves the current directory regardless of whether it
+     * has any listable entries (an empty folder must still be
+     * navigable back out of); it is a no-op at the SD root. */
+    if (ev->keycode == KB_KEY_LEFT) {
+        browser_cwd_go_up();
+        return;
+    }
+
     uint32_t child_count = lv_obj_get_child_count(s_browser_list);
     if (child_count == 0) {
         if (ch == 'n' || ch == 'N') {
@@ -4864,7 +5000,10 @@ static void handle_browser_key(const kb_event_t *ev)
         if (s_browser_sel < (int)child_count - 1) s_browser_sel++;
         cancel_status_clear_and_restore();
         break;
-    case KB_KEY_ENTER: {
+    case KB_KEY_ENTER:
+    case KB_KEY_RIGHT: {
+        /* Right ("->") mirrors Enter: descend into a [DIR] entry, open
+         * a file. */
         browser_activate_item(s_browser_sel);
         return;
     }
@@ -5603,9 +5742,21 @@ static void build_screens(void)
     lv_obj_set_style_text_color(br_title, theme_fg(), 0);
     lv_label_set_text(br_title, "File Browser - Up/Down, Enter to open, N for new");
 
+    /* One-line CWD display directly under the title, e.g. "/notes"
+     * (updated by update_browser_path_label() on every list refresh).
+     * Takes one extra FONT_11 line out of the header budget, so the
+     * list below is shifted down and shrunk by that same amount. */
+    int br_line_h = lv_font_get_line_height(FONT_11) + 2;
+    s_lbl_br_path = lv_label_create(s_scr_browser);
+    lv_obj_set_pos(s_lbl_br_path, 2, br_line_h);
+    lv_obj_set_width(s_lbl_br_path, SCR_W - 4);
+    lv_obj_set_style_text_font(s_lbl_br_path, FONT_11, 0);
+    lv_obj_set_style_text_color(s_lbl_br_path, theme_fg(), 0);
+    lv_label_set_text(s_lbl_br_path, "/");
+
     s_list_files = lv_list_create(s_scr_browser);
-    lv_obj_set_pos(s_list_files, 0, 18);
-    lv_obj_set_size(s_list_files, SCR_W, LIST_PANEL_H - STATUS_H);
+    lv_obj_set_pos(s_list_files, 0, 18 + br_line_h);
+    lv_obj_set_size(s_list_files, SCR_W, LIST_PANEL_H - STATUS_H - br_line_h);
     lv_obj_set_style_border_width(s_list_files, 0, 0);
     lv_obj_set_style_radius(s_list_files, 0, 0);
     lv_obj_set_style_pad_all(s_list_files, 0, 0);
