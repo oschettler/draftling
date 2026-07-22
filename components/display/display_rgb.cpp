@@ -30,10 +30,12 @@
  * CONFIG_DRAFTLING_RGB_BOARD_S043 (set for the 4.3" ESP32-8048S043C;
  * unset for the default 7" ESP32-8048S070C). The two boards share the
  * 800x480 resolution but differ in their control-pin map (VSYNC/DE
- * swapped), panel timings (12.5 MHz pclk_active_neg vs 12 MHz
- * pclk_idle_high) and data-line order (R,G,B vs B,G,R). The data
- * GPIOs are always listed in the order required by the panel so a
- * standard RGB565 pixel lands on the correct color lines.
+ * swapped), panel timings (12.5 MHz vs 12 MHz pclk, different
+ * porches) and data_gpio_nums order: the 7" board's physical R,G,B
+ * wiring must be placed in B,G,R order (index 0 = RGB565 LSB = B0),
+ * while the 4.3" ST7262 board is correct with data_gpio_nums listed
+ * directly in R,G,B order -- both orderings are hardware-verified,
+ * don't "fix" one to match the other.
  */
 
 #include <cstdio>
@@ -81,9 +83,12 @@ static const char *TAG = "DisplayRGB";
 #define RGB_VSYNC_FRONT     8
 #define RGB_PCLK_ACTIVE_NEG 1   /* ST7262 panel needs active-low PCLK */
 #define RGB_PCLK_IDLE_HIGH  0
+#define RGB_HSYNC_IDLE_LOW  0
+#define RGB_VSYNC_IDLE_LOW  0
 
-/* Data lines in R,G,B order (the 4.3" panel's required wiring).
- * R0-R4 -> bits 0..4, G0-G5 -> 5..10, B0-B4 -> 11..15. */
+/* Data lines in R,G,B order -- hardware-verified correct for this
+ * board as-is (unlike the 7" board below, this one does NOT need a
+ * B,G,R reversal). R0-R4 -> bits 0..4, G0-G5 -> 5..10, B0-B4 -> 11..15. */
 static const int kDataGpios[16] = {
     8, 3, 46, 9, 1,       /* R0-R4 */
     5, 6, 7, 15, 16, 4,   /* G0-G5 */
@@ -103,8 +108,10 @@ static const int kDataGpios[16] = {
 #define RGB_VSYNC_PULSE     2
 #define RGB_VSYNC_BACK      12
 #define RGB_VSYNC_FRONT     8
-#define RGB_PCLK_ACTIVE_NEG 0
-#define RGB_PCLK_IDLE_HIGH  1
+#define RGB_PCLK_ACTIVE_NEG 1
+#define RGB_PCLK_IDLE_HIGH  0
+#define RGB_HSYNC_IDLE_LOW  1
+#define RGB_VSYNC_IDLE_LOW  1
 
 /* Data lines in B,G,R order. The verified Sunton 7" wiring lists the
  * physical pins in R,G,B order; we place them in B,G,R order here so
@@ -211,6 +218,8 @@ extern "C" void display_init(int /*pin_a*/, int /*pin_b*/, int /*pin_c*/,
     cfg.timings.vsync_front_porch = RGB_VSYNC_FRONT;
     cfg.timings.flags.pclk_active_neg = RGB_PCLK_ACTIVE_NEG;
     cfg.timings.flags.pclk_idle_high  = RGB_PCLK_IDLE_HIGH;
+    cfg.timings.flags.hsync_idle_low  = RGB_HSYNC_IDLE_LOW;
+    cfg.timings.flags.vsync_idle_low  = RGB_VSYNC_IDLE_LOW;
     cfg.data_width   = 16;
     cfg.bits_per_pixel = 16;
     cfg.num_fbs      = 1;

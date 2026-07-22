@@ -17,8 +17,13 @@
  * The control-pin map (VSYNC/DE swapped), panel timings and data-line
  * order all differ from the 7" ESP32-8048S070C; everything Draftling
  * touches itself (SD card, I2C touch, wakeup button) is the same as
- * the 7" board's standard Sunton ESP32-8048S0xx pinout. Verified
- * against the rzeldent/platformio-espressif32-sunton board reference.
+ * the 7" board's standard Sunton ESP32-8048S0xx pinout. Note: unlike
+ * the 7" board, this panel's data_gpio_nums is hardware-verified
+ * correct in direct R,G,B order (no B,G,R reversal) -- reversing it
+ * swaps red and blue (confirmed on-device: orange-on-black rendered
+ * as light-blue-on-black), even though the rzeldent/platformio-
+ * espressif32-sunton reference macros (esp32-8048S043C.json @ 05e8c10)
+ * name the pins in R0-R4/G0-G5/B0-B4 order same as the 7" board's.
  *
  * Included by main/app_config.h when
  * CONFIG_DRAFTLING_MODEL_SUNTON_8048S043 is selected.
