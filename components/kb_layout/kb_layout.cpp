@@ -17,7 +17,13 @@
 #define MOD_RSHIFT 0x20
 #define MOD_RALT   0x40  /* AltGr on international keyboards */
 
+/* Default active layout: German if enabled, else whichever layout
+ * occupies enum slot 0. */
+#if defined(CONFIG_KB_LAYOUT_ENABLE_DE)
+static kb_layout_id_t s_layout = KB_LAYOUT_DE;
+#else
 static kb_layout_id_t s_layout = (kb_layout_id_t)0;
+#endif
 
 /* HID keycodes for letter/number/symbol keys: 0x04..0x38 (53 keys) */
 #define KC_A     0x04
