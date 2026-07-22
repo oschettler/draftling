@@ -37,6 +37,9 @@ bool sd_card_file_exists(const char *path);
 esp_err_t sd_card_delete_file(const char *path);
 esp_err_t sd_card_mkdir(const char *path);
 
+/* Delete a file, or a directory and everything under it. */
+esp_err_t sd_card_delete_recursive(const char *path);
+
 typedef struct {
     char name[256];
     bool is_dir;

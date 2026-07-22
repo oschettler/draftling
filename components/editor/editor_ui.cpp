@@ -516,7 +516,9 @@ static int  s_theme_picker_sel_prev  = -1;
 static lv_obj_t *s_passkey_panel = NULL;
 static lv_obj_t *s_passkey_label = NULL;
 
-/* Save-prompt overlay objects */
+/* Save-prompt overlay objects. Doubles as the "new folder" name prompt
+ * for the file browser's D key -- same text-entry widgets/behavior,
+ * s_save_prompt_mode picks what Enter does with the typed name. */
 static lv_obj_t *s_save_panel    = NULL;
 static lv_obj_t *s_save_hdr_lbl  = NULL;
 static lv_obj_t *s_save_name_lbl = NULL;
@@ -524,6 +526,28 @@ static lv_obj_t *s_save_cur      = NULL;   /* blinking cursor in name field */
 static bool      s_save_open     = false;
 static char      s_save_buf[128] = "";     /* editable filename (no directory) */
 static int       s_save_pos      = 0;      /* cursor position in s_save_buf (byte) */
+typedef enum { SAVE_PROMPT_SAVE_AS, SAVE_PROMPT_NEW_FOLDER } save_prompt_mode_t;
+static save_prompt_mode_t s_save_prompt_mode = SAVE_PROMPT_SAVE_AS;
+
+/* ---- Delete-confirmation overlay ----
+ * Shown when X is pressed on a file browser entry. Two options
+ * (Delete / Cancel), navigated with Up/Down + Enter; Esc cancels,
+ * same convention as the exit prompt below. */
+static lv_obj_t *s_del_panel      = NULL;
+static lv_obj_t *s_del_hdr_lbl    = NULL;
+static lv_obj_t *s_del_opt_lbl[2] = { NULL, NULL };
+static bool      s_del_open       = false;
+static int       s_del_sel        = 0;     /* 0=Delete 1=Cancel */
+static int       s_del_entry_idx  = -1;    /* s_browser_entries[] index to delete */
+
+#define DEL_OPT_DELETE 0
+#define DEL_OPT_CANCEL 1
+#define DEL_OPT_COUNT  2
+
+static const char *const DEL_OPT_LABELS[DEL_OPT_COUNT] = {
+    "Delete",
+    "Cancel",
+};
 
 /* ---- Search / Replace overlay ----
  * A single panel handles both Ctrl+F (find) and Ctrl+H (find +
@@ -2173,7 +2197,7 @@ static void editor_touch_event_cb(lv_event_t *e)
      * own keyboard handler owns the input. (A future revision could
      * give overlays their own touch routing; for now we skip them.) */
     if (s_menu_open || s_settings_open || s_save_open || s_search_open ||
-        s_exit_open) {
+        s_exit_open || s_del_open) {
         return;
     }
     if (!s_editor_screen_active) return;
@@ -2645,7 +2669,7 @@ extern "C" void editor_ui_show_file_browser(void)
      * status bar shows the static hint so it doesn't compete with
      * transient messages (e.g. Git-sync progress). */
     if (s_lbl_br_status) {
-        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
+        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  D:Folder  X:Delete");
     }
 
     sync_battery_labels();
@@ -2720,7 +2744,7 @@ static void restore_default_status(void)
     }
     update_status_visibility();
     if (s_lbl_br_status) {
-        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New file");
+        lv_label_set_text(s_lbl_br_status, "F1:Menu  N:New  D:Folder  X:Delete");
     }
 }
 
@@ -3469,6 +3493,9 @@ static void refresh_save_prompt(void)
 
 static void show_save_prompt(void)
 {
+    s_save_prompt_mode = SAVE_PROMPT_SAVE_AS;
+    if (s_save_hdr_lbl) lv_label_set_text(s_save_hdr_lbl, "Save as (Enter/Esc):");
+
     /* Pre-fill with existing filename (bare name, no directory) */
     const char *path = editor_get_file_path();
     if (path) {
@@ -3484,6 +3511,25 @@ static void show_save_prompt(void)
     }
     s_save_pos = (int)strlen(s_save_buf);
     s_save_open = true;
+    lv_obj_set_parent(s_save_panel, lv_scr_act());
+    lv_obj_remove_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+    refresh_save_prompt();
+}
+
+/* Reuses the save-prompt's text-entry overlay to ask for a new folder
+ * name in the file browser's current directory (D key). Reparented
+ * onto whichever screen is active -- the full-screen browser
+ * (s_scr_browser) or the split-mode editor screen carrying the
+ * in-pane overlay (s_scr) -- since the save prompt itself is only
+ * ever shown from the editor screen. */
+static void show_new_folder_prompt(void)
+{
+    s_save_prompt_mode = SAVE_PROMPT_NEW_FOLDER;
+    if (s_save_hdr_lbl) lv_label_set_text(s_save_hdr_lbl, "New folder (Enter/Esc):");
+    s_save_buf[0] = '\0';
+    s_save_pos = 0;
+    s_save_open = true;
+    lv_obj_set_parent(s_save_panel, lv_scr_act());
     lv_obj_remove_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
     refresh_save_prompt();
 }
@@ -3500,6 +3546,28 @@ static void save_prompt_confirm(void)
         /* Empty name -- ignore */
         return;
     }
+
+    if (s_save_prompt_mode == SAVE_PROMPT_NEW_FOLDER) {
+        if (!s_cwd || !s_cwd[0]) {
+            close_save_prompt();
+            editor_ui_set_status("New folder failed: SD card not ready");
+            return;
+        }
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", s_cwd, s_save_buf);
+        esp_err_t err = sd_card_mkdir(path);
+        close_save_prompt();
+        if (err == ESP_OK) {
+            char msg[80];
+            snprintf(msg, sizeof(msg), "Created folder %.40s", s_save_buf);
+            editor_ui_set_status(msg);
+            refresh_file_list();
+        } else {
+            editor_ui_set_status("New folder failed!");
+        }
+        return;
+    }
+
     const char *mp = sd_card_get_mount_point();
     if (!mp) {
         close_save_prompt();
@@ -3528,8 +3596,15 @@ static void handle_save_prompt_key(const kb_event_t *ev)
         return;
     case KB_KEY_ESCAPE:
         close_save_prompt();
-        editor_ui_set_status(
-            "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+        if (s_save_prompt_mode == SAVE_PROMPT_NEW_FOLDER) {
+            /* Restore whichever screen's own default hint (editor vs.
+             * browser) is actually showing, rather than assuming the
+             * editor's -- New Folder is invoked from the browser. */
+            restore_default_status();
+        } else {
+            editor_ui_set_status(
+                "F1:Menu Ctrl+S:Save Ctrl+L:Layout Ctrl+G:Git Esc:Files");
+        }
         return;
     case KB_KEY_LEFT:
         if (s_save_pos > 0) {
@@ -3687,6 +3762,131 @@ static void handle_exit_prompt_key(const kb_event_t *ev)
         /* Esc inside the dialog cancels and keeps editing. */
         s_exit_sel = EXIT_OPT_CANCEL;
         exit_prompt_activate();
+        return;
+    default:
+        break;
+    }
+}
+
+/* ---- Delete-confirmation overlay ----
+ * Shown when X is pressed on a selected file browser entry. Deleting
+ * a folder removes it and everything under it (sd_card_delete_recursive). */
+
+static void refresh_delete_prompt(void)
+{
+    if (!s_del_panel) return;
+    for (int i = 0; i < DEL_OPT_COUNT; i++) {
+        if (!s_del_opt_lbl[i]) continue;
+        bool sel = (i == s_del_sel);
+        /* Invert colors on the selected option, same convention as
+         * the exit prompt above. */
+        lv_obj_set_style_bg_color(s_del_opt_lbl[i],
+                                  sel ? theme_fg() : theme_bg(), 0);
+        lv_obj_set_style_bg_opa(s_del_opt_lbl[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(s_del_opt_lbl[i],
+                                    sel ? theme_bg() : theme_fg(), 0);
+    }
+}
+
+static void close_delete_prompt(void)
+{
+    s_del_open = false;
+    if (s_del_panel) lv_obj_add_flag(s_del_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Ask for confirmation before deleting the file browser row currently
+ * selected (s_browser_sel). No-op if the list is empty or the
+ * selection can't be resolved to an entry -- same row->index lookup
+ * as browser_activate_item(). */
+static void show_delete_prompt(void)
+{
+    if (!s_del_panel || !s_browser_list) return;
+    lv_obj_t *btn = lv_obj_get_child(s_browser_list, s_browser_sel);
+    if (!btn) return;
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= s_browser_count) return;
+
+    s_del_entry_idx = idx;
+    if (s_del_hdr_lbl) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Delete %s \"%.40s\"?",
+                 s_browser_entries[idx].is_dir ? "folder" : "file",
+                 s_browser_entries[idx].name);
+        lv_label_set_text(s_del_hdr_lbl, msg);
+    }
+
+    s_del_open = true;
+    s_del_sel  = DEL_OPT_CANCEL;   /* default to the safe choice */
+    /* Reparent onto whichever screen the browser is active on -- see
+     * show_new_folder_prompt() for why this is needed. */
+    lv_obj_set_parent(s_del_panel, lv_scr_act());
+    lv_obj_remove_flag(s_del_panel, LV_OBJ_FLAG_HIDDEN);
+    refresh_delete_prompt();
+}
+
+static void delete_prompt_activate(void)
+{
+    if (s_del_sel != DEL_OPT_DELETE) {
+        close_delete_prompt();
+        restore_default_status();
+        return;
+    }
+
+    int idx = s_del_entry_idx;
+    close_delete_prompt();
+    if (idx < 0 || idx >= s_browser_count || !s_cwd || !s_cwd[0]) {
+        editor_ui_set_status("Delete failed");
+        return;
+    }
+
+    bool is_dir = s_browser_entries[idx].is_dir;
+    char name[sizeof(s_browser_entries[0].name)];
+    strncpy(name, s_browser_entries[idx].name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", s_cwd, name);
+
+    esp_err_t err = is_dir ? sd_card_delete_recursive(path)
+                           : sd_card_delete_file(path);
+    if (err != ESP_OK) {
+        editor_ui_set_status("Delete failed");
+        return;
+    }
+
+    refresh_file_list();
+
+    /* Kick off an automatic push so the deletion reaches the Git repo
+     * without the user having to remember Ctrl+G, mirroring the
+     * Ctrl+G flow's own status handling (git_sync_cb takes over the
+     * status bar once syncing starts). Silently skipped when Git
+     * sync isn't set up or WiFi isn't connected -- deleting a local
+     * file should not force a network connection. */
+    char msg[96];
+    if (git_sync_is_configured() && wifi_manager_is_connected() &&
+        git_sync_start(GIT_SYNC_PUSH) == ESP_OK) {
+        snprintf(msg, sizeof(msg), "Deleted %.40s - Git: syncing...", name);
+    } else {
+        snprintf(msg, sizeof(msg), "Deleted %.40s", name);
+    }
+    editor_ui_set_status(msg);
+}
+
+static void handle_delete_prompt_key(const kb_event_t *ev)
+{
+    switch (ev->keycode) {
+    case KB_KEY_UP:
+    case KB_KEY_DOWN:
+        /* Only two options -- either key toggles between them. */
+        s_del_sel = (s_del_sel == DEL_OPT_DELETE) ? DEL_OPT_CANCEL : DEL_OPT_DELETE;
+        refresh_delete_prompt();
+        return;
+    case KB_KEY_ENTER:
+        delete_prompt_activate();
+        return;
+    case KB_KEY_ESCAPE:
+        s_del_sel = DEL_OPT_CANCEL;
+        delete_prompt_activate();
         return;
     default:
         break;
@@ -4758,7 +4958,7 @@ static void show_inpane_browser(void)
     /* The editor screen stays active (the other pane keeps rendering);
      * keystrokes are rerouted by the s_inpane_browser_open check in
      * process_key_event. */
-    editor_ui_set_status("Open into pane - Up/Down Enter  N:new  Esc:cancel");
+    editor_ui_set_status("Up/Down Enter  N:new  D:folder  X:delete  Esc:cancel");
 }
 
 /* Dismiss the in-pane file selector and restore the full-screen list
@@ -4982,6 +5182,10 @@ static void handle_browser_key(const kb_event_t *ev)
         if (ch == 'n' || ch == 'N') {
             editor_new_file();
             editor_ui_show_editor();
+        } else if (ch == 'd' || ch == 'D') {
+            /* New folder works even in an empty directory; delete (X)
+             * does not since there would be nothing selected. */
+            show_new_folder_prompt();
         }
         return;
     }
@@ -5011,6 +5215,14 @@ static void handle_browser_key(const kb_event_t *ev)
         if (ch == 'n' || ch == 'N') {
             editor_new_file();
             editor_ui_show_editor();
+            return;
+        }
+        if (ch == 'd' || ch == 'D') {
+            show_new_folder_prompt();
+            return;
+        }
+        if (ch == 'x' || ch == 'X') {
+            show_delete_prompt();
             return;
         }
         break;
@@ -5107,6 +5319,8 @@ static void process_key_event(const kb_event_t *ev)
 
     if (s_save_open) {
         handle_save_prompt_key(e);
+    } else if (s_del_open) {
+        handle_delete_prompt_key(e);
     } else if (s_exit_open) {
         handle_exit_prompt_key(e);
     } else if (s_search_open) {
@@ -5331,6 +5545,8 @@ static void apply_pending_connect_state(void)
 #endif
         s_save_open = false;
         if (s_save_panel) lv_obj_add_flag(s_save_panel, LV_OBJ_FLAG_HIDDEN);
+        s_del_open = false;
+        if (s_del_panel) lv_obj_add_flag(s_del_panel, LV_OBJ_FLAG_HIDDEN);
         s_exit_open = false;
         if (s_exit_panel) lv_obj_add_flag(s_exit_panel, LV_OBJ_FLAG_HIDDEN);
         s_search_open = false;
@@ -6114,6 +6330,44 @@ static void build_screens(void)
     lv_obj_set_style_pad_all(s_save_cur, 0, 0);
     lv_obj_add_flag(s_save_cur, LV_OBJ_FLAG_HIDDEN);
 
+    /* ---- Delete-confirmation overlay ----
+     * Header line (set dynamically per file/folder) plus two
+     * selectable option rows (Delete / Cancel). Shown over whichever
+     * screen the file browser is currently active on -- reparented in
+     * show_delete_prompt() since that can be either the full-screen
+     * browser or the split-mode editor screen (in-pane overlay). */
+    {
+        int panel_h = 20 + DEL_OPT_COUNT * (LINE_H + 2) + 12;
+        s_del_panel = lv_obj_create(s_scr);
+        lv_obj_set_size(s_del_panel, SCR_W - 20, panel_h);
+        lv_obj_set_pos(s_del_panel, 10, (SCR_H - panel_h) / 2);
+        lv_obj_set_style_bg_color(s_del_panel, theme_bg(), 0);
+        lv_obj_set_style_bg_opa(s_del_panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(s_del_panel, theme_fg(), 0);
+        lv_obj_set_style_border_width(s_del_panel, 2, 0);
+        lv_obj_set_style_radius(s_del_panel, 4, 0);
+        lv_obj_set_style_pad_all(s_del_panel, 6, 0);
+        lv_obj_remove_flag(s_del_panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_del_panel, LV_OBJ_FLAG_HIDDEN);
+
+        s_del_hdr_lbl = lv_label_create(s_del_panel);
+        lv_obj_set_style_text_font(s_del_hdr_lbl, FONT_11, 0);
+        lv_obj_set_style_text_color(s_del_hdr_lbl, theme_fg(), 0);
+        lv_obj_set_width(s_del_hdr_lbl, SCR_W - 20 - 12);
+        lv_label_set_text(s_del_hdr_lbl, "Delete? (Up/Down + Enter):");
+        lv_obj_set_pos(s_del_hdr_lbl, 0, 0);
+
+        for (int i = 0; i < DEL_OPT_COUNT; i++) {
+            s_del_opt_lbl[i] = lv_label_create(s_del_panel);
+            lv_obj_set_style_text_font(s_del_opt_lbl[i], FONT_11, 0);
+            lv_obj_set_style_text_color(s_del_opt_lbl[i], theme_fg(), 0);
+            lv_obj_set_width(s_del_opt_lbl[i], SCR_W - 20 - 12);
+            lv_obj_set_style_pad_hor(s_del_opt_lbl[i], 2, 0);
+            lv_label_set_text(s_del_opt_lbl[i], DEL_OPT_LABELS[i]);
+            lv_obj_set_pos(s_del_opt_lbl[i], 0, 20 + i * (LINE_H + 2));
+        }
+    }
+
     /* ---- Exit (Esc) prompt overlay (shown on the editor screen) ----
      * Header line plus three selectable option rows. */
     {
@@ -6293,6 +6547,8 @@ static void teardown_screens(void)
     s_ble_prompt_lbl = NULL;
     s_passkey_panel = s_passkey_label = NULL;
     s_save_panel = s_save_hdr_lbl = s_save_name_lbl = s_save_cur = NULL;
+    s_del_panel = s_del_hdr_lbl = NULL;
+    s_del_opt_lbl[0] = s_del_opt_lbl[1] = NULL;
     s_exit_panel = s_exit_hdr_lbl = NULL;
     s_exit_opt_lbl[0] = s_exit_opt_lbl[1] = s_exit_opt_lbl[2] = NULL;
     s_search_panel = s_search_hdr_lbl = NULL;
@@ -6310,6 +6566,7 @@ static void teardown_screens(void)
 #endif
     s_factory_reset_confirm   = false;
     s_save_open               = false;
+    s_del_open                = false;
     s_exit_open               = false;
     s_search_open             = false;
     s_search_replace_mode     = false;

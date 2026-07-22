@@ -489,6 +489,36 @@ extern "C" int sd_card_list_dir(const char *path, sd_card_file_entry_t *entries,
     return count;
 }
 
+extern "C" esp_err_t sd_card_delete_recursive(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0) return ESP_FAIL;
+    if (!S_ISDIR(st.st_mode)) {
+        return sd_card_delete_file(path);
+    }
+
+    /* Heap-allocated (not stack) since this recurses per directory
+     * depth level and each level needs its own listing alive while it
+     * deletes children -- a stack array here would blow the task
+     * stack after a couple of nesting levels. */
+    sd_card_file_entry_t *entries =
+        (sd_card_file_entry_t *)malloc(64 * sizeof(sd_card_file_entry_t));
+    if (!entries) return ESP_ERR_NO_MEM;
+
+    int count = sd_card_list_dir(path, entries, 64);
+    if (count < 0) count = 0;
+
+    esp_err_t result = ESP_OK;
+    for (int i = 0; i < count && result == ESP_OK; i++) {
+        char child[512];
+        snprintf(child, sizeof(child), "%s/%s", path, entries[i].name);
+        result = sd_card_delete_recursive(child);
+    }
+    free(entries);
+
+    return (result == ESP_OK) ? sd_card_delete_file(path) : result;
+}
+
 extern "C" long sd_card_file_size(const char *path)
 {
     struct stat st;
